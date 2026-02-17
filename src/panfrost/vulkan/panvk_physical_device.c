@@ -86,6 +86,7 @@ PER_ARCH_FUNCS(11);
 PER_ARCH_FUNCS(12);
 PER_ARCH_FUNCS(13);
 PER_ARCH_FUNCS(14);
+PER_ARCH_FUNCS(15);
 
 static VkResult
 create_kmod_dev(struct panvk_physical_device *device,
@@ -1352,6 +1353,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    case 7:
    case 11:
    case 14:
+   case 15:
       if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
          result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                                "WARNING: panvk is not well-tested on v%d, "
