@@ -201,6 +201,7 @@ pan_blendable_format_table(unsigned arch)
    FMT_TABLE(12);
    FMT_TABLE(13);
    FMT_TABLE(14);
+   FMT_TABLE(15);
 #undef FMT_TABLE
    default:
       assert(!"Unsupported architecture");
@@ -235,6 +236,7 @@ pan_format_table(unsigned arch)
    FMT_TABLE(12);
    FMT_TABLE(13);
    FMT_TABLE(14);
+   FMT_TABLE(15);
 #undef FMT_TABLE
    default:
       assert(!"Unsupported architecture");
