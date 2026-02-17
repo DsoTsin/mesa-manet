@@ -44,6 +44,9 @@ The following hardware is currently supported:
 | G1-Pro, G1-Premium | 5th Gen (v14) | 3.1       | 3.1    | 1.4    |
 | G1-Ultra           |               |           |        |        |
 +--------------------+---------------+-----------+--------+--------+
+| G2-Pro, G2-Premium | 5th Gen (v15) | 3.1       | 3.1    | 1.4    |
+| G2-Ultra           |               |           |        |        |
++--------------------+---------------+-----------+--------+--------+
 
 Other Midgard and Bifrost chips (e.g. G71) are not yet supported.
 
