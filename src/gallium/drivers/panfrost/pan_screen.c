@@ -1189,6 +1189,9 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
    case 14:
       panfrost_cmdstream_screen_init_v14(screen);
       break;
+   case 15:
+      panfrost_cmdstream_screen_init_v15(screen);
+      break;
    default:
       debug_printf("panfrost: Unhandled architecture major %d", dev->arch);
       panfrost_destroy_screen(&(screen->base));
