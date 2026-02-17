@@ -12,11 +12,11 @@ libpan_shader_files = files(
 
 idep_libpan_per_arch = {}
 
-foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14']
+foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14', '15']
   libpan_shader_files_cur_ver = libpan_shader_files
 
   # Software tessellation is used by the CSF PanVK path.
-  if ver == '10' or ver == '11' or ver == '12' or ver == '13' or ver == '14'
+  if ver.to_int() >= 10
     libpan_shader_files_cur_ver += files('poly_tessellation.cl', 'csf_dgc.cl')
   endif
 

@@ -30,6 +30,8 @@
 #include "libpan_shaders_v13.h"
 #elif (PAN_ARCH == 14)
 #include "libpan_shaders_v14.h"
+#elif (PAN_ARCH == 15)
+#include "libpan_shaders_v15.h"
 #else
 #error "Unsupported architecture for libpan"
 #endif
