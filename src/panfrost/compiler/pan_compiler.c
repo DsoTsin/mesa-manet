@@ -143,8 +143,9 @@ pan_get_nir_shader_compiler_options(unsigned arch,
    case 12:
    case 13:
    case 14:
-      return merge_wg ? &bifrost_nir_options_v11_merge_wg :
-                        &bifrost_nir_options_v11;
+   case 15:
+      return merge_wg ? &bifrost_nir_options_v11_merge_wg
+                      : &bifrost_nir_options_v11;
    default:
       assert(!"Unsupported arch");
       return NULL;
