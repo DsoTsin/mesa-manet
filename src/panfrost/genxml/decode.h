@@ -148,6 +148,13 @@ void pandecode_cs_binary_v14(struct pandecode_context *ctx, uint64_t bin,
 void pandecode_cs_trace_v14(struct pandecode_context *ctx, uint64_t trace,
                             uint32_t trace_size, uint64_t gpu_id);
 
+void pandecode_interpret_cs_v15(struct pandecode_context *ctx, uint64_t queue,
+                                uint32_t size, uint64_t gpu_id, uint32_t *regs);
+void pandecode_cs_binary_v15(struct pandecode_context *ctx, uint64_t bin,
+                             uint32_t bin_size);
+void pandecode_cs_trace_v15(struct pandecode_context *ctx, uint64_t trace,
+                            uint32_t trace_size, uint64_t gpu_id);
+
 /* Logging infrastructure */
 static void
 pandecode_make_indent(struct pandecode_context *ctx)

@@ -431,6 +431,9 @@ pandecode_interpret_cs(struct pandecode_context *ctx, uint64_t queue_gpu_va,
    case 14:
       pandecode_interpret_cs_v14(ctx, queue_gpu_va, size, gpu_id, regs);
       break;
+   case 15:
+      pandecode_interpret_cs_v15(ctx, queue_gpu_va, size, gpu_id, regs);
+      break;
    default:
       UNREACHABLE("Unsupported architecture");
    }
@@ -460,6 +463,9 @@ pandecode_cs_binary(struct pandecode_context *ctx, uint64_t bin_gpu_va,
    case 14:
       pandecode_cs_binary_v14(ctx, bin_gpu_va, size);
       break;
+   case 15:
+      pandecode_cs_binary_v15(ctx, bin_gpu_va, size);
+      break;
    default:
       UNREACHABLE("Unsupported architecture");
    }
@@ -488,6 +494,9 @@ pandecode_cs_trace(struct pandecode_context *ctx, uint64_t trace_gpu_va,
       break;
    case 14:
       pandecode_cs_trace_v14(ctx, trace_gpu_va, size, gpu_id);
+      break;
+   case 15:
+      pandecode_cs_trace_v15(ctx, trace_gpu_va, size, gpu_id);
       break;
    default:
       UNREACHABLE("Unsupported architecture");
