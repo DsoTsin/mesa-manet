@@ -98,8 +98,18 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
          cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_TSD), tsd);
       }
 
+#if PAN_ARCH >= 15
+      struct mali_shader_program_pointer_packed spp;
+      pan_pack(&spp, SHADER_PROGRAM_POINTER, ctx) {
+         ctx.register_count = shader->info.work_reg_count;
+         ctx.pointer = panvk_priv_mem_dev_addr(shader->spd);
+      }
+      uint64_t ptr = ((uint64_t)spp.opaque[1] << 32) | spp.opaque[0];
+      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SPD), ptr);
+#else
       cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SPD),
                    panvk_priv_mem_dev_addr(shader->spd));
+#endif
 
       /* Global attribute offset */
       cs_move32_to(b, cs_sr_reg32(b, COMPUTE, GLOBAL_ATTRIBUTE_OFFSET), 0);
