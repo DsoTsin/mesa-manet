@@ -98,8 +98,12 @@ panfrost_precomp_shader_create(
 
    pan_cast_and_pack(spd.cpu, SHADER_PROGRAM, cfg) {
       cfg.stage = pan_shader_stage(&res->info);
+#if PAN_ARCH >= 15
+      cfg.register_count = res->info.work_reg_count;
+#else
       cfg.register_allocation =
          pan_register_allocation(res->info.work_reg_count);
+#endif
       cfg.binary = res->code_ptr;
       cfg.preload.r48_r63 = (res->info.preload >> 48);
       cfg.flush_to_zero_mode = panfrost_ftz_mode(&res->info);
@@ -326,7 +330,17 @@ GENX(panfrost_launch_precomp)(struct panfrost_batch *batch,
    uint64_t fau_ptr = push_uniforms.gpu | (fau_count << 56);
    cs_move64_to(b, cs_sr_reg64(b, COMPUTE, FAU_0), fau_ptr);
 
+#if PAN_ARCH >= 15
+   struct mali_shader_program_pointer_packed spp;
+   pan_pack(&spp, SHADER_PROGRAM_POINTER, ctx) {
+      ctx.register_count = shader->info.work_reg_count;
+      ctx.pointer = shader->state_ptr;
+   }
+   uint64_t ptr = ((uint64_t)spp.opaque[1] << 32) | spp.opaque[0];
+   cs_move64_to(b, cs_sr_reg64(b, COMPUTE, SPD_0), ptr);
+#else
    cs_move64_to(b, cs_sr_reg64(b, COMPUTE, SPD_0), shader->state_ptr);
+#endif
    cs_move64_to(b, cs_sr_reg64(b, COMPUTE, TSD_0), tsd);
 
    /* Global attribute offset */

@@ -1104,7 +1104,11 @@ pan_preload_emit_dcd(struct pan_fb_preload_cache *cache, struct pan_pool *pool,
    pan_cast_and_pack(spd.cpu, SHADER_PROGRAM, cfg) {
       cfg.stage = MALI_SHADER_STAGE_FRAGMENT;
       cfg.fragment_coverage_bitmask_type = MALI_COVERAGE_BITMASK_TYPE_GL;
+#if PAN_ARCH >= 15
+      cfg.register_count = preload_shader->info.work_reg_count;
+#else
       cfg.register_allocation = MALI_SHADER_REGISTER_ALLOCATION_32_PER_THREAD;
+#endif
       cfg.binary = preload_shader->address;
       cfg.preload.r48_r63 = preload_shader->info.preload >> 48;
    }

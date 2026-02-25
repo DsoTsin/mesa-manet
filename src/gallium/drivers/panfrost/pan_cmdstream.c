@@ -4602,9 +4602,12 @@ prepare_shader(struct panfrost_compiled_shader *state,
       else if (vs)
          cfg.vertex_warp_limit = MALI_WARP_LIMIT_HALF;
 #endif
-
+#if PAN_ARCH >= 15
+      cfg.register_count = state->info.work_reg_count;
+#else
       cfg.register_allocation =
          pan_register_allocation(state->info.work_reg_count);
+#endif
       cfg.binary = state->bin.gpu;
       cfg.preload.r48_r63 = (state->info.preload >> 48);
       cfg.flush_to_zero_mode = panfrost_ftz_mode(&state->info);
@@ -4622,8 +4625,12 @@ prepare_shader(struct panfrost_compiled_shader *state,
 #if PAN_ARCH < 12
       cfg.vertex_warp_limit = MALI_WARP_LIMIT_HALF;
 #endif
+#if PAN_ARCH >= 15
+      cfg.register_count = state->info.work_reg_count;
+#else
       cfg.register_allocation =
          pan_register_allocation(state->info.work_reg_count);
+#endif
       cfg.binary = state->bin.gpu + state->info.vs.no_psiz_offset;
       cfg.preload.r48_r63 = (state->info.preload >> 48);
       cfg.flush_to_zero_mode = panfrost_ftz_mode(&state->info);

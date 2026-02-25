@@ -229,9 +229,20 @@ panvk_per_arch(cmd_dispatch_shader)(
          cs_move64_to(b, cs_reg64(b, PANVK_COMPUTE_FAU), fau_ptr);
       }
 
-      if (compute_state_dirty(cmdbuf, CS))
+      if (compute_state_dirty(cmdbuf, CS)) {
+#if PAN_ARCH >= 15
+         struct mali_shader_program_pointer_packed spp;
+         pan_pack(&spp, SHADER_PROGRAM_POINTER, ctx) {
+            ctx.register_count = cs->info.work_reg_count;
+            ctx.pointer = panvk_priv_mem_dev_addr(cs->spd);
+         }
+         uint64_t ptr = ((uint64_t)spp.opaque[1] << 32) | spp.opaque[0];
+         cs_move64_to(b, cs_reg64(b, PANVK_COMPUTE_SPD), ptr);
+#else
          cs_move64_to(b, cs_reg64(b, PANVK_COMPUTE_SPD),
                       panvk_priv_mem_dev_addr(cs->spd));
+#endif
+      }
 
       cs_move64_to(b, cs_reg64(b, PANVK_COMPUTE_TSD), tsd);
 
