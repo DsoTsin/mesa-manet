@@ -707,8 +707,19 @@ pandecode_run_compute(struct pandecode_context *ctx, FILE *fp,
    if (fau)
       GENX(pandecode_fau)(ctx, fau & BITFIELD64_MASK(48), fau >> 56, "FAU");
 
-   GENX(pandecode_shader)
-   (ctx, cs_get_u64(qctx, reg_spd), "Shader", qctx->gpu_id);
+   uint64_t addr = cs_get_u64(qctx, reg_spd);
+#if PAN_ARCH >= 15
+   const struct mali_shader_program_pointer_packed spp_packed = {
+      .opaque[0] = addr & 0xFFFFFFFF,
+      .opaque[1] = (addr >> 32) & 0xFFFFFFFF,
+   };
+   pan_unpack(&spp_packed, SHADER_PROGRAM_POINTER, spp)
+      ;
+   DUMP_UNPACKED(ctx, SHADER_PROGRAM_POINTER, spp,
+                 "Shader Program Pointer (%" PRIx64 "):\n", addr);
+   addr = spp.pointer;
+#endif
+   GENX(pandecode_shader)(ctx, addr, "Shader", qctx->gpu_id);
 
    DUMP_ADDR(ctx, LOCAL_STORAGE, cs_get_u64(qctx, reg_tsd),
              "Local Storage @%" PRIx64 ":\n", cs_get_u64(qctx, reg_tsd));
@@ -749,8 +760,19 @@ pandecode_run_compute_indirect(struct pandecode_context *ctx, FILE *fp,
    if (fau)
       GENX(pandecode_fau)(ctx, fau & BITFIELD64_MASK(48), fau >> 56, "FAU");
 
-   GENX(pandecode_shader)
-   (ctx, cs_get_u64(qctx, reg_spd), "Shader", qctx->gpu_id);
+   uint64_t addr = cs_get_u64(qctx, reg_spd);
+#if PAN_ARCH >= 15
+   const struct mali_shader_program_pointer_packed spp_packed = {
+      .opaque[0] = addr & 0xFFFFFFFF,
+      .opaque[1] = (addr >> 32) & 0xFFFFFFFF,
+   };
+   pan_unpack(&spp_packed, SHADER_PROGRAM_POINTER, spp)
+      ;
+   DUMP_UNPACKED(ctx, SHADER_PROGRAM_POINTER, spp,
+                 "Shader Program Pointer (%" PRIx64 "):\n", addr);
+   addr = spp.pointer;
+#endif
+   GENX(pandecode_shader)(ctx, addr, "Shader", qctx->gpu_id);
 
    DUMP_ADDR(ctx, LOCAL_STORAGE, cs_get_u64(qctx, reg_tsd),
              "Local Storage @%" PRIx64 ":\n", cs_get_u64(qctx, reg_tsd));

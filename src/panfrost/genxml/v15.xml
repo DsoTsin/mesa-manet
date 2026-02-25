@@ -2032,12 +2032,18 @@
     <field name="Suppress NaN" size="1" start="0:16" type="bool"/>
     <field name="Flush to zero mode" size="2" start="0:17" type="Flush to zero mode"/>
     <field name="Suppress Inf" size="1" start="0:19" type="bool"/>
+    <field name="Register Count" size="5" start="0:20" type="uint" modifier="align(16) shr(3) minus(1)"/>
     <field name="Requires helper threads" size="1" start="0:28" type="bool"/> <!-- Fragment only -->
     <field name="Shader contains JUMP_EX" size="1" start="0:29" type="bool"/>
-    <field name="Register allocation" size="2" start="0:30" type="Shader Register Allocation"/>
     <field name="Preload" size="16" start="1:0" type="Preload"/>
     <field name="Max Warps" size="16" start="1:16" type="uint"/>
     <field name="Binary" size="64" start="2:0" type="address"/>
+  </struct>
+
+  <!-- Only used by RUN_COMPUTE -->
+  <struct name="Shader Program Pointer" size="2" align="8">
+    <field name="Register Count" size="5" start="0:0" type="uint" modifier="align(16) shr(3) minus(1)"/>
+    <field name="Pointer" size="51" start="0:5" type="address" modifier="shr(5)"/>
   </struct>
 
   <struct name="Scissor">
