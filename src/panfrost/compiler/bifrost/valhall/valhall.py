@@ -186,11 +186,12 @@ class Opcode:
         self.mask = mask
 
 class Instruction:
-    def __init__(self, name, opcode, srcs = [], dests = [], immediates = [], modifiers = [], staging = None, unit = None):
+    def __init__(self, name, opcode, opcode_v15, srcs = [], dests = [], immediates = [], modifiers = [], staging = None, unit = None):
         self.name = name
         self.srcs = srcs
         self.dests = dests
         self.opcode = opcode
+        self.opcode_v15 = opcode_v15
         self.immediates = immediates
         self.modifiers = modifiers
         self.staging = staging
@@ -273,6 +274,7 @@ def build_instr(el, overrides = {}):
     # Get overridables
     name = overrides.get('name') or el.attrib.get('name')
     opcode = overrides.get('opcode') or build_opcode(el, 'opcode')
+    opcode_v15 = overrides.get('opcode_v15') or build_opcode(el, 'opcode_v15')
     unit = overrides.get('unit') or el.attrib.get('unit')
 
     # Get explicit sources/dests
@@ -312,7 +314,7 @@ def build_instr(el, overrides = {}):
         elif mod.tag =='va_mod':
             modifiers.append(build_modifier(mod))
 
-    instr = Instruction(name, opcode, srcs = sources, dests = dests, immediates = imms, modifiers = modifiers, staging = staging, unit = unit)
+    instr = Instruction(name, opcode, opcode_v15, srcs = sources, dests = dests, immediates = imms, modifiers = modifiers, staging = staging, unit = unit)
 
     instructions.append(instr)
 
@@ -323,6 +325,7 @@ def build_group(el):
         build_instr(el, overrides = {
             'name': ins.attrib['name'],
             'opcode': build_opcode(ins, 'opcode'),
+            'opcode_v15': build_opcode(ins, 'opcode_v15'),
             'unit': ins.attrib.get('unit'),
         })
 

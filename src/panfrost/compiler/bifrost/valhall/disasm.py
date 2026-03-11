@@ -218,12 +218,31 @@ va_disasm_instr(FILE *fp, uint64_t instr)
 ${recurse_subcodes(OPCODES)}
 }
 
+void
+va_disasm_instr_v15(FILE *fp, uint64_t instr)
+{
+   unsigned opcode;
+
+${recurse_subcodes(OPCODES_V15)}
+}
+
 static bool is_branch(uint64_t instr)
 {
 <% (exact, mask) = OPCODES.get_exact_mask("BRANCHZ") %>
    if ((instr & ${hex(mask)}) == ${hex(exact)})
       return true;
 <% (exact, mask) = OPCODES.get_exact_mask("BRANCHZI") %>
+   if ((instr & ${hex(mask)}) == ${hex(exact)})
+      return true;
+   return false;
+}
+
+static bool is_branch_v15(uint64_t instr)
+{
+<% (exact, mask) = OPCODES_V15.get_exact_mask("BRANCHZ") %>
+   if ((instr & ${hex(mask)}) == ${hex(exact)})
+      return true;
+<% (exact, mask) = OPCODES_V15.get_exact_mask("BRANCHZI") %>
    if ((instr & ${hex(mask)}) == ${hex(exact)})
       return true;
    return false;
@@ -276,6 +295,9 @@ class OpBucket:
       self.children = {}
 
    def insert(self, subcodes, ins):
+      # Need an early return in case of removed instructions
+      if subcodes is None:
+         return
       if len(subcodes) == 0:
          self.instr = ins
       else:
@@ -305,10 +327,12 @@ class OpBucket:
 
 # Build opcode hierarchy:
 OPCODES = OpBucket()
+OPCODES_V15 = OpBucket()
 for ins in instructions:
    OPCODES.insert(ins.opcode, ins)
+   OPCODES_V15.insert(ins.opcode_v15, ins)
 
 try:
-   print(Template(template).render(OPCODES = OPCODES, IMMEDIATES = immediates, ENUMS = enums, typesize = typesize, safe_name = safe_name))
+   print(Template(template).render(OPCODES = OPCODES, OPCODES_V15 = OPCODES_V15, IMMEDIATES = immediates, ENUMS = enums, typesize = typesize, safe_name = safe_name))
 except:
    print(exceptions.text_error_template().render())

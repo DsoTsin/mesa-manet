@@ -115,7 +115,64 @@ valhall_opcodes[BI_NUM_OPCODES] = {
         sr_control = op.staging[0].encoded_flags >> 6
 %>
     [BI_OPCODE_${name.replace('.', '_').upper()}] = {
-        .exact = ${hex(exact(op))}ULL,
+        .exact = ${hex(exact(op.opcode))}ULL,
+        .srcs = {
+% for src in ([sr for sr in op.staging if sr.read] + op.srcs):
+            {
+                .absneg = ${ibool(src.absneg)},
+                .swizzle = ${ibool(src.swizzle)},
+                .notted = ${ibool(src.notted)},
+                .widen = ${ibool(src.widen)},
+                .lanes = ${ibool(src.lanes)},
+                .halfswizzle = ${ibool(src.halfswizzle)},
+                .lane = ${ibool(src.lane)},
+                .combine = ${ibool(src.combine)},
+% if src.size in [8, 16, 32, 64]:
+                .size = VA_SIZE_${src.size},
+% endif
+            },
+% endfor
+        },
+        .type_size = ${typesize(op.name)},
+        .has_dest = ${ibool(len(op.dests) > 0)},
+        .is_signed = ${ibool(op.is_signed)},
+        .unit = VA_UNIT_${op.unit},
+        .nr_srcs = ${len(op.srcs)},
+        .nr_staging_srcs = ${sum([sr.read for sr in op.staging])},
+        .nr_staging_dests = ${sum([sr.write for sr in op.staging])},
+        .clamp = ${hasmod(x, 'clamp')},
+        .saturate = ${hasmod(x, 'saturate')},
+        .rhadd = ${hasmod(x, 'rhadd')},
+        .round_mode = ${hasmod(x, 'round_mode')},
+        .condition = ${hasmod(x, 'condition')},
+        .result_type = ${hasmod(x, 'result_type')},
+        .vecsize = ${hasmod(x, 'vector_size')},
+        .register_format = ${hasmod(x, 'register_format')},
+        .slot = ${hasmod(x, 'slot')},
+        .sr_count = ${hasmod(x, 'staging_register_count')},
+        .sr_write_count = ${hasmod(x, 'staging_register_write_count')},
+        .sr_control = ${sr_control},
+    },
+% endif
+% endfor
+};
+
+const struct va_opcode_info
+valhall_v15_opcodes[BI_NUM_OPCODES] = {
+% for op in instructions:
+% if op.name not in skip:
+<%
+    name = op.name
+    if name == 'BRANCHZ':
+        name = 'BRANCHZ.i16'
+
+    sr_control = 0
+
+    if len(op.staging) > 0:
+        sr_control = op.staging[0].encoded_flags >> 6
+%>
+    [BI_OPCODE_${name.replace('.', '_').upper()}] = {
+        .exact = ${hex(exact(op.opcode_v15))}ULL,
         .srcs = {
 % for src in ([sr for sr in op.staging if sr.read] + op.srcs):
             {
@@ -159,9 +216,14 @@ valhall_opcodes[BI_NUM_OPCODES] = {
 """
 
 # Exact value to be ORed in to every opcode
-def exact_op(op):
+def exact_op(opcode):
     exact_op = 0
-    for subcode in op.opcode:
+
+    # Need an early return in case of removed instructions
+    if not opcode:
+        return exact_op
+
+    for subcode in opcode:
         exact_op |= (subcode.value << subcode.start)
     return exact_op
 
