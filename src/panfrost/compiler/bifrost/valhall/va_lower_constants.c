@@ -244,7 +244,7 @@ va_resolve_constant(bi_builder *b, uint32_t value, struct va_src_info info,
 static uint32_t
 va_resolve_swizzles(bi_context *ctx, bi_instr *I, unsigned s)
 {
-   struct va_src_info info = va_src_info(I->op, s);
+   struct va_src_info info = va_src_info(I->op, s, ctx->arch);
    uint32_t value = I->src[s].value;
    enum bi_swizzle swz = I->src[s].swizzle;
 
@@ -343,9 +343,10 @@ va_lower_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts, 
          /* abs(#c) is pointless, but -#c occurs in transcendental sequences */
          assert(!I->src[s].abs && "redundant .abs modifier");
 
-         bool is_signed = valhall_opcodes[I->op].is_signed;
-         bool staging = (s < valhall_opcodes[I->op].nr_staging_srcs);
-         struct va_src_info info = va_src_info(I->op, s);
+         bool is_signed = get_valhall_opcode(I->op, ctx->arch).is_signed;
+         bool staging =
+            (s < get_valhall_opcode(I->op, ctx->arch).nr_staging_srcs);
+         struct va_src_info info = va_src_info(I->op, s, ctx->arch);
          const uint32_t value = va_resolve_swizzles(ctx, I, s);
 
          const uint32_t count = (uintptr_t)_mesa_hash_table_u64_search(counts, value);
@@ -380,12 +381,13 @@ va_count_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts)
       if (I->src[s].type != BI_INDEX_CONSTANT)
          continue;
 
-      const bool staging = (s < valhall_opcodes[I->op].nr_staging_srcs);
+      const bool staging =
+         (s < get_valhall_opcode(I->op, ctx->arch).nr_staging_srcs);
       if (staging)
          continue;
 
-      bool is_signed = valhall_opcodes[I->op].is_signed;
-      struct va_src_info info = va_src_info(I->op, s);
+      bool is_signed = get_valhall_opcode(I->op, ctx->arch).is_signed;
+      struct va_src_info info = va_src_info(I->op, s, ctx->arch);
       uint32_t value = va_resolve_swizzles(ctx, I, s);
 
       bi_index cons = va_lookup_constant(value, info, is_signed);

@@ -48,7 +48,7 @@ va_arch_adjusted_unit(bi_instr *I, unsigned arch)
       return arch >= 11 ? VA_UNIT_FMA : VA_UNIT_CVT;
 
    default:
-      return valhall_opcodes[I->op].unit;
+      return get_valhall_opcode(I->op, arch).unit;
    }
 }
 

@@ -213,6 +213,16 @@ valhall_v15_opcodes[BI_NUM_OPCODES] = {
 % endif
 % endfor
 };
+
+struct va_opcode_info
+get_valhall_opcode(enum bi_opcode op, unsigned arch)
+{
+   assert(arch >= 9);
+   if (arch < 15)
+      return valhall_opcodes[op];
+   else
+      return valhall_v15_opcodes[op];
+}
 """
 
 # Exact value to be ORed in to every opcode

@@ -4583,7 +4583,7 @@ bi_compile_variant_nir(nir_shader *nir,
                              bifrost_debug & BIFROST_DBG_VERBOSE);
       } else {
          disassemble_valhall(stderr, binary->data + offset,
-                             binary->size - offset,
+                             binary->size - offset, ctx->arch,
                              bifrost_debug & BIFROST_DBG_VERBOSE);
       }
 

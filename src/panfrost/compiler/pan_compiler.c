@@ -525,7 +525,8 @@ pan_disassemble(FILE *fp, const void *code, size_t size, uint64_t gpu_id,
 #ifdef WITH_PANFROST_RUST
       kraid_disassemble(fp, code, size, verbose, pan_arch(gpu_id));
 #else
-      disassemble_valhall(fp, (const uint64_t *)code, size, verbose);
+      disassemble_valhall(fp, (const uint64_t *)code, size, pan_arch(gpu_id),
+                          verbose);
 #endif
    }
    else if (pan_arch(gpu_id) >= 6)

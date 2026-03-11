@@ -457,7 +457,7 @@ va_pack_rhadd(const bi_instr *I)
 static uint64_t
 va_pack_alu(const bi_instr *I, unsigned arch)
 {
-   struct va_opcode_info info = valhall_opcodes[I->op];
+   struct va_opcode_info info = get_valhall_opcode(I->op, arch);
    uint64_t hex = 0;
 
    switch (I->op) {
@@ -752,7 +752,9 @@ va_pack_load(const bi_instr *I, bool buffer_descriptor)
       VA_LOAD_LANE_96_BIT_IDENTITY, VA_LOAD_LANE_128_BIT_IDENTITY,
    };
 
-   unsigned memory_size = (valhall_opcodes[I->op].exact >> 27) & 0x7;
+   /* v9-v14 get the memory size the same way, so just pass arch 10 to
+    * get_valhall_opcode here. */
+   unsigned memory_size = (get_valhall_opcode(I->op, 10).exact >> 27) & 0x7;
    uint64_t hex = (uint64_t)load_lane_identity[memory_size] << 36;
 
    // unsigned
@@ -828,7 +830,7 @@ va_pack_register_format(const bi_instr *I)
 uint64_t
 va_pack_instr(const bi_instr *I, unsigned arch)
 {
-   struct va_opcode_info info = valhall_opcodes[I->op];
+   struct va_opcode_info info = get_valhall_opcode(I->op, arch);
 
    uint64_t hex = info.exact | (((uint64_t)I->flow) << 59);
    hex |= ((uint64_t)va_select_fau_page(I)) << 57;

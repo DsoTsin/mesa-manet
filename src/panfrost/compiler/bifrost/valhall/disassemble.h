@@ -16,6 +16,7 @@
 
 void va_disasm_instr(FILE *fp, uint64_t instr);
 void va_disasm_instr_v15(FILE *fp, uint64_t instr);
-void disassemble_valhall(FILE *fp, const void *code, size_t size, bool verbose);
+void disassemble_valhall(FILE *fp, const void *code, size_t size, unsigned arch,
+                         bool verbose);
 
 #endif
