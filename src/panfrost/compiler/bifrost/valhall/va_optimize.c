@@ -293,7 +293,7 @@ va_fuse_cmp(bi_context *ctx, bi_instr **lut, const BITSET_WORD *multiple,
 static bool
 va_propagate_replicate_wide(bi_context *ctx, bi_instr **lut, bi_instr *I)
 {
-   struct va_opcode_info info = valhall_opcodes[I->op];
+   struct va_opcode_info info = get_valhall_opcode(I->op, ctx->arch);
    bool progress = false;
 
    bi_foreach_ssa_src(I, s) {

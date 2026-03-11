@@ -16,14 +16,14 @@
  */
 
 static uint32_t
-va_op_swizzles(enum bi_opcode op, unsigned src)
+va_op_swizzles(enum bi_opcode op, unsigned src, unsigned arch)
 {
    /* This is a bifrost-only instruction that is lowered on valhall */
-   if (!valhall_opcodes[op].exact)
+   if (!get_valhall_opcode(op, arch).exact)
       return bi_op_swizzles[op][src];
 
    uint32_t swizzles = 0;
-   struct va_src_info info = va_src_info(op, src);
+   struct va_src_info info = va_src_info(op, src, arch);
 
    if (info.swizzle) {
       assert(info.size == VA_SIZE_16 || info.size == VA_SIZE_32);
@@ -99,8 +99,8 @@ bool
 bi_op_supports_swizzle(enum bi_opcode op, unsigned src,
                        enum bi_swizzle swizzle, unsigned arch)
 {
-   uint32_t supported_swizzles = arch >= 9 ?
-      va_op_swizzles(op, src) : bi_op_swizzles[op][src];
+   uint32_t supported_swizzles =
+      arch >= 9 ? va_op_swizzles(op, src, arch) : bi_op_swizzles[op][src];
    return supported_swizzles & BITFIELD_BIT(swizzle);
 }
 

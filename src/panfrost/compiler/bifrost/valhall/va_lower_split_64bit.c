@@ -78,7 +78,7 @@ va_lower_split_64bit(bi_context *ctx)
          if (bi_is_null(I->src[s]) || s >= 4)
             continue;
 
-         struct va_src_info info = va_src_info(I->op, s);
+         struct va_src_info info = va_src_info(I->op, s, ctx->arch);
 
          /* Only split if the instruction expects 64-bit inputs as two separate
           * sources. */

@@ -249,7 +249,7 @@ static bool is_branch_v15(uint64_t instr)
 }
 
 void
-disassemble_valhall(FILE *fp, const void *code, size_t size, bool verbose)
+disassemble_valhall(FILE *fp, const void *code, size_t size, unsigned arch, bool verbose)
 {
    assert((size & 7) == 0);
 
@@ -275,11 +275,18 @@ disassemble_valhall(FILE *fp, const void *code, size_t size, bool verbose)
          fprintf(fp, "   ");
       }
 
-      va_disasm_instr(fp, instr);
+      bool instr_is_branch;
+      if (arch >= 15) {
+         va_disasm_instr_v15(fp, instr);
+         instr_is_branch = is_branch_v15(instr);
+      } else {
+         va_disasm_instr(fp, instr);
+         instr_is_branch = is_branch(instr);
+      }
       fprintf(fp, "\\n");
 
       /* Separate blocks visually by inserting whitespace after branches */
-      if (is_branch(instr))
+      if (instr_is_branch)
          fprintf(fp, "\\n");
    }
 

@@ -89,7 +89,7 @@ struct va_opcode_info {
    unsigned sr_control       : 2;
 };
 
-extern const struct va_opcode_info valhall_opcodes[BI_NUM_OPCODES];
+struct va_opcode_info get_valhall_opcode(enum bi_opcode op, unsigned arch);
 
 /* Bifrost specifies the source of bitwise operations as (A, B, shift), but
  * Valhall specifies (A, shift, B). We follow Bifrost conventions in the
@@ -130,10 +130,10 @@ va_swap_12(enum bi_opcode op)
 }
 
 static inline struct va_src_info
-va_src_info(enum bi_opcode op, unsigned src)
+va_src_info(enum bi_opcode op, unsigned src, unsigned arch)
 {
    unsigned idx = (va_swap_12(op) && (src == 1 || src == 2)) ? (3 - src) : src;
-   return valhall_opcodes[op].srcs[idx];
+   return get_valhall_opcode(op, arch).srcs[idx];
 }
 
 static inline bool

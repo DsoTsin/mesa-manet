@@ -48,7 +48,8 @@ disassemble(const char *filename)
    }
 
    if (pan_arch(gpu_id) >= 9)
-      disassemble_valhall(stdout, entrypoint, filesize, verbose);
+      disassemble_valhall(stdout, entrypoint, filesize, pan_arch(gpu_id),
+                          verbose);
    else
       disassemble_bifrost(stdout, entrypoint, filesize, verbose);
 
