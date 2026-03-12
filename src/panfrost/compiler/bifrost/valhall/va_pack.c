@@ -75,6 +75,15 @@ va_pack_reg(const bi_instr *I, bi_index idx)
 }
 
 static unsigned
+va_pack_reg_v15(const bi_instr *I, bi_index idx)
+{
+   pack_assert(I, idx.type == BI_INDEX_REGISTER);
+   pack_assert(I, idx.value < 128);
+
+   return idx.value;
+}
+
+static unsigned
 va_pack_fau_special(const bi_instr *I, enum bir_fau fau)
 {
    switch (fau) {
@@ -125,6 +134,21 @@ va_pack_fau_64(const bi_instr *I, bi_index idx)
 }
 
 static unsigned
+va_pack_fau_64_v15(const bi_instr *I, bi_index idx)
+{
+   pack_assert(I, idx.type == BI_INDEX_FAU);
+
+   unsigned val = (idx.value & BITFIELD_MASK(6));
+
+   if (idx.value & BIR_FAU_IMMEDIATE)
+      return (0x7 << 6) | (val << 1);
+   else if (idx.value & BIR_FAU_UNIFORM)
+      return (0x2 << 7) | (val << 1);
+   else
+      return (0xf << 5) | (va_pack_fau_special(I, idx.value) << 1);
+}
+
+static unsigned
 va_pack_src(const bi_instr *I, unsigned s)
 {
    bi_index idx = I->src[s];
@@ -140,6 +164,33 @@ va_pack_src(const bi_instr *I, unsigned s)
    }
 
    invalid_instruction(I, "type of source %u", s);
+}
+
+static uint64_t
+va_pack_src_v15(const bi_instr *I, unsigned s, unsigned loc)
+{
+   bi_index idx = I->src[s];
+
+   uint64_t hex = 0;
+   uint64_t regval = 0;
+
+   if (idx.type == BI_INDEX_REGISTER) {
+      regval = va_pack_reg_v15(I, idx);
+      if (idx.discard)
+         regval |= (1 << 7);
+   } else if (idx.type == BI_INDEX_FAU) {
+      pack_assert(I, idx.offset <= 1);
+      regval = va_pack_fau_64_v15(I, idx) | idx.offset;
+   } else
+      invalid_instruction(I, "type of source %u", s);
+
+   uint64_t low8 = regval & 0xff;
+   uint64_t high1 = (regval >> 8) & 0x1;
+
+   hex |= (low8 << (8 * loc));
+   hex |= (high1 << (48 + loc));
+
+   return hex;
 }
 
 static unsigned
@@ -209,6 +260,20 @@ va_pack_dest(const bi_instr *I)
 {
    assert(I->nr_dests);
    return va_pack_reg(I, I->dest[0]) | (va_pack_wrmask(I) << 6);
+}
+
+static unsigned
+va_pack_dest_v15(const bi_instr *I)
+{
+   assert(I->nr_dests);
+   switch (I->op) {
+   case BI_OPCODE_SHADDX_S64:
+   case BI_OPCODE_SHADDX_U64:
+      /* 64 bit dest has a 0x0 wrmask */
+      return va_pack_reg_v15(I, I->dest[0]);
+   default:
+      return va_pack_reg_v15(I, I->dest[0]) | (va_pack_wrmask(I) << 13);
+   }
 }
 
 static enum va_widen
@@ -455,6 +520,18 @@ va_pack_rhadd(const bi_instr *I)
 }
 
 static uint64_t
+va_pack_clamp_special_round_v15(const bi_instr *I)
+{
+   pack_assert(I, I->special < 4);
+   if (I->special == BI_SPECIAL_N && I->round == BI_ROUND_RTZ)
+      return 0x4;
+   else if (I->special)
+      return 0x4 | I->special;
+   else
+      return I->clamp;
+}
+
+static uint64_t
 va_pack_alu(const bi_instr *I, unsigned arch)
 {
    struct va_opcode_info info = get_valhall_opcode(I->op, arch);
@@ -467,25 +544,25 @@ va_pack_alu(const bi_instr *I, unsigned arch)
    case BI_OPCODE_FREXPM_F32:
    case BI_OPCODE_FREXPM_V2F16:
       if (I->sqrt)
-         hex |= 1ull << 24;
+         hex |= 1ull << ((arch >= 15) ? 30 : 24);
       if (I->log)
-         hex |= 1ull << 25;
+         hex |= 1ull << ((arch >= 15) ? 31 : 25);
       break;
 
    case BI_OPCODE_FLUSH_F32:
    case BI_OPCODE_FLUSH_V2F16:
-      hex |= I->nan_mode << 8;
+      hex |= I->nan_mode << ((arch >= 15) ? 30 : 8);
       if (I->ftz)
-         hex |= 1ull << 10;
+         hex |= 1ull << ((arch >= 15) ? 32 : 10);
       if (I->flush_inf)
-         hex |= 1ull << 11;
+         hex |= 1ull << ((arch >= 15) ? 33 : 11);
       break;
 
    /* Add mux type */
    case BI_OPCODE_MUX_I32:
    case BI_OPCODE_MUX_V2I16:
    case BI_OPCODE_MUX_V4I8:
-      hex |= (uint64_t)I->mux << 32;
+      hex |= (uint64_t)I->mux << ((arch >= 15) ? 34 : 32);
       break;
 
    /* Add .eq flag */
@@ -497,7 +574,7 @@ va_pack_alu(const bi_instr *I, unsigned arch)
          hex |= (1ull << 36);
 
       if (I->op == BI_OPCODE_BRANCHZI)
-         hex |= (0x1ull << 40); /* Absolute */
+         hex |= (0x1ull << ((arch >= 15) ? 31 : 40)); /* Absolute */
       else
          hex |= ((uint64_t)I->branch_offset & BITFIELD_MASK(27)) << 8;
 
@@ -513,7 +590,46 @@ va_pack_alu(const bi_instr *I, unsigned arch)
    case BI_OPCODE_RSHIFT_XOR_I32:
    case BI_OPCODE_RSHIFT_XOR_V2I16:
    case BI_OPCODE_RSHIFT_XOR_V4I8:
-      hex |= (uint64_t)I->arithmetic << 34;
+      if (arch >= 15) {
+         /* Rewrite exact to ARSHIFT */
+         if (I->arithmetic) {
+            switch (I->op) {
+            case BI_OPCODE_RSHIFT_AND_I32:
+            case BI_OPCODE_RSHIFT_AND_V2I16:
+            case BI_OPCODE_RSHIFT_AND_V4I8: {
+               uint64_t arshift_and_op = (0xcULL << 30);
+               /* Check that we can safely overwrite opcode */
+               pack_assert(I, ((info.exact & (0xfULL << 30)) |
+                               arshift_and_op) == arshift_and_op);
+               hex |= arshift_and_op;
+               break;
+            }
+            case BI_OPCODE_RSHIFT_OR_I32:
+            case BI_OPCODE_RSHIFT_OR_V2I16:
+            case BI_OPCODE_RSHIFT_OR_V4I8: {
+               uint64_t arshift_or_op = (0xdULL << 30);
+               /* Check that we can safely overwrite opcode */
+               pack_assert(I, ((info.exact & (0xfULL << 30)) | arshift_or_op) ==
+                                 arshift_or_op);
+               hex |= arshift_or_op;
+               break;
+            }
+            case BI_OPCODE_RSHIFT_XOR_I32:
+            case BI_OPCODE_RSHIFT_XOR_V2I16:
+            case BI_OPCODE_RSHIFT_XOR_V4I8: {
+               uint64_t arshift_xor_op = (0xbULL << 30);
+               /* Check that we can safely overwrite opcode */
+               pack_assert(I, ((info.exact & (0xfULL << 30)) |
+                               arshift_xor_op) == arshift_xor_op);
+               hex |= arshift_xor_op;
+               break;
+            }
+            default:
+               UNREACHABLE("RSHIFT->ARSHIFT");
+            }
+         }
+      } else
+         hex |= (uint64_t)I->arithmetic << 34;
       break;
 
    case BI_OPCODE_LEA_BUF_IMM:
@@ -564,8 +680,8 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       }
 
       hex |= ((uint64_t)va_pack_source_format(I)) << 24;
-      hex |= ((uint64_t)I->update) << 36;
-      hex |= ((uint64_t)I->sample) << 38;
+      hex |= ((uint64_t)I->update) << ((arch >= 15) ? 35 : 36);
+      hex |= ((uint64_t)I->sample) << ((arch >= 15) ? 37 : 38);
       break;
 
    case BI_OPCODE_LD_VAR_BUF_FLAT_IMM:
@@ -603,20 +719,18 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       break;
    }
 
-   /* FMA_RSCALE.f32 special modes treated as extra opcodes */
-   if (I->op == BI_OPCODE_FMA_RSCALE_F32) {
-      pack_assert(I, I->special < 4);
-      hex |= ((uint64_t)I->special) << 48;
-   }
-
    /* Add the normal destination or a placeholder.  Staging destinations are
     * added elsewhere, as they require special handling for control fields.
     */
    if (info.has_dest && info.nr_staging_dests == 0) {
-      hex |= (uint64_t)va_pack_dest(I) << 40;
+      if (arch >= 15)
+         hex |= (uint64_t)va_pack_dest_v15(I) << 40;
+      else
+         hex |= (uint64_t)va_pack_dest(I) << 40;
    } else if (info.nr_staging_dests == 0 && info.nr_staging_srcs == 0) {
       pack_assert(I, I->nr_dests == 0);
-      hex |= 0xC0ull << 40; /* Placeholder */
+      if (arch < 15)
+         hex |= 0xC0ull << 40; /* Placeholder */
    }
 
    bool swap12 = va_swap_12(I->op);
@@ -631,7 +745,10 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       enum va_size size = src_info.size;
 
       bi_index src = I->src[logical_i + src_offset];
-      hex |= (uint64_t)va_pack_src(I, logical_i + src_offset) << (8 * i);
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, logical_i + src_offset, i);
+      else
+         hex |= (uint64_t)va_pack_src(I, logical_i + src_offset) << (8 * i);
 
       if (src_info.notted) {
          if (src.neg)
@@ -639,9 +756,34 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       } else if (src_info.absneg) {
          unsigned neg_offs = 32 + 2 + ((2 - i) * 2);
          unsigned abs_offs = 33 + 2 + ((2 - i) * 2);
+         bool neg_xor = false;
 
-         if (src.neg)
-            hex |= 1ull << neg_offs;
+         if (arch >= 15) {
+            switch (I->op) {
+            /* FMA.* uses a single xor bit of src0.neg and src1.neg on v15 */
+            case BI_OPCODE_FMA_F32:
+            case BI_OPCODE_FMA_V2F16:
+               if (i == 0)
+                  neg_offs -= 2;
+               else if (i == 1)
+                  neg_xor = true;
+               break;
+            /* FMA_RSCALE.f32 has moved the src2.neg bit up by one on v15. */
+            case BI_OPCODE_FMA_RSCALE_F32:
+               if (i == 2)
+                  neg_offs += 1;
+               break;
+            default:
+               break;
+            }
+         }
+
+         if (src.neg) {
+            if (neg_xor)
+               hex ^= 1ull << neg_offs;
+            else
+               hex |= 1ull << neg_offs;
+         }
          if (src.abs)
             hex |= 1ull << abs_offs;
       } else {
@@ -663,8 +805,8 @@ va_pack_alu(const bi_instr *I, unsigned arch)
          unsigned offs = (i == 1) ? 26 : 36;
          hex |= (uint64_t)va_pack_widen(I, src.swizzle, src_info.size) << offs;
       } else if (src_info.lane) {
-         unsigned offs = (I->op == BI_OPCODE_MKVEC_V2I8) ?
-            ((i == 0) ? 38 : 36) : ((i == 0) ? 28 : 26);
+         unsigned offs = (I->op == BI_OPCODE_MKVEC_V2I8) ? ((i == 0) ? 38 : 36)
+                                                         : ((i == 0) ? 28 : 26);
 
          if (src_info.size == VA_SIZE_16) {
             hex |= (src.swizzle == BI_SWIZZLE_H1 ? 1 : 0) << offs;
@@ -677,7 +819,25 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       } else if (src_info.lanes) {
          pack_assert(I, src_info.size == VA_SIZE_8);
          pack_assert(I, i == 1);
-         hex |= (uint64_t)va_pack_shift_lanes(I, src.swizzle) << 26;
+         if (arch >= 15 && I->op == BI_OPCODE_CLPER_I32) {
+            switch (src.swizzle) {
+            case BI_SWIZZLE_B00:
+               hex |= 0x0ULL << 28;
+               break;
+            case BI_SWIZZLE_B11:
+               hex |= 0x1ULL << 28;
+               break;
+            case BI_SWIZZLE_B22:
+               hex |= 0x2ULL << 28;
+               break;
+            case BI_SWIZZLE_B33:
+               hex |= 0x3ULL << 28;
+               break;
+            default:
+               invalid_instruction(I, "lane shift");
+            }
+         } else
+            hex |= (uint64_t)va_pack_shift_lanes(I, src.swizzle) << 26;
       } else if (src_info.combine) {
          /* Treat as swizzle, subgroup ops not yet supported */
          pack_assert(I, src_info.size == VA_SIZE_32);
@@ -693,17 +853,33 @@ va_pack_alu(const bi_instr *I, unsigned arch)
    }
 
    if (info.saturate)
-      hex |= (uint64_t)I->saturate << 30;
-   if (info.rhadd)
+      hex |= (uint64_t)I->saturate << ((arch >= 15) ? 25 : 30);
+   if (info.rhadd) {
+      pack_assert(I, arch < 15);
       hex |= va_pack_rhadd(I);
-   if (info.clamp)
-      hex |= (uint64_t)I->clamp << 32;
-   if (info.round_mode)
-      hex |= (uint64_t)I->round << 30;
+   }
+   /* FMA_RSCALE.f32 special modes treated as extra opcodes */
+   if (I->op == BI_OPCODE_FMA_RSCALE_F32) {
+      if (arch >= 15) {
+         hex |= va_pack_clamp_special_round_v15(I) << 32;
+      } else {
+         pack_assert(I, I->special < 4);
+         hex |= ((uint64_t)I->special) << 48;
+         if (info.clamp)
+            hex |= (uint64_t)I->clamp << 32;
+         if (info.round_mode && I->round == BI_ROUND_RTZ)
+            hex |= (uint64_t)0x1 << 50;
+      }
+   } else {
+      if (info.clamp)
+         hex |= (uint64_t)I->clamp << ((arch >= 15) ? 30 : 32);
+      if (info.round_mode)
+         hex |= (uint64_t)I->round << ((arch >= 15) ? 32 : 30);
+   }
    if (info.condition)
-      hex |= (uint64_t)I->cmpf << 32;
+      hex |= (uint64_t)I->cmpf << ((arch >= 15) ? 33 : 32);
    if (info.result_type)
-      hex |= (uint64_t)I->result_type << 30;
+      hex |= (uint64_t)I->result_type << ((arch >= 15) ? 24 : 30);
 
    return hex;
 }
@@ -771,6 +947,26 @@ va_pack_load(const bi_instr *I, bool buffer_descriptor)
 
    return hex;
 }
+
+static uint64_t
+va_pack_load_v15(const bi_instr *I, bool buffer_descriptor)
+{
+   /* This implicitly means identity: VA_LOAD_LANE_8_BIT_B0 for i8 (bits[28;27])
+    * and VA_LOAD_LANE_16_BIT_H0 for i16 (bit[27]) */
+   uint64_t hex = 0;
+
+   if (!buffer_descriptor)
+      hex |= va_pack_byte_offset(I);
+
+   hex |= va_pack_src_v15(I, 0, 0);
+   hex |= (uint64_t)I->mem_access << 24;
+
+   if (buffer_descriptor)
+      hex |= va_pack_src_v15(I, 1, 1);
+
+   return hex;
+}
+
 static uint64_t
 va_pack_store(const bi_instr *I)
 {
@@ -778,6 +974,20 @@ va_pack_store(const bi_instr *I)
 
    va_validate_register_pair(I, 1);
    hex |= (uint64_t)va_pack_src(I, 1) << 0;
+   hex |= I->mem_access << 24;
+
+   hex |= va_pack_byte_offset(I);
+
+   return hex;
+}
+
+static uint64_t
+va_pack_store_v15(const bi_instr *I)
+{
+   uint64_t hex = 0;
+
+   va_validate_register_pair(I, 1);
+   hex |= va_pack_src_v15(I, 1, 0);
    hex |= I->mem_access << 24;
 
    hex |= va_pack_byte_offset(I);
@@ -827,13 +1037,45 @@ va_pack_register_format(const bi_instr *I)
    }
 }
 
+static uint64_t
+va_pack_src_null_v15(unsigned loc)
+{
+   uint64_t hex = 0;
+   uint64_t regval = 0x1c0;
+
+   uint64_t low8 = regval & 0xff;
+   uint64_t high1 = (regval >> 8) & 0x1;
+
+   hex |= (low8 << (8 * loc));
+   hex |= (high1 << (48 + loc));
+
+   return hex;
+}
+
+static unsigned
+va_repack_sr_control_v15(unsigned sr_control)
+{
+   unsigned repacked = 0;
+   bool read = sr_control & 0x1;
+   bool write = sr_control & 0x2;
+
+   if (read) {
+      repacked |= 0x2;
+      if (write)
+         repacked |= 0x1;
+   }
+
+   return repacked;
+}
+
 uint64_t
 va_pack_instr(const bi_instr *I, unsigned arch)
 {
    struct va_opcode_info info = get_valhall_opcode(I->op, arch);
 
-   uint64_t hex = info.exact | (((uint64_t)I->flow) << 59);
-   hex |= ((uint64_t)va_select_fau_page(I)) << 57;
+   uint64_t hex =
+      info.exact | (((uint64_t)I->flow) << ((arch >= 15) ? 58 : 59));
+   hex |= ((uint64_t)va_select_fau_page(I, arch)) << ((arch >= 15) ? 62 : 57);
 
    if (info.slot)
       hex |= ((uint64_t)I->slot << 30);
@@ -845,14 +1087,60 @@ va_pack_instr(const bi_instr *I, unsigned arch)
       unsigned count =
          read ? bi_count_read_registers(I, 0) : bi_count_write_registers(I, 0);
 
-      hex |= ((uint64_t)count << 33);
-      hex |= (uint64_t)va_pack_reg(I, sr) << 40;
-      hex |= ((uint64_t)info.sr_control << 46);
+      hex |= ((uint64_t)count << ((arch >= 15) ? 32 : 33));
+      if (arch >= 15) {
+         hex |= (uint64_t)va_pack_reg_v15(I, sr) << 40;
+         hex |= ((uint64_t)va_repack_sr_control_v15(info.sr_control) << 38);
+      } else {
+         hex |= (uint64_t)va_pack_reg(I, sr) << 40;
+         hex |= ((uint64_t)info.sr_control << 46);
+      }
+   }
+
+   /* On v15, some instructions require special sr_control values */
+   if (arch >= 15) {
+      switch (I->op) {
+      case BI_OPCODE_BARRIER: {
+         unsigned sr_control = va_repack_sr_control_v15(info.sr_control);
+         pack_assert(I, sr_control == 0x0 || sr_control == 0x2);
+         hex |= (uint64_t)0x2 << 38;
+         break;
+      }
+      case BI_OPCODE_ATOM1_RETURN_I32:
+      case BI_OPCODE_ATOM1_RETURN_I64: {
+         unsigned sr_control = va_repack_sr_control_v15(info.sr_control);
+         pack_assert(I, sr_control == 0x0);
+         break;
+      }
+      case BI_OPCODE_ATOM_I32:
+      case BI_OPCODE_ATOM_I64: {
+         unsigned sr_control = va_repack_sr_control_v15(info.sr_control);
+         pack_assert(I, sr_control == 0x2);
+         break;
+      }
+      case BI_OPCODE_ATOM_RETURN_I32:
+      case BI_OPCODE_ATOM_RETURN_I64:
+      case BI_OPCODE_AXCHG_I32:
+      case BI_OPCODE_AXCHG_I64:
+      case BI_OPCODE_ACMPXCHG_I32:
+      case BI_OPCODE_ACMPXCHG_I64: {
+         unsigned sr_control = va_repack_sr_control_v15(info.sr_control);
+         pack_assert(I, sr_control == 0x0 || sr_control == 0x3);
+         hex |= (uint64_t)0x3 << 38;
+         break;
+      }
+      default:
+         break;
+      }
    }
 
    if (info.sr_write_count) {
-      hex |= ((uint64_t)bi_count_write_registers(I, 0) - 1) << 36;
-      hex |= ((uint64_t)va_pack_reg(I, I->dest[0])) << 16;
+      hex |= ((uint64_t)bi_count_write_registers(I, 0) - 1)
+             << ((arch >= 15) ? 35 : 36);
+      if (arch >= 15)
+         hex |= ((uint64_t)va_pack_reg_v15(I, I->dest[0])) << 16;
+      else
+         hex |= ((uint64_t)va_pack_reg(I, I->dest[0])) << 16;
    }
 
    if (info.vecsize)
@@ -870,7 +1158,10 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    case BI_OPCODE_LOAD_I64:
    case BI_OPCODE_LOAD_I96:
    case BI_OPCODE_LOAD_I128:
-      hex |= va_pack_load(I, false);
+      if (arch >= 15)
+         hex |= va_pack_load_v15(I, false);
+      else
+         hex |= va_pack_load(I, false);
       break;
 
    case BI_OPCODE_LD_PKA_I8:
@@ -881,7 +1172,10 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    case BI_OPCODE_LD_PKA_I64:
    case BI_OPCODE_LD_PKA_I96:
    case BI_OPCODE_LD_PKA_I128:
-      hex |= va_pack_load(I, true);
+      if (arch >= 15)
+         hex |= va_pack_load_v15(I, true);
+      else
+         hex |= va_pack_load(I, true);
       break;
 
    case BI_OPCODE_STORE_I8:
@@ -892,20 +1186,26 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    case BI_OPCODE_STORE_I64:
    case BI_OPCODE_STORE_I96:
    case BI_OPCODE_STORE_I128:
-      hex |= va_pack_store(I);
+      if (arch >= 15)
+         hex |= va_pack_store_v15(I);
+      else
+         hex |= va_pack_store(I);
       break;
 
    case BI_OPCODE_ATOM1_RETURN_I64:
       /* Permit omitting the destination for plain ATOM1 */
-      if (!bi_count_write_registers(I, 0)) {
+      if (arch < 15 && !bi_count_write_registers(I, 0)) {
          hex |= (0x40ull << 40); // fake read
       }
 
       /* 64-bit source */
       va_validate_register_pair(I, 0);
-      hex |= (uint64_t)va_pack_src(I, 0) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 0, 0);
+      else
+         hex |= (uint64_t)va_pack_src(I, 0) << 0;
       hex |= va_pack_byte_offset_8(I);
-      hex |= ((uint64_t)va_pack_atom_opc_1(I)) << 22;
+      hex |= ((uint64_t)va_pack_atom_opc_1(I)) << ((arch >= 15) ? 24 : 22);
       break;
 
    case BI_OPCODE_ACMPXCHG_I64:
@@ -914,29 +1214,43 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    case BI_OPCODE_ATOM_RETURN_I64:
       /* 64-bit source */
       va_validate_register_pair(I, 1);
-      hex |= (uint64_t)va_pack_src(I, 1) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 1, 0);
+      else
+         hex |= (uint64_t)va_pack_src(I, 1) << 0;
       hex |= va_pack_byte_offset_8(I);
-      hex |= ((uint64_t)va_pack_atom_opc(I)) << 22;
+      hex |= ((uint64_t)va_pack_atom_opc(I)) << ((arch >= 15) ? 24 : 22);
 
-      if (I->op == BI_OPCODE_ATOM_RETURN_I64)
-         hex |= (0xc0ull << 40); // flags
+      if (arch >= 15) {
+         if (I->atom_opc == BI_ATOM_OPC_ACMPXCHG) {
+            /* Change bits [51;50] to be ACMPXCHG */
+            pack_assert(I, ((hex >> 50) & 0b11) == 0b01);
+            hex ^= (0b11ull << 50);
+         }
+      } else {
+         if (I->op == BI_OPCODE_ATOM_RETURN_I64)
+            hex |= (0xc0ull << 40); // flags
 
-      if (I->atom_opc == BI_ATOM_OPC_ACMPXCHG)
-         hex |= (1 << 26); /* .compare */
+         if (I->atom_opc == BI_ATOM_OPC_ACMPXCHG)
+            hex |= (1 << 26); /* .compare */
+      }
 
       break;
 
    case BI_OPCODE_ATOM1_RETURN_I32:
       /* Permit omitting the destination for plain ATOM1 */
-      if (!bi_count_write_registers(I, 0)) {
+      if (arch < 15 && !bi_count_write_registers(I, 0)) {
          hex |= (0x40ull << 40); // fake read
       }
 
       /* 64-bit source */
       va_validate_register_pair(I, 0);
-      hex |= (uint64_t)va_pack_src(I, 0) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 0, 0);
+      else
+         hex |= (uint64_t)va_pack_src(I, 0) << 0;
       hex |= va_pack_byte_offset_8(I);
-      hex |= ((uint64_t)va_pack_atom_opc_1(I)) << 22;
+      hex |= ((uint64_t)va_pack_atom_opc_1(I)) << ((arch >= 15) ? 24 : 22);
       break;
 
    case BI_OPCODE_ACMPXCHG_I32:
@@ -945,41 +1259,67 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    case BI_OPCODE_ATOM_RETURN_I32:
       /* 64-bit source */
       va_validate_register_pair(I, 1);
-      hex |= (uint64_t)va_pack_src(I, 1) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 1, 0);
+      else
+         hex |= (uint64_t)va_pack_src(I, 1) << 0;
       hex |= va_pack_byte_offset_8(I);
-      hex |= ((uint64_t)va_pack_atom_opc(I)) << 22;
+      hex |= ((uint64_t)va_pack_atom_opc(I)) << ((arch >= 15) ? 24 : 22);
 
-      if (I->op == BI_OPCODE_ATOM_RETURN_I32)
-         hex |= (0xc0ull << 40); // flags
+      if (arch >= 15) {
+         if (I->atom_opc == BI_ATOM_OPC_ACMPXCHG) {
+            /* Change bits [51;50] to be ACMPXCHG */
+            pack_assert(I, ((hex >> 50) & 0b11) == 0b01);
+            hex ^= (0b11ull << 50);
+         }
+      } else {
+         if (I->op == BI_OPCODE_ATOM_RETURN_I32)
+            hex |= (0xc0ull << 40); // flags
 
-      if (I->atom_opc == BI_ATOM_OPC_ACMPXCHG)
-         hex |= (1 << 26); /* .compare */
+         if (I->atom_opc == BI_ATOM_OPC_ACMPXCHG)
+            hex |= (1 << 26); /* .compare */
+      }
 
       break;
 
    case BI_OPCODE_LD_CVT:
-      hex |= (uint64_t)va_pack_src(I, 0);
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 0, 0);
+      else
+         hex |= (uint64_t)va_pack_src(I, 0);
       hex |= va_pack_byte_offset(I);
 
       /* Conversion descriptor */
-      hex |= (uint64_t)va_pack_src(I, 2) << 16;
-      hex |= (uint64_t)I->mem_access << 37;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 2, 2);
+      else
+         hex |= (uint64_t)va_pack_src(I, 2) << 16;
+      hex |= (uint64_t)I->mem_access << ((arch >= 15) ? 35 : 37);
       break;
 
    case BI_OPCODE_ST_CVT:
       /* Staging read */
       va_validate_register_pair(I, 1);
-      hex |= (uint64_t)va_pack_src(I, 1) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 1, 0);
+      else
+         hex |= (uint64_t)va_pack_src(I, 1) << 0;
       hex |= va_pack_byte_offset(I);
 
       /* Conversion descriptor */
-      hex |= (uint64_t)va_pack_src(I, 3) << 16;
-      hex |= (uint64_t)I->mem_access << 37;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 3, 2);
+      else
+         hex |= (uint64_t)va_pack_src(I, 3) << 16;
+      hex |= (uint64_t)I->mem_access << ((arch >= 15) ? 35 : 37);
       break;
 
    case BI_OPCODE_BLEND: {
       /* Source 0 - Blend descriptor (64-bit) */
-      hex |= ((uint64_t)va_pack_src(I, 2)) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 2, 0);
+      else
+         hex |= ((uint64_t)va_pack_src(I, 2)) << 0;
       va_validate_register_pair(I, 2);
 
       /* Target */
@@ -990,7 +1330,10 @@ va_pack_instr(const bi_instr *I, unsigned arch)
       hex |= ((I->branch_offset >> 3) << 8);
 
       /* Source 2 - coverage mask */
-      hex |= ((uint64_t)va_pack_reg(I, I->src[1])) << 16;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 1, 2);
+      else
+         hex |= ((uint64_t)va_pack_reg(I, I->src[1])) << 16;
 
       /* Vector size */
       unsigned vecsize = 4;
@@ -1000,7 +1343,7 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    }
 
    case BI_OPCODE_LD_GCLK_U64:
-      hex |= va_pack_gclk(I);
+      hex |= va_pack_gclk(I) << ((arch >= 15) ? 8 : 0);
       break;
 
    case BI_OPCODE_TEX_GRADIENT:
@@ -1008,7 +1351,10 @@ va_pack_instr(const bi_instr *I, unsigned arch)
    case BI_OPCODE_TEX_FETCH:
    case BI_OPCODE_TEX_GATHER: {
       /* Image to read from */
-      hex |= ((uint64_t)va_pack_src(I, 1)) << 0;
+      if (arch >= 15)
+         hex |= va_pack_src_v15(I, 1, 0);
+      else
+         hex |= ((uint64_t)va_pack_src(I, 1)) << 0;
 
       if ((I->op == BI_OPCODE_TEX_FETCH || I->op == BI_OPCODE_TEX_GRADIENT) &&
           I->shadow)
@@ -1025,7 +1371,7 @@ va_pack_instr(const bi_instr *I, unsigned arch)
       if (I->skip)
          hex |= (1ull << 39);
       if (!bi_is_regfmt_16(I->register_format))
-         hex |= (1ull << 46);
+         hex |= (1ull << ((arch >= 15) ? 38 : 46));
 
       if (I->op == BI_OPCODE_TEX_GRADIENT) {
          if (I->force_delta_enable) {
@@ -1050,18 +1396,33 @@ va_pack_instr(const bi_instr *I, unsigned arch)
          hex |= ((uint64_t)I->fetch_component) << 14;
       }
 
-      hex |= (I->write_mask << 22);
+      hex |= (I->write_mask << ((arch >= 15) ? 24 : 22));
       hex |= ((uint64_t)I->dimension) << 28;
 
       break;
    }
 
    default:
-      if (!info.exact && I->op != BI_OPCODE_NOP)
+      if (!info.exact && (arch >= 15 || I->op != BI_OPCODE_NOP))
          invalid_instruction(I, "opcode");
 
       hex |= va_pack_alu(I, arch);
       break;
+   }
+
+   /* On v15, some instrutions require an encoded null src. */
+   if (arch >= 15) {
+      switch (I->op) {
+      case BI_OPCODE_NOP:
+      case BI_OPCODE_LD_VAR_FLAT_IMM:
+      case BI_OPCODE_LD_VAR_BUF_FLAT_IMM:
+      case BI_OPCODE_LD_GCLK_U64:
+      case BI_OPCODE_BARRIER:
+         hex |= va_pack_src_null_v15(0);
+         break;
+      default:
+         break;
+      }
    }
 
    return hex;

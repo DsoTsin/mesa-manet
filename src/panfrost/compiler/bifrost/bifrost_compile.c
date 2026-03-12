@@ -4402,7 +4402,7 @@ bi_compile_variant_nir(nir_shader *nir,
          va_lower_constants(ctx, I, const_hist, min_count_for_fau);
 
          bi_builder b = bi_init_builder(ctx, bi_before_instr(I));
-         va_repair_fau(&b, I);
+         va_repair_fau(&b, I, ctx->arch);
       }
 
       _mesa_hash_table_u64_destroy(const_hist);

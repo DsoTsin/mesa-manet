@@ -9,9 +9,9 @@
 
 #include <gtest/gtest.h>
 
-#define CASE(instr, expected)                                                  \
+#define CASE_ARCH(instr, arch, expected)                                       \
    do {                                                                        \
-      if (va_validate_fau(instr) != expected) {                                \
+      if (va_validate_fau(instr, arch) != expected) {                          \
          fprintf(stderr, "Incorrect validation for:\n");                       \
          bi_print_instr(instr, stderr);                                        \
          fprintf(stderr, "\n");                                                \
@@ -19,8 +19,8 @@
       }                                                                        \
    } while (0)
 
-#define VALID(instr)   CASE(instr, true)
-#define INVALID(instr) CASE(instr, false)
+#define VALID(instr)   CASE_ARCH(instr, 10, true)
+#define INVALID(instr) CASE_ARCH(instr, 10, false)
 
 class ValidateFau : public testing::Test {
  protected:
