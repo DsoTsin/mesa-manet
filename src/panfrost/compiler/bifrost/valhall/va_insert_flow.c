@@ -519,7 +519,7 @@ va_assign_slots(bi_context *ctx)
 
    bi_foreach_instr_global(ctx, I) {
       if (I->op == BI_OPCODE_BARRIER) {
-         I->slot = 7;
+         I->slot = (ctx->arch >= 15) ? VA_SLOT_V15_SLOT7 : VA_SLOT_SLOT7;
       } else if (I->op == BI_OPCODE_ZS_EMIT || I->op == BI_OPCODE_ATEST) {
          I->slot = 0;
       } else if (bi_get_opcode_props(I)->message) {

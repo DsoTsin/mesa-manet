@@ -596,6 +596,18 @@
     <value desc="Slot #7">slot7</value>
   </enum>
 
+  <enum name="Slot v15">
+    <desc>
+      Dependency slot set on a message-passing instruction that writes to
+      registers. Before reading the destination, a future instruction must wait
+      on the specified slot. Slot #7 is for `BARRIER` instructions only.
+    </desc>
+    <value desc="Slot #0">slot0</value>
+    <value desc="Slot #1">slot1</value>
+    <value desc="Slot #2">slot2</value>
+    <value desc="Slot #7">slot7</value>
+  </enum>
+
   <enum name="Memory access">
     <desc>Memory access hint for a `LOAD` or `STORE` instruction.</desc>
     <value desc="No hint (global)" default="true">none</value>

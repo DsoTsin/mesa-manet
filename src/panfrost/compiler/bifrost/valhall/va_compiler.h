@@ -13,9 +13,9 @@
 extern "C" {
 #endif
 
-bool va_validate_fau(bi_instr *I);
+bool va_validate_fau(bi_instr *I, unsigned arch);
 void va_validate(FILE *fp, bi_context *ctx);
-void va_repair_fau(bi_builder *b, bi_instr *I);
+void va_repair_fau(bi_builder *b, bi_instr *I, unsigned arch);
 void va_fuse_add_imm(bi_instr *I);
 void va_lower_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts, uint32_t min_fau_count);
 void va_count_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts);
@@ -29,14 +29,15 @@ void va_gather_hsr_info(bi_context *ctx, struct pan_shader_info *info);
 uint64_t va_pack_instr(const bi_instr *I, unsigned arch);
 
 static inline unsigned
-va_fau_page(enum bir_fau value)
+va_fau_page(enum bir_fau value, unsigned arch)
 {
    /* Uniform slots of FAU have a 7-bit index. The top 2-bits are the page; the
     * bottom 5-bits are specified in the source.
     */
    if (value & BIR_FAU_UNIFORM) {
+      unsigned value_shift = arch >= 15 ? 6 : 5;
       unsigned slot = value & ~BIR_FAU_UNIFORM;
-      unsigned page = slot >> 5;
+      unsigned page = slot >> value_shift;
 
       assert(page <= 3);
       return page;
@@ -58,7 +59,7 @@ va_fau_page(enum bir_fau value)
 }
 
 static inline unsigned
-va_select_fau_page(const bi_instr *I)
+va_select_fau_page(const bi_instr *I, unsigned arch)
 {
    bi_foreach_src(I, s) {
       /* LUT immediates are available on every page. Only uniforms and
@@ -66,7 +67,7 @@ va_select_fau_page(const bi_instr *I)
        */
       if (I->src[s].type == BI_INDEX_FAU &&
           !(I->src[s].value & BIR_FAU_IMMEDIATE))
-         return va_fau_page((enum bir_fau)I->src[s].value);
+         return va_fau_page((enum bir_fau)I->src[s].value, arch);
    }
 
    return 0;

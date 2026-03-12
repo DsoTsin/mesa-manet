@@ -93,7 +93,8 @@ fau_state_uniform(struct fau_state *fau, bi_index idx, enum bi_opcode op)
 }
 
 static bool
-fau_state_special(struct fau_state *fau, bi_index idx, enum bi_opcode op)
+fau_state_special(struct fau_state *fau, bi_index idx, enum bi_opcode op,
+                  unsigned arch)
 {
    for (unsigned i = 0; i < ARRAY_SIZE(fau->buffer); ++i) {
       bi_index buf = fau->buffer[i];
@@ -106,7 +107,7 @@ fau_state_special(struct fau_state *fau, bi_index idx, enum bi_opcode op)
    /* Instructions executed by the messaging unit should not encode WARP_ID or
     * anything from special page 3. */
    if (can_run_on_message_unit(op) &&
-       (va_fau_page(idx.value) == 3 || idx.value == BIR_FAU_WARP_ID))
+       (va_fau_page(idx.value, arch) == 3 || idx.value == BIR_FAU_WARP_ID))
       return false;
 
    return fau->uniform_slot == -1 || can_use_two_fau_indices(op);
@@ -114,7 +115,7 @@ fau_state_special(struct fau_state *fau, bi_index idx, enum bi_opcode op)
 
 static bool
 valid_src(struct fau_state *fau, unsigned fau_page, bi_index src,
-          enum bi_opcode op)
+          enum bi_opcode op, unsigned arch)
 {
    if (src.type != BI_INDEX_FAU)
       return true;
@@ -128,42 +129,42 @@ valid_src(struct fau_state *fau, unsigned fau_page, bi_index src,
       return fau_state_buffer(fau, src);
    }
 
-   bool valid = (fau_page == va_fau_page(src.value));
+   bool valid = (fau_page == va_fau_page(src.value, arch));
    valid &= fau_state_buffer(fau, src);
 
    if (src.value & BIR_FAU_UNIFORM)
       valid &= fau_state_uniform(fau, src, op);
    else if (fau_is_special(src.value))
-      valid &= fau_state_special(fau, src, op);
+      valid &= fau_state_special(fau, src, op, arch);
 
    return valid;
 }
 
 bool
-va_validate_fau(bi_instr *I)
+va_validate_fau(bi_instr *I, unsigned arch)
 {
    bool valid = true;
    struct fau_state fau = {.uniform_slot = -1};
-   unsigned fau_page = va_select_fau_page(I);
+   unsigned fau_page = va_select_fau_page(I, arch);
 
    bi_foreach_src(I, s) {
-      valid &= valid_src(&fau, fau_page, I->src[s], I->op);
+      valid &= valid_src(&fau, fau_page, I->src[s], I->op, arch);
    }
 
    return valid;
 }
 
 void
-va_repair_fau(bi_builder *b, bi_instr *I)
+va_repair_fau(bi_builder *b, bi_instr *I, unsigned arch)
 {
    struct fau_state fau = {.uniform_slot = -1};
-   unsigned fau_page = va_select_fau_page(I);
+   unsigned fau_page = va_select_fau_page(I, arch);
 
    bi_foreach_src(I, s) {
       struct fau_state push = fau;
       bi_index src = I->src[s];
 
-      if (!valid_src(&fau, fau_page, src, I->op)) {
+      if (!valid_src(&fau, fau_page, src, I->op, arch)) {
          bi_replace_src(I, s, bi_mov_i32(b, bi_strip_index(src)));
 
          /* Rollback update. Since the replacement move doesn't affect FAU
@@ -180,7 +181,7 @@ va_validate(FILE *fp, bi_context *ctx)
    bool errors = false;
 
    bi_foreach_instr_global(ctx, I) {
-      if (!va_validate_fau(I)) {
+      if (!va_validate_fau(I, ctx->arch)) {
          if (!errors) {
             fprintf(fp, "Validation failed, this is a bug. Shader:\n\n");
             bi_print_shader(ctx, fp);
