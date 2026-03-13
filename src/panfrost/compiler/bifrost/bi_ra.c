@@ -352,12 +352,12 @@ bi_make_affinity(uint64_t clobber, unsigned count, bool split_file,
       clobbered |= mask << (64 - excess);
 
       if (split_file)
-         clobbered |= mask << (16 - excess);
+         clobbered |= mask << (((arch >= 15) ? 32 : 16) - excess);
    }
 
    /* Don't allocate the middle if we split out the middle */
    if (split_file)
-      clobbered |= BITFIELD64_MASK(32) << 16;
+      clobbered |= BITFIELD64_MASK(32) << ((arch >= 15) ? 32 : 16);
 
    /* Blend shaders might read sample_id, but unlike cumulative_coverage, it's
     * not explicitly preloaded by BLEND.
@@ -541,7 +541,8 @@ bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
    uint64_t default_affinity =
       ctx->inputs->is_blend ? BITFIELD64_MASK(16)
       : full_regs           ? BITFIELD64_MASK(64)
-                  : (BITFIELD64_MASK(16) | (BITFIELD64_MASK(16) << 48));
+      : (ctx->arch >= 15)   ? BITFIELD64_MASK(32)
+                          : (BITFIELD64_MASK(16) | (BITFIELD64_MASK(16) << 48));
 
    /* To test spilling, mimic a small register file */
    if (bifrost_debug & BIFROST_DBG_SPILL && !ctx->inputs->is_blend && (bifrost_debug & BIFROST_DBG_NOSSARA))

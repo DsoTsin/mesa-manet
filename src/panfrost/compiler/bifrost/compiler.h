@@ -1176,25 +1176,25 @@ bi_preload_reg(enum bi_preload val, unsigned arch)
    /* Compute */
    case BI_PRELOAD_LOCAL_ID_0:
       /* Bits [15;0] */
-      return 55;
+      return (arch >= 15) ? 4 : 55;
    case BI_PRELOAD_LOCAL_ID_1:
       /* Bits [31;16] */
-      return 55;
+      return (arch >= 15) ? 4 : 55;
    case BI_PRELOAD_LOCAL_ID_2:
       /* Bits [15;0] */
-      return 56;
+      return (arch >= 15) ? 3 : 56;
    case BI_PRELOAD_WORKGROUP_ID_0:
-      return 57;
+      return (arch >= 15) ? 5 : 57;
    case BI_PRELOAD_WORKGROUP_ID_1:
-      return 58;
+      return (arch >= 15) ? 6 : 58;
    case BI_PRELOAD_WORKGROUP_ID_2:
-      return 59;
+      return (arch >= 15) ? 7 : 59;
    case BI_PRELOAD_GLOBAL_ID_0:
-      return 60;
+      return (arch >= 15) ? 0 : 60;
    case BI_PRELOAD_GLOBAL_ID_1:
-      return 61;
+      return (arch >= 15) ? 1 : 61;
    case BI_PRELOAD_GLOBAL_ID_2:
-      return 62;
+      return (arch >= 15) ? 2 : 62;
    /* Vertex */
    case BI_PRELOAD_POS_RESULT_PTR_LO:
       assert(arch < 9);
@@ -1204,59 +1204,60 @@ bi_preload_reg(enum bi_preload val, unsigned arch)
       return 59;
    case BI_PRELOAD_INTERNAL_ID:
       assert(arch >= 9);
-      return 59;
+      return (arch >= 15) ? 2 : 59;
    case BI_PRELOAD_VERTEX_ID:
-      return (arch >= 9) ? 60 : 61;
+      return (arch >= 15) ? 0 : (arch >= 9) ? 60 : 61;
    case BI_PRELOAD_INSTANCE_ID:
-      return (arch >= 9) ? 61 : 62;
+      return (arch >= 15) ? 1 : (arch >= 9) ? 61 : 62;
    case BI_PRELOAD_DRAW_ID:
       assert(arch >= 9);
-      return 62;
+      return (arch >= 15) ? 3 : 62;
    case BI_PRELOAD_VIEW_ID:
       assert(arch >= 9);
-      return 63;
+      return (arch >= 15) ? 4 : 63;
    /* Fragment */
    case BI_PRELOAD_PRIMITIVE_ID:
-      return 57;
+      return (arch >= 15) ? 6 : 57;
    case BI_PRELOAD_PRIMITIVE_FLAGS:
-      return 58;
+      return (arch >= 15) ? 3 : 58;
    case BI_PRELOAD_POSITION_XY:
-      return 59;
+      return (arch >= 15) ? 2 : 59;
    case BI_PRELOAD_CUMULATIVE_COVERAGE:
       /* Bits [15;0] */
-      return 60;
+      return (arch >= 15) ? 0 : 60;
    case BI_PRELOAD_RASTERIZER_COVERAGE:
       /* Bits [15;0] */
-      return 61;
+      return (arch >= 15) ? 1 : 61;
    case BI_PRELOAD_SAMPLE_ID:
       /* Bits [23;16] */
-      return 61;
+      return (arch >= 15) ? 0 : 61;
    case BI_PRELOAD_CENTROID_ID:
       /* Bits [31;24] */
-      return 61;
+      return (arch >= 15) ? 0 : 61;
    case BI_PRELOAD_FRAME_ARG_LO:
-      return 62;
+      return (arch >= 15) ? 4 : 62;
    case BI_PRELOAD_FRAME_ARG_HI:
-      return 63;
+      return (arch >= 15) ? 5 : 63;
    /* Blend */
    case BI_PRELOAD_BLEND_SRC0_C0:
-      return 0;
+      /* v15+: Must not overlap coverage or sample_id. */
+      return (arch >= 15) ? 2 : 0;
    case BI_PRELOAD_BLEND_SRC0_C1:
-      return 1;
+      return (arch >= 15) ? 3 : 1;
    case BI_PRELOAD_BLEND_SRC0_C2:
-      return 2;
+      return (arch >= 15) ? 4 : 2;
    case BI_PRELOAD_BLEND_SRC0_C3:
-      return 3;
+      return (arch >= 15) ? 5 : 3;
    case BI_PRELOAD_BLEND_SRC1_C0:
-      return 4;
+      return (arch >= 15) ? 6 : 4;
    case BI_PRELOAD_BLEND_SRC1_C1:
-      return 5;
+      return (arch >= 15) ? 7 : 5;
    case BI_PRELOAD_BLEND_SRC1_C2:
-      return 6;
+      return (arch >= 15) ? 8 : 6;
    case BI_PRELOAD_BLEND_SRC1_C3:
-      return 7;
+      return (arch >= 15) ? 9 : 7;
    case BI_PRELOAD_BLEND_LINK:
-      return 48;
+      return (arch >= 15) ? 10 : 48;
    }
    UNREACHABLE("Non-handled BI_PRELOAD");
 }
