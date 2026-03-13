@@ -2008,16 +2008,16 @@
   </enum>
 
   <struct name="Preload" size="1">
-    <field name="R48-R63" size="16" start="0:0" type="hex"/>
-    <field name="R55" size="1" start="0:7" type="bool"/>
-    <field name="R56" size="1" start="0:8" type="bool"/>
-    <field name="R57" size="1" start="0:9" type="bool"/>
-    <field name="R58" size="1" start="0:10" type="bool"/>
-    <field name="R59" size="1" start="0:11" type="bool"/>
-    <field name="R60" size="1" start="0:12" type="bool"/>
-    <field name="R61" size="1" start="0:13" type="bool"/>
-    <field name="R62" size="1" start="0:14" type="bool"/>
-    <field name="R63" size="1" start="0:15" type="bool"/>
+    <field name="R0-R15" size="16" start="0:0" type="hex"/>
+    <field name="R0" size="1" start="0:0" type="bool"/>
+    <field name="R1" size="1" start="0:1" type="bool"/>
+    <field name="R2" size="1" start="0:2" type="bool"/>
+    <field name="R3" size="1" start="0:3" type="bool"/>
+    <field name="R4" size="1" start="0:4" type="bool"/>
+    <field name="R5" size="1" start="0:5" type="bool"/>
+    <field name="R6" size="1" start="0:6" type="bool"/>
+    <field name="R7" size="1" start="0:7" type="bool"/>
+    <field name="R8" size="1" start="0:8" type="bool"/>
   </struct>
 
   <enum name="Coverage bitmask type">
