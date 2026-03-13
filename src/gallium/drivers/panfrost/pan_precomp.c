@@ -100,12 +100,13 @@ panfrost_precomp_shader_create(
       cfg.stage = pan_shader_stage(&res->info);
 #if PAN_ARCH >= 15
       cfg.register_count = res->info.work_reg_count;
+      cfg.preload.r0_r15 = res->info.preload;
 #else
       cfg.register_allocation =
          pan_register_allocation(res->info.work_reg_count);
+      cfg.preload.r48_r63 = (res->info.preload >> 48);
 #endif
       cfg.binary = res->code_ptr;
-      cfg.preload.r48_r63 = (res->info.preload >> 48);
       cfg.flush_to_zero_mode = panfrost_ftz_mode(&res->info);
    }
 

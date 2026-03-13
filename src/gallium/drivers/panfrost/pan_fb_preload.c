@@ -1106,11 +1106,12 @@ pan_preload_emit_dcd(struct pan_fb_preload_cache *cache, struct pan_pool *pool,
       cfg.fragment_coverage_bitmask_type = MALI_COVERAGE_BITMASK_TYPE_GL;
 #if PAN_ARCH >= 15
       cfg.register_count = preload_shader->info.work_reg_count;
+      cfg.preload.r0_r15 = preload_shader->info.preload;
 #else
       cfg.register_allocation = MALI_SHADER_REGISTER_ALLOCATION_32_PER_THREAD;
+      cfg.preload.r48_r63 = preload_shader->info.preload >> 48;
 #endif
       cfg.binary = preload_shader->address;
-      cfg.preload.r48_r63 = preload_shader->info.preload >> 48;
    }
 
    unsigned bd_count = views.rt_count;

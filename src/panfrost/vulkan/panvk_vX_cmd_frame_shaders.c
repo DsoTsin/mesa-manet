@@ -246,12 +246,13 @@ get_frame_shader(struct panvk_device *dev,
       cfg.fragment_coverage_bitmask_type = MALI_COVERAGE_BITMASK_TYPE_GL;
 #if PAN_ARCH >= 15
       cfg.register_count = shader->info.work_reg_count;
+      cfg.preload.r0_r15 = shader->info.preload;
 #else
       cfg.register_allocation =
          pan_register_allocation(shader->info.work_reg_count);
+      cfg.preload.r48_r63 = shader->info.preload >> 48;
 #endif
       cfg.binary = panvk_priv_mem_dev_addr(shader->code_mem);
-      cfg.preload.r48_r63 = shader->info.preload >> 48;
    }
 #endif
 
