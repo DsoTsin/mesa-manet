@@ -1235,12 +1235,13 @@ panvk_shader_upload(struct panvk_device *dev,
 
 #if PAN_ARCH >= 15
          cfg.register_count = shader->info.work_reg_count;
+         cfg.preload.r0_r15 = shader->info.preload;
 #else
          cfg.register_allocation =
             pan_register_allocation(shader->info.work_reg_count);
+         cfg.preload.r48_r63 = (shader->info.preload >> 48);
 #endif
          cfg.binary = panvk_shader_variant_get_dev_addr(shader);
-         cfg.preload.r48_r63 = (shader->info.preload >> 48);
          cfg.flush_to_zero_mode = shader_ftz_mode(shader);
 
          if (cfg.stage == MALI_SHADER_STAGE_FRAGMENT)
@@ -1258,12 +1259,13 @@ panvk_shader_upload(struct panvk_device *dev,
          cfg.stage = pan_shader_stage(&shader->info);
 #if PAN_ARCH >= 15
          cfg.register_count = shader->info.work_reg_count;
+         cfg.preload.r0_r15 = shader->info.preload;
 #else
          cfg.register_allocation =
             pan_register_allocation(shader->info.work_reg_count);
+         cfg.preload.r48_r63 = (shader->info.preload >> 48);
 #endif
          cfg.binary = panvk_shader_variant_get_dev_addr(shader);
-         cfg.preload.r48_r63 = (shader->info.preload >> 48);
          cfg.flush_to_zero_mode = shader_ftz_mode(shader);
       }
 
@@ -1277,13 +1279,14 @@ panvk_shader_upload(struct panvk_device *dev,
          cfg.stage = pan_shader_stage(&shader->info);
 #if PAN_ARCH >= 15
          cfg.register_count = shader->info.work_reg_count;
+         cfg.preload.r0_r15 = shader->info.preload;
 #else
          cfg.register_allocation =
             pan_register_allocation(shader->info.work_reg_count);
+         cfg.preload.r48_r63 = (shader->info.preload >> 48);
 #endif
          cfg.binary = panvk_shader_variant_get_dev_addr(shader) +
                       shader->info.vs.no_psiz_offset;
-         cfg.preload.r48_r63 = (shader->info.preload >> 48);
          cfg.flush_to_zero_mode = shader_ftz_mode(shader);
       }
 #else
