@@ -83,23 +83,34 @@ def parse_modifier(modifier):
     if modifier is None:
         return None
 
-    for mod in MODIFIERS:
-        if modifier[0:len(mod)] == mod:
-            if mod == "log2":
-                assert(len(mod) == len(modifier))
-                return [mod]
+    ret = []
+    split_modifiers = modifier.split()
 
-            if modifier[len(mod)] == '(' and modifier[-1] == ')':
-                ret = [mod, int(modifier[(len(mod) + 1):-1])]
-                if ret[0] == 'align':
-                    align = ret[1]
-                    # Make sure the alignment is a power of 2
-                    assert(align > 0 and not(align & (align - 1)));
+    for mod in split_modifiers:
+        valid = False
+        for valid_mod in MODIFIERS:
+            if mod[0:len(valid_mod)] == valid_mod:
+                if valid_mod == "log2":
+                    assert(len(valid_mod) == len(modifier))
+                    # Add a number to simplify parsing
+                    ret.extend([valid_mod, 0])
+                    valid = True
+                    break
 
-                return ret
+                if mod[len(valid_mod)] == '(' and mod[-1] == ')':
+                    mod_arg = [valid_mod, int(mod[(len(valid_mod) + 1):-1])]
+                    if mod_arg[0] == 'align':
+                        align = mod_arg[1]
+                        # Make sure the alignment is a power of 2
+                        assert(align > 0 and not(align & (align - 1)));
 
-    print("Invalid modifier")
-    assert(False)
+                    ret.extend(mod_arg)
+                    valid = True
+                    break
+
+        assert valid, f"Invalid modifier: {modifier}"
+
+    return ret
 
 class Aggregate(object):
     def __init__(self, parser, name, attrs):
@@ -169,7 +180,7 @@ class Field(object):
         if self.type in self.parser.enums and self.default is not None:
             self.default = safe_name('{}_{}_{}'.format(global_prefix, self.type, self.default)).upper()
 
-        self.modifier  = parse_modifier(attrs.get("modifier"))
+        self.modifier = parse_modifier(attrs.get("modifier"))
 
     def emit_template_struct(self, dim):
         if self.type == 'address':
@@ -291,14 +302,22 @@ class Group(object):
             if field.modifier is None:
                 continue
 
-            if field.modifier[0] == "shr":
-                shift = field.modifier[1]
-                mask = hex((1 << shift) - 1)
-                print("   assert(((__unpacked)->{} & {}) == 0); \\".format(field.name, mask))
-            elif field.modifier[0] == "minus":
-                print("   assert((__unpacked)->{} >= {}); \\".format(field.name, field.modifier[1]))
-            elif field.modifier[0] == "log2":
-                print("   assert(IS_POT_NONZERO((__unpacked)->{})); \\".format(field.name))
+            value = "(__unpacked)->{}".format(field.name)
+            for mod, mod_val in zip (field.modifier[::2], field.modifier[1::2]):
+                if mod == "shr":
+                    mask = hex((1 << mod_val) - 1)
+                    print("   assert(({} & {}) == 0); \\".format(value, mask))
+                    value = "({} >> {})".format(value, mod_val)
+                elif mod == "minus":
+                    print("   assert({} >= {}); \\".format(value, mod_val))
+                    value = "({} - {})".format(value, mod_val)
+                elif mod == "align":
+                    mask = hex(mod_val - 1)
+                    print('   assert(!({} & {})); \\'.format(value, mask))
+                    value = "(ALIGN_POT({}, {}))".format(value, mod_val)
+                elif mod == "log2":
+                    print("   assert(IS_POT_NONZERO({})); \\".format(value))
+                    value = "(util_logbase2({}))".format(value)
 
         for index in range(self.length // 4):
             # Handle MBZ words
@@ -324,14 +343,15 @@ class Group(object):
 
                 value = "(__unpacked)->{}".format(contributor.path)
                 if field.modifier is not None:
-                    if field.modifier[0] == "shr":
-                        value = "{} >> {}".format(value, field.modifier[1])
-                    elif field.modifier[0] == "minus":
-                        value = "{} - {}".format(value, field.modifier[1])
-                    elif field.modifier[0] == "align":
-                        value = "ALIGN_POT({}, {})".format(value, field.modifier[1])
-                    elif field.modifier[0] == "log2":
-                        value = "util_logbase2({})".format(value)
+                    for mod, mod_val in zip(field.modifier[::2], field.modifier[1::2]):
+                        if mod == "shr":
+                            value = "({} >> {})".format(value, mod_val)
+                        elif mod == "minus":
+                            value = "({} - {})".format(value, mod_val)
+                        elif mod == "align":
+                            value = "(ALIGN_POT({}, {}))".format(value, mod_val)
+                        elif mod == "log2":
+                            value = "(util_logbase2({}))".format(value)
 
                 if field.type in ["uint", "hex", "uint/float", "address", "Pixel Format", "Component Swizzle"]:
                     s = "util_bitpack_uint(%s, %d, %d)" % \
@@ -435,25 +455,24 @@ class Group(object):
             else:
                 s = "/* unhandled field %s, type %s */\n" % (field.name, field.type)
 
-            suffix = ""
-            prefix = ""
-            if field.modifier:
-                if field.modifier[0] == "minus":
-                    suffix = " + {}".format(field.modifier[1])
-                elif field.modifier[0] == "shr":
-                    suffix = " << {}".format(field.modifier[1])
-                if field.modifier[0] == "log2":
-                    prefix = "1U << "
 
             print('   {}({}); \\'.format(convert, ', '.join(args)))
 
-            if len(prefix) != 0 or len(suffix) != 0:
-                print('   (__unpacked)->{} = {}(__unpacked)->{}{}; \\'.format(fieldref.path, prefix, fieldref.path, suffix))
+            value = "(__unpacked)->{}".format(fieldref.path)
+            if field.modifier is not None:
+                # Need to reverse ([::-1]) modifier order when unpacking
+                for mod, mod_val in list(zip(field.modifier[::2], field.modifier[1::2]))[::-1]:
+                    if mod == "shr":
+                        value = "({} << {})".format(value, mod_val)
+                    elif mod == "minus":
+                        value = "({} + {})".format(value, mod_val)
+                    elif mod == "align":
+                        mask = hex(mod_val - 1)
+                        print('   assert(!({} & {})); \\'.format(value, mask))
+                    elif mod == "log2":
+                        value = "(1U << {})".format(value)
 
-
-            if field.modifier and field.modifier[0] == "align":
-                mask = hex(field.modifier[1] - 1)
-                print('   assert(!((__unpacked)->{} & {})); \\'.format(fieldref.path, mask))
+                print('   (__unpacked)->{} = {}; \\'.format(fieldref.path, value))
 
     def emit_print_function(self):
         for field in self.fields:
