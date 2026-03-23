@@ -240,6 +240,9 @@ struct pan_kmod_dev_props {
    /* Maximum number of threads per workgroup. */
    uint32_t max_threads_per_wg;
 
+   /* Granularity of number of active threads. */
+   uint32_t num_threads_active_granularity;
+
    /* Number of registers per core. Can be used to determine the maximum
     * number of threads that can be allocated for a specific shader based on
     * the number of registers assigned to this shader.

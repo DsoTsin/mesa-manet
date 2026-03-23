@@ -76,8 +76,20 @@ pan_compute_max_usable_threads(const struct pan_kmod_dev_props *props,
       aligned_reg_count = work_reg_count <= 32 ? 32 : 64;
    }
 
-   return MIN3(props->max_threads_per_wg, props->max_threads_per_core,
-               props->num_registers_per_core / aligned_reg_count);
+   unsigned max_threads_per_wg;
+   if (pan_arch(props->gpu_id) >= 15) {
+      assert(props->num_threads_active_granularity);
+      max_threads_per_wg =
+         ROUND_DOWN_TO(props->num_registers_per_core / aligned_reg_count,
+                       props->num_threads_active_granularity);
+   } else {
+      assert(props->max_threads_per_wg);
+      max_threads_per_wg =
+         MIN2(props->max_threads_per_wg,
+              props->num_registers_per_core / aligned_reg_count);
+   }
+
+   return MIN2(max_threads_per_wg, props->max_threads_per_core);
 }
 
 uint32_t

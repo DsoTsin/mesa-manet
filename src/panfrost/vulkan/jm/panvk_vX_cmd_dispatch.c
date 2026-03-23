@@ -51,8 +51,9 @@ panvk_per_arch(cmd_dispatch_prepare_tls)(
       unsigned core_id_range =
          pan_query_core_id_range(&phys_dev->kmod.dev->props);
 
-      batch->tlsinfo.wls.instances = pan_calc_wls_instances(
-         &cs->cs.local_size, &phys_dev->kmod.dev->props, indirect ? NULL : dim);
+      batch->tlsinfo.wls.instances =
+         pan_calc_wls_instances(&cs->cs.local_size, &phys_dev->kmod.dev->props,
+                                indirect ? NULL : dim, cs->info.work_reg_count);
       batch->wls_total_size = pan_calc_total_wls_size(
          batch->tlsinfo.wls.size, batch->tlsinfo.wls.instances, core_id_range);
    }

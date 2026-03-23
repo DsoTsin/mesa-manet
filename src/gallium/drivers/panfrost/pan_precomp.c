@@ -197,8 +197,9 @@ emit_tls(struct panfrost_batch *batch,
    struct pan_tls_info info = {
       .tls.size = shader->info.tls_size,
       .wls.size = shader->info.wls_size,
-      .wls.instances = pan_calc_wls_instances(&shader->local_size,
-                                              &dev->kmod.dev->props, dim),
+      .wls.instances =
+         pan_calc_wls_instances(&shader->local_size, &dev->kmod.dev->props, dim,
+                                shader->info.work_reg_count),
    };
 
    if (info.tls.size) {
