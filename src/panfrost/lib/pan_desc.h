@@ -276,18 +276,22 @@ pan_wls_adjust_size(unsigned wls_size)
 
 static inline unsigned
 pan_calc_workgroups_per_task(const struct pan_compute_dim *shader_local_size,
-                             const struct pan_kmod_dev_props *props)
+                             const struct pan_kmod_dev_props *props,
+                             unsigned work_reg_count)
 {
    /* Each shader core can run N tasks and a total of M threads at any single
     * time, thus each task should ideally have no more than M/N threads. */
    unsigned max_threads_per_task =
       props->max_threads_per_core / props->max_tasks_per_core;
 
+   ASSERTED unsigned max_threads_per_wg =
+      pan_compute_max_usable_threads(props, work_reg_count);
+
    /* To achieve the best utilization, we should aim for as many workgroups
     * per tasks as we can fit without exceeding the above thread limit */
    unsigned threads_per_wg =
       shader_local_size->x * shader_local_size->y * shader_local_size->z;
-   assert(threads_per_wg > 0 && threads_per_wg <= props->max_threads_per_wg);
+   assert(threads_per_wg > 0 && threads_per_wg <= max_threads_per_wg);
    unsigned wg_per_task = DIV_ROUND_UP(max_threads_per_task, threads_per_wg);
    assert(wg_per_task > 0 && wg_per_task <= max_threads_per_task);
 
@@ -297,14 +301,15 @@ pan_calc_workgroups_per_task(const struct pan_compute_dim *shader_local_size,
 static inline unsigned
 pan_calc_wls_instances(const struct pan_compute_dim *shader_local_size,
                        const struct pan_kmod_dev_props *props,
-                       const struct pan_compute_dim *dim)
+                       const struct pan_compute_dim *dim,
+                       unsigned work_reg_count)
 {
    /* NOTE: If the instance count is lower than the number of workgroups
     * being dispatched, the HW will hold back workgroups until instances
     * can be reused. */
    unsigned instances;
    unsigned wg_per_task =
-      pan_calc_workgroups_per_task(shader_local_size, props);
+      pan_calc_workgroups_per_task(shader_local_size, props, work_reg_count);
    unsigned max_instances_per_core =
       util_next_power_of_two(wg_per_task * props->max_tasks_per_core);
 

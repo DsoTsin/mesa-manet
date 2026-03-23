@@ -1670,7 +1670,8 @@ panfrost_emit_shared_memory(struct panfrost_batch *batch,
       .tls.size = ss->info.tls_size,
       .wls.size = ss->info.wls_size + grid->variable_shared_mem,
       .wls.instances = pan_calc_wls_instances(
-         &local_size, &dev->kmod.dev->props, grid->indirect ? NULL : &dim),
+         &local_size, &dev->kmod.dev->props, grid->indirect ? NULL : &dim,
+         ss->info.work_reg_count),
    };
 
    if (ss->info.tls_size) {

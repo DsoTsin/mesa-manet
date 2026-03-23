@@ -148,13 +148,17 @@ panthor_dev_query_thread_props(struct panthor_kmod_dev *panthor_dev)
    props->max_tasks_per_core = panthor_dev->props.gpu.thread_features >> 24;
    props->num_registers_per_core =
       panthor_dev->props.gpu.thread_features & 0x3fffff;
+   props->num_threads_active_granularity =
+      panthor_dev->props.gpu.thread_num_active_granularity;
 
    /* We assume that all thread properties are populated. If we ever have a GPU
     * that have one of the THREAD_xxx register that's zero, we can always add a
     * quirk here.
     */
-   assert(props->max_threads_per_wg && props->max_threads_per_core &&
-          props->max_tasks_per_core && props->num_registers_per_core);
+   assert(
+      (props->max_threads_per_wg || props->num_threads_active_granularity) &&
+      props->max_threads_per_core && props->max_tasks_per_core &&
+      props->num_registers_per_core);
 
    /* There is no THREAD_TLS_ALLOC register on v10+, and the maximum number
     * of TLS instance per core is assumed to be the maximum number of threads

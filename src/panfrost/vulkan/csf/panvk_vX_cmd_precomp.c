@@ -156,7 +156,8 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
        * increment/axis parameters requires knowledge of job dimensions, but
        * this is somewhat offset by run_compute being a native instruction. */
       task_increment = pan_calc_workgroups_per_task(
-         &shader->cs.local_size, &phys_dev->kmod.dev->props);
+         &shader->cs.local_size, &phys_dev->kmod.dev->props,
+         shader->info.work_reg_count);
    } else {
       panvk_per_arch(calculate_task_axis_and_increment)(
          shader, phys_dev, &dim, &task_axis, &task_increment);

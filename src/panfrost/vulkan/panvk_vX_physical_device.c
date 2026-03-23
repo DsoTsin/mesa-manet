@@ -831,8 +831,17 @@ panvk_per_arch(get_physical_device_properties)(
 
    const bool has_disk_cache = device->vk.disk_cache != NULL;
 
+   /* Calculate the value using register count on v15+.
+    * TODO: As this requires register allocation changes ensuring we don't
+    * violate the limits based on the workgroup size, clamp the value to half of
+    * the max threads value (always safe and matches previous GPUs) for now. */
+   unsigned max_threads_per_wg =
+      (PAN_ARCH >= 15)
+         ? MIN2(pan_compute_max_usable_threads(&device->kmod.dev->props, 32),
+                device->kmod.dev->props.max_threads_per_core / 2)
+         : device->kmod.dev->props.max_threads_per_wg;
    /* Ensure that the max threads count per workgroup is valid for Bifrost */
-   assert(PAN_ARCH > 8 || device->kmod.dev->props.max_threads_per_wg <= 1024);
+   assert(PAN_ARCH > 8 || max_threads_per_wg <= 1024);
 
    float pointSizeRangeMin;
    float pointSizeRangeMax;
@@ -961,11 +970,9 @@ panvk_per_arch(get_physical_device_properties)(
       /* We could also split into serveral jobs but this has many limitations.
        * As such we limit to the max threads per workgroup supported by the GPU.
        */
-      .maxComputeWorkGroupInvocations =
-         device->kmod.dev->props.max_threads_per_wg,
-      .maxComputeWorkGroupSize = {device->kmod.dev->props.max_threads_per_wg,
-                                  device->kmod.dev->props.max_threads_per_wg,
-                                  device->kmod.dev->props.max_threads_per_wg},
+      .maxComputeWorkGroupInvocations = max_threads_per_wg,
+      .maxComputeWorkGroupSize = {max_threads_per_wg, max_threads_per_wg,
+                                  max_threads_per_wg},
       /* 8-bit subpixel precision. */
       .subPixelPrecisionBits = 8,
       .subTexelPrecisionBits = 8,
@@ -1154,8 +1161,7 @@ panvk_per_arch(get_physical_device_properties)(
       .minSubgroupSize = pan_subgroup_size(PAN_ARCH),
       .maxSubgroupSize = pan_subgroup_size(PAN_ARCH),
       .maxComputeWorkgroupSubgroups =
-         device->kmod.dev->props.max_threads_per_wg /
-         pan_subgroup_size(PAN_ARCH),
+         max_threads_per_wg / pan_subgroup_size(PAN_ARCH),
       .requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT,
       .maxInlineUniformBlockSize = MAX_INLINE_UNIFORM_BLOCK_SIZE,
       .maxPerStageDescriptorInlineUniformBlocks =
