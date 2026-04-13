@@ -26,7 +26,9 @@ strip_discard(bi_context *ctx)
    do {                                                                        \
       void *mem_ctx = ralloc_context(NULL);                                    \
       bi_builder *A = bit_builder(mem_ctx);                                    \
+      A->shader->arch = 10;                                                    \
       bi_builder *B = bit_builder(mem_ctx);                                    \
+      B->shader->arch = 10;                                                    \
       {                                                                        \
          UNUSED bi_builder *b = A;                                             \
          test;                                                                 \

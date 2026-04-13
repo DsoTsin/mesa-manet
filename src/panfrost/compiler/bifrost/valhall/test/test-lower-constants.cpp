@@ -12,6 +12,7 @@
 static inline void
 add_imm(bi_context *ctx)
 {
+   ctx->arch = 10;
    struct hash_table_u64 *stats = _mesa_hash_table_u64_create(ctx);
    bi_foreach_instr_global(ctx, I) {
       va_lower_constants(ctx, I, stats, UINT32_MAX);
