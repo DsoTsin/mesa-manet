@@ -112,7 +112,7 @@ valhall_opcodes[BI_NUM_OPCODES] = {
     sr_control = 0
 
     if len(op.staging) > 0:
-        sr_control = op.staging[0].encoded_flags >> 6
+        sr_control = op.staging[0].encoded_flags
 %>
     [BI_OPCODE_${name.replace('.', '_').upper()}] = {
         .exact = ${hex(exact(op.opcode))}ULL,
@@ -169,7 +169,7 @@ valhall_v15_opcodes[BI_NUM_OPCODES] = {
     sr_control = 0
 
     if len(op.staging) > 0:
-        sr_control = op.staging[0].encoded_flags >> 6
+        sr_control = op.staging[0].encoded_flags
 %>
     [BI_OPCODE_${name.replace('.', '_').upper()}] = {
         .exact = ${hex(exact(op.opcode_v15))}ULL,
