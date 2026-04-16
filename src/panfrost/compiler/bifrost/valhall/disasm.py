@@ -28,6 +28,10 @@ template = """
 #define VA_SRC_UNIFORM_TYPE 0x2
 #define VA_SRC_IMM_TYPE     0x3
 
+#define VA_SRC_V15_MODE1 BIT(8)
+#define VA_SRC_V15_MODE2 BIT(7)
+#define VA_SRC_V15_MODE4 BIT(5)
+
 % for name, en in ENUMS.items():
 UNUSED static const char *valhall_${name}[] = {
 % for v in en.values:
@@ -92,21 +96,83 @@ va_print_float_src(FILE *fp, unsigned type, unsigned value, unsigned size, unsig
 }
 
 static inline void
+va_print_src_v15(FILE *fp, unsigned high1, unsigned low8, unsigned size, unsigned fau_page)
+{
+   unsigned src = (high1 << 8) | low8;
+
+   /* Not reg */
+   if (src & VA_SRC_V15_MODE1) {
+      /* Not uniform */
+      if (src & VA_SRC_V15_MODE2) {
+         /* FAU special */
+         if (src & VA_SRC_V15_MODE4) {
+            unsigned value = src & MASK(5);
+            if (fau_page == 0)
+               fputs(valhall_fau_special_page_0[value >> 1] + 1, fp);
+            else if (fau_page == 1)
+               fputs(valhall_fau_special_page_1[value >> 1] + 1, fp);
+            else if (fau_page == 3)
+               fputs(valhall_fau_special_page_3[value >> 1] + 1, fp);
+            else
+               fprintf(fp, "reserved_page2");
+
+            fprintf(fp, ".w%u", value & 1);
+         }
+         /* Imm */
+         else {
+            unsigned value = src & MASK(5);
+            assert(value < 32 && "overflow in LUT");
+            fprintf(fp, "0x%X", va_immediates[value]);
+         }
+      }
+      /* Uniform */
+      else {
+         unsigned value = src & MASK(7);
+         fprintf(fp, "u%u", value >> 1 | (fau_page << 6));
+         if (size <= 32)
+            fprintf(fp, ".w%u", value & 1);
+      }
+   }
+   /* Reg */
+   else {
+      unsigned value = src & MASK(7);
+      bool discard = (src & BIT(7));
+      char *dmark = discard ? "^" : "";
+      if (size > 32)
+         fprintf(fp, "[r%u%s:r%u%s]", value, dmark, value + 1, dmark);
+      else
+         fprintf(fp, "r%u%s", value, dmark);
+   }
+}
+
+static inline void
+va_print_float_src_v15(FILE *fp, unsigned high1, unsigned low8, unsigned size, unsigned fau_page, bool neg, bool abs)
+{
+   va_print_src_v15(fp, high1, low8, size, fau_page);
+
+   if (neg)
+      fprintf(fp, ".neg");
+
+   if (abs)
+      fprintf(fp, ".abs");
+}
+
+static inline void
 va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
 {
    if (size > 32)
       fprintf(fp, "[r%u:r%u]", value, value + 1);
-   else
+   else {
       fprintf(fp, "r%u", value);
-
-   if (mask != 0x3)
-      fprintf(fp, ".h%u", (mask == 1) ? 0 : 1);
+      if (mask != 0x3)
+         fprintf(fp, ".h%u", (mask == 1) ? 0 : 1);
+    }
 }
 
-<%def name="print_instr(op)">
+<%def name="print_instr(op, v15)">
 <% no_comma = True %>
       fputs("${op.name}", fp);
-% for mod in op.modifiers:
+% for mod in (op.modifiers_v15 if v15 else op.modifiers):
 % if mod.name not in ["staging_register_count", "staging_register_write_count"] and not (op.name.startswith("ARSHIFT_") and mod.name == "signed"):
 % if mod.is_enum:
       fputs(valhall_${safe_name(mod.enum)}[(instr >> ${mod.start}) & ${hex((1 << mod.size) - 1)}], fp);
@@ -115,10 +181,18 @@ va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
 % endif
 % endif
 % endfor
+% if v15:
+      fprintf(fp, "%s ", valhall_flow[(instr >> ${op.offset['flow_v15']}) & ${hex(op.mask['flow_v15'])}]);
+% else:
       fprintf(fp, "%s ", valhall_flow[(instr >> ${op.offset['flow']}) & ${hex(op.mask['flow'])}]);
+% endif
 % for i, dest in enumerate(op.dests):
 <% no_comma = False %>
+% if v15:
+      va_print_dest(fp, (instr >> ${dest.offset['mode_v15']}) & ${hex(dest.mask['mode_v15'])}, (instr >> ${dest.offset['value_v15']}) & ${hex(dest.mask['value_v15'])}, ${dest.size});
+% else:
       va_print_dest(fp, (instr >> ${dest.offset['mode']}) & ${hex(dest.mask['mode'])}, (instr >> ${dest.offset['value']}) & ${hex(dest.mask['value'])}, ${dest.size});
+% endif
 % endfor
 % for index, sr in enumerate(op.staging):
 % if not no_comma:
@@ -130,13 +204,12 @@ va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
    if sr.count != 0:
       sr_count = sr.count;
    else:
-      for mod in op.modifiers:
+      for mod in (op.modifiers_v15 if v15 else op.modifiers):
          if mod.name == "staging_register_write_count" and sr.write:
             sr_count = f"(((instr >> {mod.start}) & {hex((1 << mod.size) - 1)}) + 1)";
          elif mod.name == "staging_register_count":
             sr_count = f"((instr >> {mod.start}) & {hex((1 << mod.size) - 1)})";
 %>
-//    assert(((instr >> ${sr.start}) & 0xC0) == ${sr.encoded_flags});
       fprintf(fp, "@");
       for (unsigned i = 0; i < ${sr_count}; ++i) {
          fprintf(fp, "%sr%u", (i == 0) ? "" : ":",
@@ -148,6 +221,28 @@ va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
       fputs(", ", fp);
 % endif
 <% no_comma = False %>
+% if v15:
+% if src.absneg:
+      va_print_float_src_v15(fp, (instr >> ${src.offset['high1_v15']}) & ${hex(src.mask['high1_v15'])}, (instr >> ${src.offset['low8_v15']}) & ${hex(src.mask['low8_v15'])},
+                             ${src.size}, (instr >> ${op.offset['fau_page_v15']}) & ${hex(op.mask['fau_page_v15'])},
+% if op.name[:4] == "FMA." and i == 0:
+                             false,
+                             instr & BIT(${src.offset['abs']}));
+% elif op.name[:10] == "FMA_RSCALE" and i == 2:
+                             instr & BIT(${src.offset['neg'] + 1}),
+                             false);
+% else:
+                             instr & BIT(${src.offset['neg']}),
+                             instr & BIT(${src.offset['abs']}));
+% endif
+% elif src.is_float:
+      va_print_float_src_v15(fp, (instr >> ${src.offset['high1_v15']}) & ${src.mask['high1_v15']}, (instr >> ${src.offset['low8_v15']}) & ${hex(src.mask['low8_v15'])},
+                             ${src.size}, (instr >> ${op.offset['fau_page_v15']}) & ${hex(op.mask['fau_page_v15'])}, false, false);
+% else:
+      va_print_src_v15(fp, (instr >> ${src.offset['high1_v15']}) & ${src.mask['high1_v15']}, (instr >> ${src.offset['low8_v15']}) & ${hex(src.mask['low8_v15'])},
+                       ${src.size}, (instr >> ${op.offset['fau_page_v15']}) & ${hex(op.mask['fau_page_v15'])});
+% endif
+% else:
 % if src.absneg:
       va_print_float_src(fp, (instr >> ${src.offset['mode']}) & ${hex(src.mask['mode'])}, (instr >> ${src.offset['value']}) & ${hex(src.mask['value'])},
                          ${src.size}, (instr >> ${op.offset['fau_page']}) & ${hex(op.mask['fau_page'])},
@@ -159,6 +254,7 @@ va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
 % else:
       va_print_src(fp, (instr >> ${src.offset['mode']}) & ${src.mask['mode']}, (instr >> ${src.offset['value']}) & ${hex(src.mask['value'])},
                    ${src.size}, (instr >> ${op.offset['fau_page']}) & ${hex(op.mask['fau_page'])});
+% endif
 % endif
 % if src.swizzle:
 % if src.size == 32:
@@ -183,7 +279,7 @@ va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
       if (instr & BIT(${src.offset['not']})) fputs(".not", fp);
 % endif
 % endfor
-% for imm in op.immediates:
+% for imm in (op.immediates_v15 if v15 else op.immediates):
 <%
    prefix = "#" if imm.name == "constant" else imm.name + ":"
    fmt = "%d" if imm.signed else "0x%X"
@@ -192,16 +288,16 @@ va_print_dest(FILE *fp, unsigned mask, unsigned value, unsigned size)
 % endfor
 </%def>
 
-<%def name="recurse_subcodes(op_bucket)">
+<%def name="recurse_subcodes(op_bucket, v15)">
 %if op_bucket.instr:
-${print_instr(op_bucket.instr)}
+${print_instr(op_bucket.instr, v15)}
 %else:
    opcode = (instr >> ${op_bucket.start}) & ${hex(op_bucket.mask)};
    switch (opcode) {
 %for op in op_bucket.children:
    case ${hex(op)}:
    {
-${recurse_subcodes(op_bucket.children[op])}
+${recurse_subcodes(op_bucket.children[op], v15)}
       break;
    }
 %endfor
@@ -215,7 +311,7 @@ va_disasm_instr(FILE *fp, uint64_t instr)
 {
    unsigned opcode;
 
-${recurse_subcodes(OPCODES)}
+${recurse_subcodes(OPCODES, False)}
 }
 
 void
@@ -223,7 +319,7 @@ va_disasm_instr_v15(FILE *fp, uint64_t instr)
 {
    unsigned opcode;
 
-${recurse_subcodes(OPCODES_V15)}
+${recurse_subcodes(OPCODES_V15, True)}
 }
 
 static bool is_branch(uint64_t instr)

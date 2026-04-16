@@ -14,6 +14,7 @@ import sys
 instructions = []
 
 MODIFIERS = {}
+MODIFIERS_V15 = {}
 enums = {}
 immediates = []
 
@@ -102,6 +103,11 @@ class Source:
         self.offset['value'] = self.start
         self.mask['value'] = bitmask(6)
 
+        self.offset['high1_v15'] = (index + 48)
+        self.mask['high1_v15'] = bitmask(1)
+        self.offset['low8_v15'] = self.start
+        self.mask['low8_v15'] = bitmask(8)
+
         if absneg:
             self.offset['neg'] = 32 + 2 + ((2 - index) * 2)
             self.offset['abs'] = 33 + 2 + ((2 - index) * 2)
@@ -137,6 +143,11 @@ class Dest:
         self.offset['value'] = self.start
         self.mask['value'] = bitmask(6)
 
+        self.offset['mode_v15'] = self.start + 13
+        self.mask['mode_v15'] = bitmask(2)
+        self.offset['value_v15'] = self.start
+        self.mask['value_v15'] = bitmask(8)
+
 class Staging:
     def __init__(self, read = False, write = False, count = 0, flags = 'true', name = ""):
         self.name = name
@@ -152,6 +163,14 @@ class Staging:
 
         self.offset['value'] = self.start
         self.mask['value'] = bitmask(6)
+        self.offset['flags'] = self.start + 6
+        self.mask['flags'] = bitmask(2)
+
+        self.offset['value_v15'] = self.start
+        self.mask['value_v15'] = bitmask(8)
+        self.offset['flags_v15'] = 38
+        self.mask['flags_v15'] = bitmask(2)
+
 
         # For compatibility
         self.absneg = False
@@ -166,11 +185,14 @@ class Staging:
 
         if not self.flags:
             self.encoded_flags = 0
+            self.encoded_flags_v15 = 0
         elif flags == 'rw':
-            self.encoded_flags = 0xc0
+            self.encoded_flags = 0b11
+            self.encoded_flags_v15 = 0b11
         else:
             assert(flags == 'true')
-            self.encoded_flags = (0x80 if write else 0) | (0x40 if read else 0)
+            self.encoded_flags = (0b10 if write else 0) | (0b01 if read else 0)
+            self.encoded_flags_v15 = (0b10 if read else 0) | (0b01 if read and write else 0)
 
 class Immediate:
     def __init__(self, name, start, size, signed):
@@ -186,14 +208,16 @@ class Opcode:
         self.mask = mask
 
 class Instruction:
-    def __init__(self, name, opcode, opcode_v15, srcs = [], dests = [], immediates = [], modifiers = [], staging = None, unit = None):
+    def __init__(self, name, opcode, opcode_v15, srcs = [], dests = [], immediates = [], immediates_v15 = [], modifiers = [], modifiers_v15 = [], staging = None, unit = None):
         self.name = name
         self.srcs = srcs
         self.dests = dests
         self.opcode = opcode
         self.opcode_v15 = opcode_v15
         self.immediates = immediates
+        self.immediates_v15 = immediates_v15
         self.modifiers = modifiers
+        self.modifiers_v15 = modifiers_v15
         self.staging = staging
         self.unit = unit
         self.is_signed = len(name.split(".")) > 1 and ('s' in name.split(".")[1])
@@ -205,6 +229,11 @@ class Instruction:
         self.mask['flow'] = bitmask(4)
         self.offset['fau_page'] = 57
         self.mask['fau_page'] = bitmask(2)
+
+        self.offset['flow_v15'] = 58
+        self.mask['flow_v15'] = bitmask(4)
+        self.offset['fau_page_v15'] = 62
+        self.mask['fau_page_v15'] = bitmask(2)
 
         # Message-passing instruction <===> not ALU instruction
         self.message = unit not in ["FMA", "CVT", "SFU"]
@@ -306,15 +335,25 @@ def build_instr(el, overrides = {}):
 
     # Get immediates
     imms = [build_imm(imm) for imm in el.findall('imm')]
+    imms_v15 = [build_imm(imm) for imm in el.findall('imm_v15_override')]
+    for imm in imms:
+        if imm.name not in {imm.name for imm in imms_v15}:
+            imms_v15.append(imm)
 
     modifiers = []
+    modifiers_v15 = []
     for mod in el:
         if (mod.tag in MODIFIERS) and not (mod.attrib.get('pseudo', False)):
             modifiers.append(MODIFIERS[mod.tag])
+            modifiers_v15.append(MODIFIERS_V15[mod.tag])
         elif mod.tag =='va_mod':
             modifiers.append(build_modifier(mod))
+        elif mod.tag =='va_mod_v15':
+            modifiers_v15.append(build_modifier(mod))
 
-    instr = Instruction(name, opcode, opcode_v15, srcs = sources, dests = dests, immediates = imms, modifiers = modifiers, staging = staging, unit = unit)
+
+    instr = Instruction(name, opcode, opcode_v15, srcs = sources, dests = dests, immediates = imms, immediates_v15 = imms_v15,
+                        modifiers = modifiers, modifiers_v15 = modifiers_v15, staging = staging, unit = unit)
 
     instructions.append(instr)
 
@@ -380,6 +419,7 @@ def typesize(name):
 # Parse the ISA
 def valhall_parse_isa(xmlfile):
     global MODIFIERS
+    global MODIFIERS_V15
     global enums
     global immediates
     global root
@@ -439,6 +479,52 @@ def valhall_parse_isa(xmlfile):
         "update": Modifier("update_mode", 36, 2),
         "sample": Modifier("sample_mode", 38, 2),
     }
+
+    MODIFIERS_V15 = {
+        # Texture instructions share a common encoding
+        "wide_indices": Flag("wide_indices", 8),
+        "array_enable": Flag("array_enable", 10),
+        "texel_offset": Flag("texel_offset", 11),
+        "shadow": Flag("shadow", 12),
+        "integer_coordinates": Flag("integer_coordinates", 13),
+        "fetch_component": Modifier("fetch_component", 14, 2),
+        "lod_mode": Modifier("lod_mode", 13, 3),
+        "lod_bias_disable": Modifier("lod_mode", 13, 1),
+        "lod_clamp_disable": Modifier("lod_mode", 14, 1),
+        "write_mask": Modifier("write_mask", 24, 4),
+        "dimension": Modifier("dimension", 28, 2),
+        "skip": Flag("skip", 39),
+        "register_width": Modifier("register_width", 38, 1, force_enum = "register_width"),
+        "secondary_register_width": Modifier("secondary_register_width", 54, 1, force_enum = "register_width"),
+        "vartex_register_width": Modifier("varying_texture_register_width", 24, 2),
+
+        "atom_opc": Modifier("atomic_operation", 24, 4),
+        "atom_opc_1": Modifier("atomic_operation_with_1", 24, 3),
+        "inactive_result": Modifier("inactive_result", 22, 4),
+        "memory_access": Modifier("memory_access", 24, 2),
+        "regfmt": Modifier("register_format", 24, 3),
+        "source_format": Modifier("source_format", 24, 2),
+        "vecsize": Modifier("vector_size", 28, 2),
+
+        "slot": Modifier("slot_v15", 30, 2),
+        "roundmode": Modifier("round_mode", 32, 2),
+        "result_type": Modifier("result_type", 24, 2),
+        "saturate": Flag("saturate", 25),
+        "not_result": Flag("not_result", 34),
+
+        "lane_op": Modifier("lane_operation", 32, 4),
+        "cmp": Modifier("condition", 33, 3),
+        "clamp": Modifier("clamp", 30, 2),
+        "sr_count": Modifier("staging_register_count", 32, 3, implied = True),
+        "sample_and_update": Modifier("sample_and_update_mode", 32, 3),
+        "sr_write_count": Modifier("staging_register_write_count", 35, 3, implied = True),
+
+        "conservative": Flag("conservative", 35),
+        "subgroup": Modifier("subgroup_size", 36, 4),
+        "update": Modifier("update_mode", 35, 2),
+        "sample": Modifier("sample_mode", 37, 2),
+    }
+
 
     for child in root:
         if child.tag == 'group':
