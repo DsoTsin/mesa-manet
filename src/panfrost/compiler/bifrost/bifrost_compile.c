@@ -4575,7 +4575,7 @@ bi_compile_variant(nir_shader *nir,
    uint64_t preload = first_block->reg_live_in;
 
    /* If multisampling is used with a blend shader, the blend shader needs
-    * to access the sample coverage mask in r60 and the sample ID in r61.
+    * to access the sample coverage mask and the sample ID.
     * Blend shaders run in the same context as fragment shaders, so if a
     * blend shader could run, we need to preload these registers
     * conservatively. There is believed to be little cost to doing so, so
@@ -4586,7 +4586,10 @@ bi_compile_variant(nir_shader *nir,
     * driver. We could unify the paths if the cost is acceptable.
     */
    if (nir->info.stage == MESA_SHADER_FRAGMENT && ctx->arch >= 9)
-      preload |= BITFIELD64_BIT(60) | BITFIELD64_BIT(61);
+      preload |=
+         BITFIELD64_BIT(
+            bi_preload_reg(BI_PRELOAD_CUMULATIVE_COVERAGE, ctx->arch)) |
+         BITFIELD64_BIT(bi_preload_reg(BI_PRELOAD_SAMPLE_ID, ctx->arch));
 
    info->ubo_mask |= ctx->ubo_mask;
    info->tls_size = MAX2(info->tls_size, ctx->info.tls_size);
