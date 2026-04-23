@@ -33,8 +33,18 @@ parse_hex(const char *in)
 int
 main(int argc, const char **argv)
 {
-   if (argc < 2) {
-      fprintf(stderr, "Expected case list\n");
+   if (argc < 3) {
+      fprintf(stderr, "Expected case list and arch version\n");
+      return 1;
+   }
+
+   if (argv[2][0] != 'v') {
+      fprintf(stderr, "Invalid arch version: %s\n", argv[2]);
+      return 1;
+   }
+   unsigned arch = atoi(&argv[2][1]);
+   if (arch < 9 || arch > 15) {
+      fprintf(stderr, "Non-supported arch version: %d\n", arch);
       return 1;
    }
 
@@ -65,7 +75,10 @@ main(int argc, const char **argv)
 
       uint64_t bin = parse_hex(line);
       FILE *outputp = open_memstream(&output, &sz);
-      va_disasm_instr(outputp, bin);
+      if (arch < 15)
+         va_disasm_instr(outputp, bin);
+      else
+         va_disasm_instr_v15(outputp, bin);
       fprintf(outputp, "\n");
       fclose(outputp);
 
