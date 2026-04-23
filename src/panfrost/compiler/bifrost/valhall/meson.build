@@ -44,9 +44,7 @@ libpanfrost_valhall_disasm = static_library(
 )
 
 if with_tests
-  test(
-    'valhall_disasm',
-    executable(
+  valhall_disasm_test_e = executable(
       'valhall_disasm_test',
       files('test/test-disassembler.c'),
       c_args : [c_msvc_compat_args, no_override_init_args, soong_compat_c_args],
@@ -54,15 +52,33 @@ if with_tests
       include_directories : [inc_include, inc_src],
       dependencies: [idep_valhall_enums_h],
       link_with : [libpanfrost_valhall_disasm],
-    ),
+  )
+
+  test(
+    'valhall_disasm',
+    valhall_disasm_test_e,
     suite : ['panfrost'],
-    args : files('test/assembler-cases.txt'),
+    args : [files('test/assembler-cases.txt'), 'v10'],
+  )
+
+  test(
+    'valhall_disasm',
+    valhall_disasm_test_e,
+    suite : ['panfrost'],
+    args : [files('test/assembler-cases-v15.txt'), 'v15'],
   )
 
   test(
     'valhall_asm',
     prog_python,
-    args : files('test-assembly.py', 'test/assembler-cases.txt', 'test/negative-cases.txt'),
+    args : [files('test-assembly.py', 'test/assembler-cases.txt', 'test/negative-cases.txt'), 'v10'],
+    suite : ['panfrost'],
+  )
+
+  test(
+    'valhall_asm',
+    prog_python,
+    args : [files('test-assembly.py', 'test/assembler-cases-v15.txt', 'test/negative-cases.txt'), 'v15'],
     suite : ['panfrost'],
   )
 endif

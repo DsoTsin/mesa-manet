@@ -29,16 +29,20 @@ class FAUState:
         die_if(self.page is not None and self.page != page, 'Mismatched pages')
         self.page = page
 
-    def push(self, source):
-        if not (source & (1 << 7)):
-            # Skip registers
+    def push(self, source, arch):
+        # Skip registers
+        if arch >= 15 and not (source & (1 << 8)):
+            return
+        elif arch < 15 and not (source & (1 << 7)):
             return
 
         self.buffer.add(source)
         die_if(len(self.buffer) > 2, "Overflowed FAU buffer")
 
-        if (source >> 5) == 0b110:
-            # Small constants need to check if the buffer overflows but no else
+        # Small constants need to check if the buffer overflows but no else
+        if arch >= 15 and (source >> 5) == 0b1110:
+            return
+        elif arch < 15 and (source >> 5) == 0b110:
             return
 
         slot = (source >> 1)
@@ -120,6 +124,50 @@ def encode_source(op, fau):
 
         die('Invalid operand')
 
+def encode_source_v15(op, fau):
+    # Reg tuple
+    if op[0] == '[' and op[-1:] == ']':
+        # Remove brackets and split on ":"
+        unpacked = op[1:-1].split(":")
+        die_if(len(unpacked) != 2, 'Invalid tuple')
+        die_if(unpacked[0][0] != 'r', 'Invalid tuple')
+        die_if(unpacked[1][0] != 'r', 'Invalid tuple')
+        if (unpacked[0][-1:] == '^'):
+            val0 = parse_int(unpacked[0][1:-1], 0, 127)
+            val1 = parse_int(unpacked[1][1:-1], 0, 127)
+            die_if(val1 != val0 + 1, 'Invalid tuple value')
+            return val0 | 0x80
+        else:
+            val0 = parse_int(unpacked[0][1:], 0, 127)
+            val1 = parse_int(unpacked[1][1:], 0, 127)
+            die_if(val1 != val0 + 1, 'Invalid tuple value')
+            return val0
+    elif op[0] == 'r':
+        if (op[-1:] == '^'):
+            return parse_int(op[1:-1], 0, 127) | 0x80
+        return parse_int(op[1:], 0, 127)
+    elif op[0] == 'u':
+        val = parse_int(op[1:], 0, 254)
+        fau.set_page(val >> 6)
+        return ((val & 0x3F) << 1) | 0x100
+    elif op[0] == 'i':
+        return int(op[3:]) | 0x1C0
+    elif op.startswith('0x'):
+        try:
+            val = int(op, base=0)
+        except ValueError:
+            die('Expected value')
+
+        die_if(val not in immediates, 'Unexpected immediate value')
+        return immediates.index(val) | 0x1C0
+    else:
+        for i in [0, 1, 3]:
+            if op in enums[f'fau_special_page_{i}'].bare_values:
+                idx = 32 + (enums[f'fau_special_page_{i}'].bare_values.index(op) << 1)
+                fau.set_page(i)
+                return idx | 0x1E0
+
+        die('Invalid operand')
 
 def encode_dest(op):
     # Reg tuple
@@ -156,7 +204,47 @@ def encode_dest(op):
 
     return value | (wrmask << 6)
 
-def parse_asm(line):
+def encode_dest_v15(op, dst64):
+    # Reg tuple
+    if op[0] == '[' and op[-1:] == ']':
+        # Remove brackets and split on ":"
+        unpacked = op[1:-1].split(":")
+        die_if(len(unpacked) != 2, 'Invalid tuple')
+        die_if(unpacked[0][0] != 'r', 'Invalid tuple')
+        die_if(unpacked[1][0] != 'r', 'Invalid tuple')
+
+        parts = unpacked[0].split(".")
+        reg = parts[0]
+        value = parse_int(reg[1:], 0, 127)
+
+        parts1 = unpacked[1].split(".")
+        reg1 = parts1[0]
+        val1 = parse_int(reg1[1:], 0, 127)
+        die_if(val1 != value + 1, 'Invalid tuple value')
+    else:
+        die_if(op[0] != 'r', f"Expected register destination {op}")
+        parts = op.split(".")
+        reg = parts[0]
+        value = parse_int(reg[1:], 0, 127)
+
+    # Default to writing in full
+    if (dst64):
+        wrmask = 0x0
+        die_if(len(parts) > 1, "Must write full")
+    else:
+        wrmask = 0x3
+
+    if len(parts) > 1:
+        WMASKS = ["h0", "h1"]
+        die_if(len(parts) > 2, "Too many modifiers")
+        mask = parts[1];
+        die_if(mask not in WMASKS, "Expected a write mask")
+        wrmask = 1 << WMASKS.index(mask)
+
+    return value | (wrmask << 13)
+
+
+def parse_asm(line, arch):
     global LINE
     LINE = line # For better errors
     encoded = 0
@@ -187,7 +275,7 @@ def parse_asm(line):
 
     tail = line[(len(head) + 1):]
     operands = [x.strip() for x in tail.split(",") if len(x.strip()) > 0]
-    expected_op_count = len(ins.srcs) + len(ins.dests) + len(ins.immediates) + len(ins.staging)
+    expected_op_count = len(ins.srcs) + len(ins.dests) + len((ins.immediates_v15 if arch >= 15 else ins.immediates)) + len(ins.staging)
     if len(operands) != expected_op_count:
         die(f"Wrong number of operands in {line}, expected {expected_op_count}, got {len(operands)} {operands}")
 
@@ -200,9 +288,9 @@ def parse_asm(line):
             parts = []
 
         die_if(any([x[0] != 'r' for x in parts]), f'Expected registers, got {op}')
-        regs = [parse_int(x[1:], 0, 63) for x in parts]
+        regs = [parse_int(x[1:], 0, (127 if arch >= 15 else 63)) for x in parts]
 
-        extended_write = "staging_register_write_count" in [x.name for x in ins.modifiers] and sr.write
+        extended_write = "staging_register_write_count" in [x.name for x in (ins.modifiers_v15 if arch >= 15 else ins.modifiers)] and sr.write
         max_sr_count = 8 if extended_write else 7
 
         sr_count = len(regs)
@@ -215,22 +303,31 @@ def parse_asm(line):
                 'Consecutive staging registers must be aligned to a register pair')
 
         if sr.count == 0:
-            if "staging_register_write_count" in [x.name for x in ins.modifiers] and sr.write:
+            if "staging_register_write_count" in [x.name for x in (ins.modifiers_v15 if arch >= 15 else ins.modifiers)] and sr.write:
                 modifier_map["staging_register_write_count"] = sr_count - 1
             else:
-                assert "staging_register_count" in [x.name for x in ins.modifiers]
+                assert "staging_register_count" in [x.name for x in (ins.modifiers_v15 if arch >= 15 else ins.modifiers)]
                 modifier_map["staging_register_count"] = sr_count
         else:
             die_if(sr_count != sr.count, f"Expected {sr.count} staging registers, got {sr_count}")
 
-        encoded |= ((sr.encoded_flags | base) << sr.start)
+        encoded |= base << sr.start
+        if arch >= 15:
+            encoded |= sr.encoded_flags_v15 << sr.offset['flags_v15']
+        else:
+            encoded |= sr.encoded_flags << sr.offset['flags']
+
+    # On v15, some instructions require special sr_control values
+    if arch >= 15 and ins.name == "BARRIER":
+        encoded |= 0b10 << 38
+
     operands = operands[len(ins.staging):]
 
     for op, dest in zip(operands, ins.dests):
-        encoded |= encode_dest(op) << 40
+        encoded |= (encode_dest_v15(op, dest.size >= 64) if arch >= 15 else encode_dest(op)) << 40
     operands = operands[len(ins.dests):]
 
-    if len(ins.dests) == 0 and len(ins.staging) == 0:
+    if arch < 15 and len(ins.dests) == 0 and len(ins.staging) == 0:
         # Set a placeholder writemask to prevent encoding faults
         encoded |= (0xC0 << 40)
 
@@ -238,12 +335,18 @@ def parse_asm(line):
 
     for i, (op, src) in enumerate(zip(operands, ins.srcs)):
         parts = op.split('.')
-        encoded_src = encode_source(parts[0], fau)
-
-        # Require a word selection for special FAU values
-        may_have_word_select = ((encoded_src >> 5) == 0b111)
-        # or for regular FAU values
-        may_have_word_select |= ((encoded_src >> 6) == 0b10)
+        if (arch >= 15):
+            encoded_src = encode_source_v15(parts[0], fau)
+            # Require a word selection for special FAU values
+            may_have_word_select = ((encoded_src >> 5) == 0b1111)
+            # or for regular FAU values
+            may_have_word_select |= ((encoded_src >> 7) == 0b10)
+        else:
+            encoded_src = encode_source(parts[0], fau)
+            # Require a word selection for special FAU values
+            may_have_word_select = ((encoded_src >> 5) == 0b111)
+            # or for regular FAU values
+            may_have_word_select |= ((encoded_src >> 6) == 0b10)
 
         # Has a swizzle been applied yet?
         swizzled = False
@@ -251,7 +354,11 @@ def parse_asm(line):
         for mod in parts[1:]:
             # Encode the modifier
             if mod in src.offset and src.mask[mod] == 0x1:
-                encoded |= (1 << src.offset[mod])
+                # On v15, FMA_RSCALE has a different offset src2.neg
+                if arch >= 15 and ins.name[:10] == "FMA_RSCALE" and mod == "neg" and  i == 2:
+                    encoded |= (1 << (src.offset[mod] + 1))
+                else:
+                    encoded |= (1 << src.offset[mod])
             elif src.halfswizzle and mod in enums[f'half_swizzles_{src.size}_bit'].bare_values:
                 die_if(swizzled, "Multiple swizzles specified")
                 swizzled = True
@@ -318,12 +425,15 @@ def parse_asm(line):
             val = enums['swizzles_16_bit'].bare_values.index(mod)
             encoded |= (val << src.offset['widen'])
 
-        encoded |= encoded_src << src.start
-        fau.push(encoded_src)
+        if arch >= 15:
+            encoded |= ((encoded_src & 0x100) << (src.offset['high1_v15'] - 8)) | ((encoded_src & 0xFF) << src.start)
+        else:
+            encoded |= encoded_src << src.start
+        fau.push(encoded_src, arch)
 
     operands = operands[len(ins.srcs):]
 
-    for i, (op, imm) in enumerate(zip(operands, ins.immediates)):
+    for i, (op, imm) in enumerate(zip(operands, (ins.immediates_v15 if arch >= 15 else ins.immediates))):
         if op[0] == '#':
             die_if(imm.name != 'constant', "Wrong syntax for immediate")
             parts = [imm.name, op[1:]]
@@ -347,15 +457,15 @@ def parse_asm(line):
 
         encoded |= (val << imm.start)
 
-    operands = operands[len(ins.immediates):]
+    operands = operands[len((ins.immediates_v15 if arch >= 15 else ins.immediates)):]
 
     # Encode the operation itself
-    for subcode in ins.opcode:
+    for subcode in (ins.opcode_v15 if arch >= 15 else ins.opcode):
         encoded |= (subcode.value << subcode.start)
 
     # Encode FAU page
     if fau.page:
-        encoded |= (fau.page << ins.offset['fau_page'])
+        encoded |= (fau.page << (ins.offset['fau_page_v15'] if arch >= 15 else ins.offset['fau_page']))
 
     # Encode modifiers
     has_flow = False
@@ -366,9 +476,10 @@ def parse_asm(line):
         if mod in enums['flow'].bare_values:
             die_if(has_flow, "Multiple flow control modifiers specified")
             has_flow = True
-            encoded |= (enums['flow'].bare_values.index(mod) << ins.offset['flow'])
+            encoded |= (enums['flow'].bare_values.index(mod) << (ins.offset['flow_v15'] if arch >= 15 else
+                                                                 ins.offset['flow']))
         else:
-            candidates = [c for c in ins.modifiers if mod in c.bare_values]
+            candidates = [c for c in (ins.modifiers_v15 if arch >= 15 else ins.modifiers) if mod in c.bare_values]
 
             die_if(len(candidates) == 0, f"Invalid modifier {mod} used")
             assert(len(candidates) == 1) # No ambiguous modifiers
@@ -380,12 +491,19 @@ def parse_asm(line):
             die_if(opts.name in modifier_map, f"{opts.name} specified twice")
             modifier_map[opts.name] = value
 
-    for mod in ins.modifiers:
+
+    for mod in (ins.modifiers_v15 if arch >= 15 else ins.modifiers):
         value = modifier_map.get(mod.name, mod.default)
         die_if(value is None, f"Missing required modifier {mod.name}")
 
         assert(value < (1 << mod.size))
         encoded |= (value << mod.start)
+
+   # On v15, some instrutions require an encoded null src.
+    requires_nullsrc = ['BARRIER', 'NOP', 'LD_GCLK_U64', 'LD_VAR_FLAT_IMM', 'LD_VAR_BUF_FLAT_IMM'];
+    if arch >= 15 and ins.name in requires_nullsrc:
+        enc_src = 0x1C0
+        encoded |= ((enc_src >> 8) & 0x1) << 48 | (enc_src & 0xFF)
 
     return encoded
 

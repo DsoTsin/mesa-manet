@@ -1,0 +1,196 @@
+02 00 20 00 00 01 60 00    MOV.i32 r1, r2
+0a 00 20 00 00 01 61 00    MOV.i32 r1, u5.w0
+e3 00 20 00 00 01 61 40    MOV.i32 r1, thread_local_pointer.w1
+e6 00 20 00 00 01 61 40    MOV.i32 r1, workgroup_local_pointer.w0
+e2 00 20 00 00 01 61 c0    MOV.i32 r1, lane_id.w0
+e6 00 20 00 00 01 61 c0    MOV.i32 r1, core_id.w0
+01 02 00 00 00 00 f0 00    FADD.f32 r0, r1, r2
+01 02 00 00 20 00 f0 00    FADD.f32 r0, r1, r2.abs
+01 02 00 00 10 00 f0 00    FADD.f32 r0, r1, r2.neg
+01 02 00 00 30 00 f0 00    FADD.f32 r0, r1, r2.neg.abs
+01 02 00 80 30 00 f0 00    FADD.f32.clamp_m1_1 r0, r1, r2.neg.abs
+81 03 00 00 00 00 b8 2a    BRANCHZ.reconverge r1^, offset:3
+01 d0 00 00 00 00 f2 00    FADD.f32 r0, r1, 0x3F800000
+01 d0 00 00 10 00 f2 00    FADD.f32 r0, r1, 0x3F800000.neg
+01 c0 00 00 00 00 f2 00    FADD.f32 r0, r1, 0x0
+01 c0 00 00 10 00 f2 00    FADD.f32 r0, r1, 0x0.neg
+01 c9 00 00 00 00 e2 00    IADD.u32 r0, r1, 0x7060504
+01 00 00 08 00 00 f0 00    FADD.f32 r0, r1, r0.h1
+01 00 00 04 00 00 f0 00    FADD.f32 r0, r1, r0.h0
+01 00 00 0c 00 00 f4 00    FADD.v2f16 r0, r1.h00, r0.h11
+01 00 00 28 00 00 f4 00    FADD.v2f16 r0, r1, r0
+01 00 00 24 00 00 f4 00    FADD.v2f16 r0, r1, r0.h10
+01 02 00 08 00 00 e0 00    IADD.u32 r0, r1, r2.h0
+01 02 00 0c 00 00 e0 00    IADD.u32 r0, r1, r2.h1
+01 02 00 0c 70 00 e0 00    IADD.u32 r0, r1.b3, r2.h1
+01 c9 00 18 00 00 e2 00    IADD.u32 r0, r1, 0x7060504.b2
+01 02 00 08 20 00 e4 00    IADD.v2u16 r0, r1, r2
+02 3c 47 20 00 00 91 02    SHADDX.u64 [r0:r1], u1, [r60:r61].w0, shift:0x2
+80 00 00 00 19 00 20 07    LOAD.i32.slot0.wait0 @r0, [r0^:r1^], offset:0
+00 bc 87 20 00 00 91 02    SHADDX.u64 [r0:r1], u0, [r60^:r61^].w0, shift:0x4
+80 00 00 00 9c 04 20 3f    STORE.i128.slot0.end @r4:r5:r6:r7, [r0^:r1^], offset:0
+c0 00 e0 01 00 00 a1 3e    NOP.end 
+80 c4 c0 1e 02 01 e6 01    ICMP_OR.u32.gt.m1 r1, r0^, 0x1000000.b3, 0x0
+82 00 00 00 99 00 20 2b    STORE.i32.slot0.reconverge @r0, [r2^:r3^], offset:0
+00 c9 8f 12 30 00 e2 00    CLPER.i32.f1 r0, r0, 0x7060504.b00
+00 00 4b 00 00 02 60 00    F16_TO_F32 r2, r0.h0
+80 00 4b 10 00 03 60 00    F16_TO_F32 r3, r0^.h1
+c0 00 e0 01 00 00 a1 22    NOP.wait0126 
+80 c0 00 28 90 00 f6 24    FADD.v2f16.wait r0, r0^.abs, 0x0.neg
+c0 00 00 00 00 36 6d 00    IADD_IMM.i32 r54, 0x0, #0x0
+3c d0 ea 00 01 3c d6 37    ATEST.discard @r60, r60, 0x3F800000, atest_datum.w0
+80 db 05 04 00 01 e6 00    MKVEC.v2i16 r1, r0^.h0, 0x3C000000.h1
+f0 00 3c 33 82 00 1b 3f    BLEND.slot0.v4.f16.end @r0:r1, blend_descriptor_0.w0, r60, target:0x0
+bb 0d 00 40 02 04 08 07    LEA_BUF_IMM.slot1.wait0 @r4:r5, r59^, table:0xD, index:0x0
+00 dd c0 08 14 02 66 01    FMA.f32 r2, r0, 0x44000000.neg.h1, 0x0.neg
+81 08 c0 00 04 01 66 01    FMA.f32 r1, r1^, u4.w0, 0x0.neg
+80 08 c0 00 04 00 66 09    FMA.f32.wait1 r0, r0^, u4.w0, 0x0.neg
+84 00 00 02 93 00 20 3f    STORE.i96.estream.slot0.end @r0:r1:r2, [r4^:r5^], offset:0
+84 00 00 01 9c 08 20 3f    STORE.i128.istream.slot0.end @r8:r9:r10:r11, [r4^:r5^], offset:0
+c0 00 00 c0 80 00 3d 27    BARRIER.slot7.wait 
+00 00 00 00 01 02 21 03    LOAD.i8.slot0 @r2, u0, offset:0
+00 00 00 00 09 02 21 03    LOAD.i16.slot0 @r2, u0, offset:0
+00 00 00 00 11 02 21 03    LOAD.i24.slot0 @r2, u0, offset:0
+00 00 00 00 19 02 21 03    LOAD.i32.slot0 @r2, u0, offset:0
+00 00 00 00 02 02 21 03    LOAD.i48.slot0 @r2:r3, u0, offset:0
+00 00 00 00 0a 02 21 03    LOAD.i64.slot0 @r2:r3, u0, offset:0
+00 00 00 00 13 02 21 03    LOAD.i96.slot0 @r2:r3:r4, u0, offset:0
+00 00 00 00 1c 04 21 03    LOAD.i128.slot0 @r4:r5:r6:r7, u0, offset:0
+00 00 00 08 01 02 21 03    LOAD.i8.b1.slot0 @r2, u0, offset:0
+00 00 00 10 01 02 21 03    LOAD.i8.b2.slot0 @r2, u0, offset:0
+00 00 00 18 01 02 21 03    LOAD.i8.b3.slot0 @r2, u0, offset:0
+00 00 00 00 09 02 21 03    LOAD.i16.slot0 @r2, u0, offset:0
+00 14 00 08 09 02 21 03    LOAD.i16.h1.slot0 @r2, u0, offset:20
+82 00 4d 00 42 02 60 00    FROUND.f32.rtn r2, r2^.neg
+82 00 4b 00 40 02 60 00    F16_TO_F32 r2, r2^.neg.h0
+82 00 4c 00 43 02 60 00    F32_TO_S32.rtz r2, r2^.neg
+82 c0 c6 47 48 02 64 00    FADD_IMM.f32 r2, r2^, #0x4847C6C0
+82 84 67 ac 70 02 62 00    FADD_IMM.v2f16 r2, r2^, #0x70AC6784
+82 14 00 13 00 02 6a 00    IADD_IMM.v2i16 r2, r2^, #0x130014
+82 ab 4b 00 00 02 6c 00    IADD_IMM.i32 r2, r2^, #0x4BAB
+83 82 c0 c6 12 02 e4 01    ICMP_OR.v2s16.gt.m1 r2, r3^.h10, r2^.h10, 0x0
+83 82 c0 52 03 02 e4 01    FCMP_OR.v2f16.gt.m1 r2, r3^.h10, r2^.h00, 0x0
+81 03 00 00 00 00 b8 2a    BRANCHZ.reconverge r1^, offset:3
+00 03 00 00 20 00 b8 2a    BRANCHZ.reconverge r0.h0, offset:3
+00 03 00 00 40 00 b8 2a    BRANCHZ.reconverge r0.h1, offset:3
+00 03 00 00 00 00 b8 2a    BRANCHZ.reconverge r0, offset:3
+c0 00 00 00 00 00 6d 00    IADD_IMM.i32 r0, 0x0, #0x0
+c0 01 00 00 00 04 6d 28    IADD_IMM.i32.reconverge r4, 0x0, #0x1
+00 00 47 20 00 02 91 02    SHADDX.u64 [r2:r3], u0, [r0:r1].w0, shift:0x2
+80 c9 00 10 00 00 e2 00    IADD.u32 r0, r0^, 0x7060504.b0
+00 02 c0 02 06 01 e6 01    ICMP_OR.u32.ne.m1 r1, r0, u1.w0, 0x0
+04 00 20 00 00 05 60 00    MOV.i32 r5, r4
+04 00 20 00 00 06 60 00    MOV.i32 r6, r4
+04 00 20 00 00 07 60 04    MOV.i32.wait0 r7, r4
+82 00 00 00 9c 04 20 03    STORE.i128.slot0 @r4:r5:r6:r7, [r2^:r3^], offset:0
+81 f8 ff ff 07 00 b8 2a    BRANCHZ.reconverge r1^, offset:-8
+bd c0 00 08 10 3c c6 00    IADD.v2u16 r60.h1, r61^.h10, 0x0
+84 00 86 32 8c 00 12 3f    ST_CVT.slot0.istream.v4.f32.end @r0:r1:r2:r3, [r4^:r5^], r6^, offset:0x0
+84 00 86 34 8c 00 12 3f    ST_CVT.slot0.istream.v4.s32.end @r0:r1:r2:r3, [r4^:r5^], r6^, offset:0x0
+84 00 86 36 8c 00 12 3f    ST_CVT.slot0.istream.v4.u32.end @r0:r1:r2:r3, [r4^:r5^], r6^, offset:0x0
+bc c0 12 00 2b 04 86 03    LEA_TEX_IMM.slot0 @r4:r5:r6, r60^, 0x0, table:0x2, index:0x1
+bc c0 02 00 2b 04 86 03    LEA_TEX_IMM.slot0 @r4:r5:r6, r60^, 0x0, table:0x2, index:0x0
+02 01 00 00 0a 02 8b 03    LD_PKA.i64.slot0 @r2:r3, u1.w0, u0.w1
+00 01 00 40 0a 00 8b 03    LD_PKA.i64.slot1 @r0:r1, u0.w0, u0.w1
+04 01 00 80 0a 26 8b 03    LD_PKA.i64.slot2 @r38:r39, u2.w0, u0.w1
+03 01 00 80 0a 24 8b 03    LD_PKA.i64.slot2 @r36:r37, u1.w1, u0.w1
+03 04 00 00 0a 02 8b 03    LD_PKA.i64.slot0 @r2:r3, u1.w1, u2.w0
+81 02 00 00 13 02 8a 03    LD_PKA.i96.slot0 @r2:r3:r4, r1^, u1.w0
+80 03 00 00 13 06 8a 07    LD_PKA.i96.slot0.wait0 @r6:r7:r8, r0^, u1.w1
+80 00 80 01 c0 00 60 20    FRCP.f32.wait0126 r0, r0^.neg.abs
+80 84 00 80 00 00 7c 01    MUX.i32.neg r0, r0^, r4^, u0.w0
+80 84 00 80 04 00 7c 01    MUX.i32 r0, r0^, r4^, u0.w0
+80 84 00 80 08 00 7c 01    MUX.i32.fp_zero r0, r0^, r4^, u0.w0
+80 84 00 80 0c 00 7c 01    MUX.i32.bit r0, r0^, r4^, u0.w0
+00 00 20 41 00 01 60 34    FREXPM.f32.sqrt.discard r1, r0
+01 00 82 01 00 02 60 00    FRSQ.f32 r2, r1
+80 00 22 41 00 00 60 00    FREXPE.f32.sqrt r0, r0^
+81 82 c0 80 0a 00 64 02    FMA_RSCALE.f32.clamp_m1_1 r0, r1^, r2^, 0x0.neg, r0^
+81 82 c0 80 0e 00 64 22    FMA_RSCALE.f32.left.wait0126 r0, r1^, r2^, 0x0.neg, r0^
+82 83 04 05 00 01 7c 02    CSEL.u32.eq r1, r2^, r3^, u2.w0, u2.w1
+82 83 04 05 08 01 7c 02    CSEL.u32.lt r1, r2^, r3^, u2.w0, u2.w1
+82 83 04 05 48 01 7c 02    CSEL.s32.lt r1, r2^, r3^, u2.w0, u2.w1
+3d 00 00 12 5a 02 18 07    LD_VAR_SPECIAL.v2.f32.sample.clobber.slot0.wait0 @r2:r3, r61, index:0x0
+3d 00 00 3f 0a 02 10 07    LD_VAR_BUF_IMM.f16.slot0.v4.src_f16.center.retrieve.wait0 @r2:r3, r61, index:0x0
+3d 00 00 3f 42 00 10 07    LD_VAR_BUF_IMM.f16.slot0.v4.src_f16.sample.store.wait0 @r0:r1, r61, index:0x0
+3d 08 00 3f 22 00 10 07    LD_VAR_BUF_IMM.f16.slot0.v4.src_f16.centroid.store.wait0 @r0:r1, r61, index:0x8
+bc bd 11 33 02 00 84 03    LD_ATTR_IMM.v4.f16.slot0 @r0:r1, r60^, r61^, index:0x1, table:0x1
+80 3c 03 23 02 04 c0 03    LD_TILE.v3.f16.slot0 @r4:r5, r0^, r60, r3
+00 c9 00 20 10 01 c6 00    IADD.v2u16 r1.h1, r0.h10, 0x7060504.b11
+80 c0 00 08 10 01 a6 00    IADD.v2u16 r1.h0, r0^.h10, 0x0
+02 02 00 04 20 02 a4 00    IADD.v2u16 r2.h0, r2, r2.h10
+82 c0 05 00 00 02 e6 00    MKVEC.v2i16 r2, r2^.h0, 0x0.h0
+b7 c0 05 00 00 02 e6 00    MKVEC.v2i16 r2, r55^.h0, 0x0.h0
+b7 c0 05 10 00 02 e6 00    MKVEC.v2i16 r2, r55^.h1, 0x0.h0
+c0 b7 05 00 00 02 e5 00    MKVEC.v2i16 r2, 0x0.h0, r55^.h0
+c0 b7 05 04 00 02 e5 00    MKVEC.v2i16 r2, 0x0.h0, r55^.h1
+b7 00 54 00 00 02 60 00    U16_TO_U32 r2, r55^.h0
+b7 00 54 10 00 02 60 00    U16_TO_U32 r2, r55^.h1
+b7 00 44 00 00 02 60 00    S16_TO_S32 r2, r55^.h0
+b7 00 44 10 00 02 60 00    S16_TO_S32 r2, r55^.h1
+c0 b7 01 08 00 02 e9 00    ISUB.s32 r2, 0x0, r55^.h0
+c0 b7 01 0c 00 02 e9 00    ISUB.s32 r2, 0x0, r55^.h1
+00 c0 c0 c0 c0 07 7e 01    MKVEC.v2i8 r7, r0.b3, 0x0.b0, 0x0
+00 c0 c0 c0 80 06 7e 01    MKVEC.v2i8 r6, r0.b2, 0x0.b0, 0x0
+00 c0 c0 c0 00 04 7e 01    MKVEC.v2i8 r4, r0.b0, 0x0.b0, 0x0
+80 c0 c0 c0 40 05 7e 01    MKVEC.v2i8 r5, r0^.b1, 0x0.b0, 0x0
+
+3d 00 00 ba 44 00 10 37    LD_VAR_BUF_IMM.f32.slot2.v4.src_f32.sample.store.discard @r0:r1:r2:r3, r61, index:0x0
+3d 10 00 7a 0c 04 10 03    LD_VAR_BUF_IMM.f32.slot1.v4.src_f32.center.retrieve @r4:r5:r6:r7, r61, index:0x10
+c0 00 00 00 00 08 6d 00    IADD_IMM.i32 r8, 0x0, #0x0
+c0 00 00 00 00 09 6d 00    IADD_IMM.i32 r9, 0x0, #0x0
+3d 00 54 00 00 0a 60 00    U16_TO_U32 r10, r61.h0
+3d 09 00 00 30 00 b8 2a    BRANCHZ.eq.reconverge r61.h0, offset:9
+0a 00 20 00 00 0b 60 28    MOV.i32.reconverge r11, r10
+c0 00 e0 01 00 00 a1 26    NOP.wait 
+01 0b 00 33 02 0e c5 03    LD_TILE.v4.f16.slot0 @r14:r15, u0.w1, r11, u0.w0
+0b 00 24 00 00 0c 60 00    CLZ.u32 r12, r11
+02 8c c0 10 06 0c 6d 01    RSHIFT_XOR.i32.not_result r12, u1.w0, r12^.b00, 0x0
+02 cf c0 5c 03 03 6e 01    ARSHIFT_OR.i32 r3, r2, 0x1F1E1D1C.b33, 0x0
+8b c0 8c 50 00 0b 6a 05    LSHIFT_AND.i32.wait0 r11, r11^, 0x0.b00, r12^
+8f 89 00 28 00 09 f4 00    FADD.v2f16 r9, r15^, r9^
+8e 88 00 28 00 08 f4 00    FADD.v2f16 r8, r14^, r8^
+0b f8 ff ff 07 00 b8 2a    BRANCHZ.reconverge r11, offset:-8
+8a 00 2c 00 00 3e 60 00    POPCOUNT.i32 r62, r10^
+be 00 59 00 00 3e 60 00    U32_TO_F32 r62, r62^
+be 00 81 01 00 3e 60 00    FRCP.f16 r62, r62^.h00
+89 3e c0 22 44 09 64 19    FMA.v2f16.wait12 r9, r9^, r62.h00, 0x0.neg
+87 83 00 00 00 03 f0 00    FADD.f32 r3, r7^, r3^
+83 09 00 08 00 03 f0 20    FADD.f32.wait0126 r3, r3^, r9.h1
+3c 03 ea 00 01 3c d4 37    ATEST.discard @r60, r60, r3, atest_datum.w0
+86 82 00 00 00 02 f0 00    FADD.f32 r2, r6^, r2^
+84 80 00 00 00 00 f0 00    FADD.f32 r0, r4^, r0^
+88 be c0 22 44 3f 64 01    FMA.v2f16 r63, r8^, r62^.h00, 0x0.neg
+85 81 00 00 00 01 f0 00    FADD.f32 r1, r5^, r1^
+81 3f 00 08 00 01 f0 00    FADD.f32 r1, r1^, r63.h1
+80 bf 00 04 00 00 f0 00    FADD.f32 r0, r0^, r63^.h0
+82 89 00 04 00 02 f0 24    FADD.f32.wait r2, r2^, r9^.h0
+f0 00 3c 32 84 00 1b 3f    BLEND.slot0.v4.f32.end @r0:r1:r2:r3, blend_descriptor_0.w0, r60, target:0x0
+c0 00 00 00 00 36 6d 00    IADD_IMM.i32 r54, 0x0, #0x0
+c0 f1 0f 80 10 00 b3 06    BRANCHZI.eq.absolute.wait0 0x0, blend_descriptor_0.w1
+00 00 00 1f 5a 3c 69 03    TEX_FETCH.slot0.32.2d @r0:r1:r2:r3, @r60:r61, u0
+40 00 20 00 00 01 61 00    MOV.i32 r1, u32.w0
+41 00 20 00 00 01 61 00    MOV.i32 r1, u32.w1
+4a 00 20 00 00 01 61 00    MOV.i32 r1, u37.w0
+30 00 37 0f c1 0c 24 07    ATOM_RETURN.i32.slot0.axchg.wait0 @r55, @r12, [r48:r49], offset:0x0
+32 00 00 02 81 0c 2c 07    ATOM.i32.slot0.aadd.wait0 @r12, [r50:r51], offset:0x0
+32 00 00 00 01 0c 28 07    ATOM1_RETURN.i32.slot0.ainc.wait0 @r12, [r50:r51], offset:0x0
+32 00 00 00 01 00 28 07    ATOM1_RETURN.i32.slot0.ainc.wait0 @r0, [r50:r51], offset:0x0
+02 00 00 11 da 00 d5 27    VAR_TEX_SINGLE.slot0.skip.sample_store.32.2d.zero.wait @r0:r1:r2:r3, u1, u0.w0
+02 20 00 11 da 00 d5 07    VAR_TEX_SINGLE.slot0.skip.sample_store.32.2d.computed.wait0 @r0:r1:r2:r3, u1, u0.w0
+02 20 00 11 c2 00 d5 23    VAR_TEX_SINGLE.slot0.skip.sample_store.32.2d.computed.wait0126 @r0, u1, u0.w0
+80 c0 c0 02 06 00 e6 09    ICMP_OR.u32.ne.m1.wait1 r0, r0^, 0x0, 0x0
+82 83 80 80 02 00 e8 01    ICMP_AND.s32.gt.i1 r0, r2^, r3^, r0^
+82 c0 c0 03 06 00 f6 09    ICMP_MULTI.u32.ne.u1.wait1 r0, r2^, 0x0, 0x0
+84 86 c0 03 02 02 f4 01    ICMP_MULTI.u32.gt.u1 r2, r4^, r6^, 0x0
+85 87 82 02 02 02 f0 01    ICMP_MULTI.u32.gt.m1 r2, r5^, r7^, r2^
+83 c0 80 02 06 00 f2 01    ICMP_MULTI.u32.ne.m1 r0, r3^, 0x0, r0^
+80 82 c0 03 02 00 f4 01    ICMP_MULTI.u32.gt.u1 r0, r0^, r2^, 0x0
+81 83 80 82 02 04 f0 01    ICMP_MULTI.s32.gt.m1 r4, r1^, r3^, r0^
+80 c0 c0 6a 07 00 e6 09    FCMP_OR.v2f16.ne.m1.wait1 r0, r0^, 0x0, 0x0
+81 81 80 6e 03 00 e8 01    FCMP_AND.v2f16.gt.m1 r0, r1^, r1^.h11, r0^
+80 c0 c0 6a 07 00 e6 09    FCMP_OR.v2f16.ne.m1.wait1 r0, r0^, 0x0, 0x0
+81 81 80 6e 03 00 e8 01    FCMP_AND.v2f16.gt.m1 r0, r1^, r1^.h11, r0^
+c4 c0 80 52 70 00 6b 01    LSHIFT_AND.v4i8 r0, 0x1000000.b3333, 0x0.b00, r0^
+80 81 82 80 24 00 78 01    MUX.v4i8 r0, r0^, r1^, r2^
+c0 c0 00 00 02 02 8f 03    LEA_PKA.slot0 @r2:r3, 0x0, 0x0
