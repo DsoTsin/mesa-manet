@@ -404,7 +404,6 @@ def valhall_parse_isa(xmlfile):
         "lod_bias_disable": Modifier("lod_mode", 13, 1),
         "lod_clamp_disable": Modifier("lod_mode", 14, 1),
         "write_mask": Modifier("write_mask", 22, 4),
-        "register_type": Modifier("register_type", 26, 2),
         "dimension": Modifier("dimension", 28, 2),
         "skip": Flag("skip", 39),
         "register_width": Modifier("register_width", 46, 1, force_enum = "register_width"),
