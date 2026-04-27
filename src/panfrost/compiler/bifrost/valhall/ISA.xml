@@ -555,14 +555,6 @@
     <value desc="Alpha">gather4_a</value>
   </enum>
 
-  <enum name="Register type">
-    <desc>Unsized type, part of a register format.</desc>
-    <reserved/>
-    <value name="Float">f</value>
-    <value name="Unsigned">u</value>
-    <value name="Signed">s</value>
-  </enum>
-
   <enum name="Register width">
     <desc>Untyped size, part of a register format.</desc>
     <value>16</value>
@@ -3677,7 +3669,6 @@
     <desc>Unfiltered textured instruction.</desc>
     <slot/>
     <skip/>
-    <register_type/>
     <register_width/>
     <write_mask/>
     <dimension/>
@@ -3704,7 +3695,6 @@
     <desc>Ordinary texturing instruction using a sampler.</desc>
     <slot/>
     <skip/>
-    <register_type/>
     <register_width/>
     <write_mask/>
     <dimension/>
@@ -3733,7 +3723,6 @@
     <desc>Texture gather instruction.</desc>
     <slot/>
     <skip/>
-    <register_type/>
     <register_width/>
     <write_mask/>
     <dimension/>
@@ -3763,7 +3752,6 @@
     <desc>Texture sample with explicit gradient.</desc>
     <slot/>
     <skip/>
-    <register_type/>
     <register_width/>
     <write_mask/>
     <dimension/>
@@ -3790,7 +3778,6 @@
     <desc>Pair of texture instructions.</desc>
     <slot/>
     <skip/>
-    <register_type/>
     <register_width/>
     <secondary_register_width/>
     <write_mask/>
@@ -3820,7 +3807,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3845,7 +3831,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3871,7 +3856,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3897,7 +3881,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3922,7 +3905,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3947,7 +3929,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3973,7 +3954,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>
@@ -3999,7 +3979,6 @@
     <slot/>
     <skip/>
     <sample_and_update/>
-    <register_type/>
     <vartex_register_width/>
     <dimension/>
     <array_enable/>

@@ -214,7 +214,7 @@ c0 00 00 00 00 c9 10 01    IADD_IMM.i32 r9, 0x0, #0x0
 f0 00 3c 32 08 40 7f 78    BLEND.slot0.v4.f32.end @r0:r1:r2:r3, blend_descriptor_0.w0, r60, target:0x0
 c0 00 00 00 00 f6 10 01    IADD_IMM.i32 r54, 0x0, #0x0
 c0 f1 00 00 10 c1 2f 08    BRANCHZI.eq.absolute.wait0 0x0, blend_descriptor_0.w1
-80 00 c0 17 34 7c 25 01    TEX_FETCH.slot0.f.32.2d @r0:r1:r2:r3, @r60:r61, u0
+80 00 c0 13 34 7c 25 01    TEX_FETCH.slot0.32.2d @r0:r1:r2:r3, @r60:r61, u0
 80 00 00 00 00 c1 91 02    MOV.i32 r1, u32.w0
 81 00 00 00 00 c1 91 02    MOV.i32 r1, u32.w1
 8a 00 00 00 00 c1 91 02    MOV.i32 r1, u37.w0
@@ -222,9 +222,9 @@ c0 f1 00 00 10 c1 2f 08    BRANCHZI.eq.absolute.wait0 0x0, blend_descriptor_0.w1
 32 00 80 18 02 4c 68 08    ATOM.i32.slot0.aadd.wait0 @r12, [r50:r51], offset:0x0
 32 00 00 18 02 8c 69 08    ATOM1_RETURN.i32.slot0.ainc.wait0 @r12, [r50:r51], offset:0x0
 32 00 00 18 00 80 69 08    ATOM1_RETURN.i32.slot0.ainc.wait0 @, [r50:r51], offset:0x0
-82 00 80 15 b4 80 38 49    VAR_TEX_SINGLE.slot0.skip.sample_store.f.32.2d.zero.wait @r0:r1:r2:r3, u1, u0.w0
-82 20 80 15 b4 80 38 09    VAR_TEX_SINGLE.slot0.skip.sample_store.f.32.2d.computed.wait0 @r0:r1:r2:r3, u1, u0.w0
-82 20 80 1d 84 80 38 41    VAR_TEX_SINGLE.slot0.skip.sample_store.s.32.2d.computed.wait0126 @r0, u1, u0.w0
+82 00 80 11 b4 80 38 49    VAR_TEX_SINGLE.slot0.skip.sample_store.32.2d.zero.wait @r0:r1:r2:r3, u1, u0.w0
+82 20 80 11 b4 80 38 09    VAR_TEX_SINGLE.slot0.skip.sample_store.32.2d.computed.wait0 @r0:r1:r2:r3, u1, u0.w0
+82 20 80 11 84 80 38 41    VAR_TEX_SINGLE.slot0.skip.sample_store.32.2d.computed.wait0126 @r0, u1, u0.w0
 40 c0 c0 80 03 c0 f0 10    ICMP_OR.u32.ne.m1.wait1 r0, r0^, 0x0, 0x0
 42 43 40 01 01 c0 f8 00    ICMP_AND.s32.gt.i1 r0, r2^, r3^, r0^
 42 c0 c0 c2 03 c0 f0 10    ICMP_MULTI.u32.ne.u1.wait1 r0, r2^, 0x0, 0x0

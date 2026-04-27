@@ -802,27 +802,6 @@ va_pack_lod_mode(const bi_instr *I)
    invalid_instruction(I, "LOD mode");
 }
 
-static enum va_register_type
-va_pack_register_type(const bi_instr *I)
-{
-   switch (I->register_format) {
-   case BI_REGISTER_FORMAT_F16:
-   case BI_REGISTER_FORMAT_F32:
-      return VA_REGISTER_TYPE_F;
-
-   case BI_REGISTER_FORMAT_U16:
-   case BI_REGISTER_FORMAT_U32:
-      return VA_REGISTER_TYPE_U;
-
-   case BI_REGISTER_FORMAT_S16:
-   case BI_REGISTER_FORMAT_S32:
-      return VA_REGISTER_TYPE_S;
-
-   default:
-      invalid_instruction(I, "register type");
-   }
-}
-
 static enum va_register_format
 va_pack_register_format(const bi_instr *I)
 {
