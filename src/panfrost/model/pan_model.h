@@ -31,6 +31,15 @@ struct pan_tiler_features {
 #define PAN_VERSION_MINOR(x)  (((x) & BITFIELD_RANGE(4, 8)) >> 4)
 #define PAN_VERSION_STATUS(x) ((x) & BITFIELD_RANGE(0, 4))
 
+#define PAN_ID64_COMPAT            0xFull
+#define PAN_ID64_ARCH_MAJOR(x)     (((x) & BITFIELD64_RANGE(56, 8)) >> 56)
+#define PAN_ID64_ARCH_MINOR(x)     (((x) & BITFIELD64_RANGE(48, 8)) >> 48)
+#define PAN_ID64_ARCH_REV(x)       (((x) & BITFIELD64_RANGE(40, 8)) >> 40)
+#define PAN_ID64_PRODUCT_MAJOR(x)  (((x) & BITFIELD64_RANGE(32, 8)) >> 32)
+#define PAN_ID64_VERSION_MAJOR(x)  (((x) & BITFIELD64_RANGE(16, 8)) >> 16)
+#define PAN_ID64_VERSION_MINOR(x)  (((x) & BITFIELD64_RANGE(8, 8)) >> 8)
+#define PAN_ID64_VERSION_STATUS(x) ((x) & BITFIELD64_RANGE(0, 8))
+
 /* GPU product id for Midgard */
 #define MIDGARD_PROD_ID(x) (((x) & BITFIELD_RANGE(16, 16)) >> 16)
 
@@ -115,8 +124,12 @@ pan_arch(uint64_t gpu_id)
    case 0x860:
    case 0x880:
       return 5;
-   default:
-      return PAN_ARCH_MAJOR(gpu_id);
+   default: {
+      unsigned gpu_arch = PAN_ARCH_MAJOR(gpu_id);
+      if (gpu_arch == PAN_ID64_COMPAT)
+         return PAN_ID64_ARCH_MAJOR(gpu_id);
+      return gpu_arch;
+   }
    }
 }
 
@@ -126,14 +139,21 @@ pan_prod_id(uint64_t gpu_id)
    unsigned arch = pan_arch(gpu_id);
    if (arch < 6)
       return MIDGARD_PROD_ID(gpu_id);
-   return PAN_PROD_ID(PAN_ARCH_MAJOR(gpu_id), PAN_ARCH_MINOR(gpu_id),
-                      PAN_PRODUCT_MAJOR(gpu_id));
+   else if (arch < PAN_ID64_COMPAT)
+      return PAN_PROD_ID(PAN_ARCH_MAJOR(gpu_id), PAN_ARCH_MINOR(gpu_id),
+                         PAN_PRODUCT_MAJOR(gpu_id));
+   return PAN_PROD_ID(PAN_ID64_ARCH_MAJOR(gpu_id), PAN_ID64_ARCH_MINOR(gpu_id),
+                      PAN_ID64_PRODUCT_MAJOR(gpu_id));
 }
 
 static inline uint32_t
 pan_rev(uint64_t gpu_id)
 {
-   return PAN_REV(PAN_VERSION_MAJOR(gpu_id), PAN_VERSION_MINOR(gpu_id));
+   unsigned arch = pan_arch(gpu_id);
+   if (arch < PAN_ID64_COMPAT)
+      return PAN_REV(PAN_VERSION_MAJOR(gpu_id), PAN_VERSION_MINOR(gpu_id));
+   return PAN_REV(PAN_ID64_VERSION_MAJOR(gpu_id),
+                  PAN_ID64_VERSION_MINOR(gpu_id));
 }
 
 #endif
