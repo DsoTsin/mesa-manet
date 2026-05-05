@@ -10,6 +10,7 @@
 #include "panfrost/compiler/bifrost/bifrost_compile.h"
 #include "panfrost/compiler/pan_compiler.h"
 #include "panfrost/compiler/pan_nir.h"
+#include "panfrost/model/pan_model.h"
 #include "nir.h"
 #include "nir_builder.h"
 #include "nir_builder_opcodes.h"
@@ -369,7 +370,12 @@ main(int argc, const char **argv)
          _mesa_blake3_update(&blake3_ctx, &v, sizeof(v));
          _mesa_blake3_final(&blake3_ctx, s->info.source_blake3);
 
-         uint64_t target_gpu_id = (target_arch & 0xf) << 28;
+         uint64_t target_gpu_id;
+         if (target_arch >= PAN_ID64_COMPAT)
+            target_gpu_id =
+               ((uint64_t)(target_arch & 0xff) << 56) | (PAN_ID64_COMPAT << 28);
+         else
+            target_gpu_id = (target_arch & 0xf) << 28;
 
          struct pan_compile_inputs inputs = {
             .gpu_id = target_gpu_id,

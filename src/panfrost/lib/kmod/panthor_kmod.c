@@ -168,8 +168,12 @@ panthor_dev_query_props(struct panthor_kmod_dev *panthor_dev)
 {
    struct pan_kmod_dev_props *props = &panthor_dev->base.props;
 
+   bool is_gpu_wide = panthor_dev->props.gpu.gpu_id == 0;
+   assert(!is_gpu_wide || panthor_dev->props.gpu.gpu_wide_id);
+
    *props = (struct pan_kmod_dev_props){
-      .gpu_id = panthor_dev->props.gpu.gpu_id,
+      .gpu_id = is_gpu_wide ? panthor_dev->props.gpu.gpu_wide_id
+                            : panthor_dev->props.gpu.gpu_id,
       .gpu_variant = panthor_dev->props.gpu.core_features & 0xff,
       .shader_present = panthor_dev->props.gpu.shader_present,
       .tiler_features = panthor_dev->props.gpu.tiler_features,

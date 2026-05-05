@@ -801,6 +801,18 @@ get_conformance_version()
    return (VkConformanceVersion){0, 0, 0, 0};
 }
 
+static uint32_t
+get_device_id(uint64_t gpu_id)
+{
+   if (PAN_ARCH >= PAN_ID64_COMPAT)
+      return ((PAN_ID64_COMPAT << 28) | (PAN_ID64_ARCH_MAJOR(gpu_id) << 20) |
+              (PAN_ID64_ARCH_MINOR(gpu_id) << 12) |
+              ((PAN_ID64_PRODUCT_MAJOR(gpu_id) & 0xF) << 8) |
+              ((PAN_ID64_VERSION_MAJOR(gpu_id) & 0xF) << 4) |
+              (PAN_ID64_VERSION_MINOR(gpu_id) & 0xF));
+   return (gpu_id & 0xFFFFFFFF);
+}
+
 void
 panvk_per_arch(get_physical_device_properties)(
    const struct panvk_instance *instance,
@@ -839,7 +851,7 @@ panvk_per_arch(get_physical_device_properties)(
       .driverVersion = vk_get_driver_version(),
       .vendorID =
          instance->drirc.debug.force_vk_vendor ? instance->drirc.debug.force_vk_vendor : ARM_VENDOR_ID,
-      .deviceID = device->kmod.dev->props.gpu_id,
+      .deviceID = get_device_id(device->kmod.dev->props.gpu_id),
       .deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
 
       /* Vulkan 1.0 limits */
