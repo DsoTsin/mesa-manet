@@ -1286,7 +1286,7 @@ GENX(csf_launch_grid)(struct panfrost_batch *batch,
    cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Z), 0);
 
    unsigned threads_per_wg = info->block[0] * info->block[1] * info->block[2];
-   unsigned max_thread_cnt = pan_compute_max_thread_count(
+   unsigned max_thread_cnt = pan_compute_max_usable_threads(
       &dev->kmod.dev->props, cs->info.work_reg_count);
 
    csf_select_endpoint_sb(batch, PANFROST_SB_COMPUTE);
