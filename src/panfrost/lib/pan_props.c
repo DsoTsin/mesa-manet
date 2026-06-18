@@ -61,8 +61,8 @@ pan_query_thread_tls_alloc(const struct pan_kmod_dev_props *props)
 }
 
 unsigned
-pan_compute_max_thread_count(const struct pan_kmod_dev_props *props,
-                             unsigned work_reg_count)
+pan_compute_max_usable_threads(const struct pan_kmod_dev_props *props,
+                               unsigned work_reg_count)
 {
    unsigned aligned_reg_count;
 

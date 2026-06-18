@@ -77,8 +77,8 @@ uint64_t pan_clamp_to_usable_va_range(const struct pan_kmod_dev *dev,
 uint64_t pan_choose_gpu_va_alignment(const struct pan_kmod_vm *vm,
                                      uint64_t size);
 
-unsigned pan_compute_max_thread_count(const struct pan_kmod_dev_props *props,
-                                      unsigned work_reg_count);
+unsigned pan_compute_max_usable_threads(const struct pan_kmod_dev_props *props,
+                                        unsigned work_reg_count);
 
 static inline unsigned
 pan_max_effective_tile_size(unsigned arch)

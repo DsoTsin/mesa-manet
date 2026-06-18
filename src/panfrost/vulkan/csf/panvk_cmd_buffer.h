@@ -954,7 +954,7 @@ panvk_per_arch(calculate_task_axis_and_increment)(
     * utilization. */
    const struct pan_kmod_dev_props *props = &phys_dev->kmod.dev->props;
    const unsigned max_thread_cnt =
-      pan_compute_max_thread_count(props, shader->info.work_reg_count);
+      pan_compute_max_usable_threads(props, shader->info.work_reg_count);
    const unsigned threads_per_wg = shader->cs.local_size.x *
                                    shader->cs.local_size.y *
                                    shader->cs.local_size.z;
