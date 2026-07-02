@@ -79,7 +79,7 @@ pan_nir_load_va_desc(nir_builder *b, unsigned num_components, unsigned bit_size,
 }
 
 static inline nir_def *
-pan_nir_load_va_buf_cvt(nir_builder *b, nir_def *handle)
+pan_nir_load_va_buf_cvt(nir_builder *b, nir_def *handle, nir_alu_type reg_type)
 {
    /* Dword 7 of the buffer descriptor type is unused by hardware and is
     * reserved for software to do whatever it wants with it.  By convention,
@@ -87,9 +87,28 @@ pan_nir_load_va_buf_cvt(nir_builder *b, nir_def *handle)
     */
    nir_def *cvt = pan_nir_load_va_desc(b, 1, 32, handle, 7 * 4);
 
-   /* CONSTANT 0000 L */
-   nir_def *zero_cvt = nir_imm_int(b, 95 << 12 | 231);
-   cvt = nir_bcsel(b, nir_ieq_imm(b, cvt, 0), zero_cvt, cvt);
+   /* In case of a NullDescriptor, the loaded all-zeroes conversion descriptor
+    * is invalid and cannot be used.
+    * We therefore return a valid conversion descriptor depending on the
+    * reg_type and rely on the OOB memory address from LEA_BUF to read zeroes
+    * and ignore writes.*/
+   nir_def *null_cvt;
+   switch (nir_alu_type_get_base_type(reg_type)) {
+   case nir_type_int:
+   case nir_type_uint:
+   case nir_type_bool:
+      /* R16G16B16A16_UINT RGBA */
+      null_cvt = nir_imm_int(b, 156 << 12);
+      break;
+   case nir_type_float:
+      /* R8G8B8A8_UNORM RGBA */
+      null_cvt = nir_imm_int(b, 187 << 12);
+      break;
+   default:
+      UNREACHABLE("unexpected nir_alu_type");
+   }
+
+   cvt = nir_bcsel(b, nir_ieq_imm(b, cvt, 0), null_cvt, cvt);
 
    return cvt;
 }

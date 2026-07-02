@@ -1138,7 +1138,7 @@ lower_buf_image_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    nir_def *texel_addr, *icd;
    if (*arch >= 9) {
       texel_addr = nir_lea_buf_pan(b, res_handle, buf_index);
-      icd = pan_nir_load_va_buf_cvt(b, res_handle);
+      icd = NULL; /* To be filled depending on intrinsic */
    } else {
       nir_def *attr = nir_lea_attr_pan(b, res_handle, buf_index,
                                        nir_imm_int(b, 0),
@@ -1154,22 +1154,28 @@ lower_buf_image_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       nir_def_replace(&intr->def, texel_addr);
       break;
    case nir_intrinsic_image_load: {
+      nir_alu_type dest_type = nir_intrinsic_dest_type(intr);
+      if (*arch >= 9)
+         icd = pan_nir_load_va_buf_cvt(b, res_handle, dest_type);
+
       nir_def *loaded_mem = nir_load_global_cvt_pan(
          b, intr->def.num_components, intr->def.bit_size, texel_addr, icd,
-         .dest_type = nir_intrinsic_dest_type(intr));
+         .dest_type = dest_type);
       nir_def_replace(&intr->def, loaded_mem);
       break;
    }
    case nir_intrinsic_image_store: {
+      nir_alu_type src_type = nir_intrinsic_src_type(intr);
+      if (*arch >= 9)
+         icd = pan_nir_load_va_buf_cvt(b, res_handle, src_type);
+
       /* Due to SPIR-V limitations, the source type is not fully reliable: it
        * reports uint32 even for write_imagei. This causes an incorrect
        * u32->s32->u32 roundtrip which incurs an unwanted clamping. Use auto32
        * instead, which will match per the OpenCL spec. Of course this does
        * not work for 16-bit stores, but those are not available in OpenCL.
        */
-      ASSERTED nir_alu_type T = nir_intrinsic_src_type(intr);
-      assert(nir_alu_type_get_type_size(T) == 32);
-
+      assert(nir_alu_type_get_type_size(src_type) == 32);
       nir_def *value = intr->src[3].ssa;
       nir_store_global_cvt_pan(b, value, texel_addr, icd, .src_type = 32);
       nir_instr_remove(&intr->instr);
