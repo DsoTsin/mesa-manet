@@ -164,10 +164,7 @@
     <value name="R9F G9F B9F E5F" value="91"/>
     <value name="E5F B9F G9F R9F" value="92"/>
     <value name="S8" value="93"/>
-    <!--- RGBA32F + snap to 2^-8, used for vertex writes -->
-    <value name="Snap 4" value="94"/>
-    <value name="Constant" value="95"/>
-    <!-- 96-98 reserved -->
+    <!-- 94-98 reserved -->
     <value name="R8 SNORM" value="99"/>
     <value name="R16 SNORM" value="100"/>
     <value name="R32 SNORM" value="101"/>
@@ -257,8 +254,7 @@
     <value name="RGB5 A1 PU" value="225"/>
     <value name="R5G6B5 AU" value="226"/>
     <value name="R5G6B5 PU" value="227"/>
-    <!-- 228-229 reserved -->
-    <value name="Snap4 V" value="230"/>
+    <!-- 228-230 reserved -->
     <value name="R32F RTZ" value="231"/>
     <value name="RGBA4 AU" value="232"/>
     <value name="RGBA4 PU" value="233"/>
@@ -292,16 +288,7 @@
     <value name="RRR1" value="227"/>
     <value name="RRRA" value="228"/>
     <value name="000A" value="229"/>
-    <value name="0001" value="230"/>
-    <value name="0000" value="231"/>
-    <value name="Snap4 v9" value="232"/>
-    <value name="Snap4 v10" value="233"/>
-    <value name="Snap4 v11" value="234"/>
-    <value name="Snap4 v12" value="235"/>
-    <value name="Snap4 v13" value="236"/>
-    <value name="Snap4 v14" value="237"/>
-    <value name="Snap4 v15" value="238"/>
-    <value name="Snap4 v16" value="239"/>
+    <!-- 230-239 reserved -->
     <!-- Internal only, do not use -->
     <value name="R000" value="240"/>
     <value name="RBGA" value="242"/>
