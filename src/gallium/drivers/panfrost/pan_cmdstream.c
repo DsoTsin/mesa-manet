@@ -1914,6 +1914,10 @@ static void
 panfrost_emit_null_texture(struct mali_texture_packed *out)
 
 {
+#if PAN_ARCH >= 9
+   pan_cast_and_pack(out, NULL_DESCRIPTOR, cfg)
+      ;
+#else
    /* Annoyingly, an all zero texture descriptor is not valid and will raise
     * a DATA_INVALID_FAULT if you try to texture it, instead of returning
     * 0000s! Fill in with sometthing that will behave robustly.
@@ -1929,6 +1933,7 @@ panfrost_emit_null_texture(struct mali_texture_packed *out)
       cfg.texel_ordering = MALI_TEXTURE_LAYOUT_LINEAR;
 #endif
    }
+#endif
 }
 #endif
 
