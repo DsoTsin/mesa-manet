@@ -180,7 +180,10 @@ const struct pan_blendable_format
 
 /* clang-format off */
 const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
+#if PAN_ARCH < 15
+   /* CONSTANT / 0000 is removed in v15 */
    FMT(NONE,                    CONSTANT,        0000, L, VTR_IB),
+#endif
 
 #if PAN_ARCH >= 14
    /* Multiplane formats */
@@ -689,8 +692,10 @@ GENX(pan_decompose_swizzle)(enum mali_rgb_component_order order)
       CASE(RRR1, RRR1, X, Y, Z, W);
       CASE(RRRA, RRRA, X, Y, Z, W);
       CASE(000A, 000A, X, Y, Z, W);
+#if PAN_ARCH < 15
       CASE(0001, 0001, X, Y, Z, W);
       CASE(0000, 0000, X, Y, Z, W);
+#endif
    default:
       UNREACHABLE("Invalid case for texturing");
    }
