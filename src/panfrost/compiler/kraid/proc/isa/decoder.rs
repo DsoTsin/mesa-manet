@@ -415,7 +415,7 @@ impl PrintAs {
                 };
                 let cls_id = Ident::new(n, Span::call_site());
                 ts.extend(quote! { let #ident = #cls_id::try_decode(
-                #ident as u8, arch, (fau_page_index as u8), ctx.fau32)?; });
+                #ident as u16, arch, (fau_page_index as u8), ctx.fau32)?; });
             }
             PrintAs::Staging(s) => {
                 let count_id = &s.count_id;
