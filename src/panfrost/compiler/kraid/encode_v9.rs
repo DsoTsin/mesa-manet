@@ -642,8 +642,13 @@ impl V9Instr for OpATest {
 
     fn encode(&self, e: V9Encoder) -> EncodedInstr {
         assert!(e.get_msg_slot_idx() == Some(MessageSlotIndex::Slot0));
-        assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
-        assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 60);
+        if e.arch >= 15 {
+            assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 0);
+            assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 0);
+        } else {
+            assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
+            assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 60);
+        }
         e.encode(Atest {
             sr_dst: op_encode_sr_write(self, &self.dst),
             src0: op_encode_src(self, &self.coverage, e.arch),
@@ -794,7 +799,11 @@ impl V9Instr for OpBlend {
     }
 
     fn encode(&self, e: V9Encoder) -> EncodedInstr {
-        assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
+        if e.arch >= 15 {
+            assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 0);
+        } else {
+            assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
+        }
         e.encode(Blend {
             message_slot_index: e.get_msg_slot_idx().unwrap(),
             sr_src: op_encode_sr_read(self, &self.color),
@@ -3543,8 +3552,13 @@ impl V9Instr for OpZSEmit {
 
     fn encode(&self, e: V9Encoder) -> EncodedInstr {
         assert!(self.use_depth || self.use_stencil);
-        assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
-        assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 60);
+        if e.arch >= 15 {
+            assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 0);
+            assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 0);
+        } else {
+            assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
+            assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 60);
+        }
         e.encode(ZsEmit {
             sr_dst: op_encode_sr_write(self, &self.dst),
             src0: op_encode_src(self, &self.depth, e.arch),
