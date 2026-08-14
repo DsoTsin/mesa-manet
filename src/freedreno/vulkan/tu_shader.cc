@@ -9,6 +9,7 @@
 
 #include "nir/nir_xfb_info.h"
 #include "spirv/nir_spirv.h"
+#include "util/blob.h"
 #include "util/macros.h"
 #include "util/mesa-blake3.h"
 #include "vk_nir.h"
@@ -3322,41 +3323,66 @@ tu_shader_init(struct tu_device *dev, const void *key_data, size_t key_size)
    return shader;
 }
 
-static bool
-tu_shader_serialize(struct vk_pipeline_cache_object *object,
-                    struct blob *blob)
-{
-   struct tu_shader *shader =
-      container_of(object, struct tu_shader, base);
+struct tu_blob_write : mesa::blob_write {
+   using mesa::blob_write::blob_write;
 
-   blob_write_bytes(blob, &shader->const_state, sizeof(shader->const_state));
-   blob_write_bytes(blob, &shader->dynamic_descriptor_sizes,
-                    sizeof(shader->dynamic_descriptor_sizes));
-   blob_write_uint32(blob, shader->view_mask);
-   blob_write_uint8(blob, shader->active_desc_sets);
-   blob_write_uint8(blob, shader->per_layer_viewport);
+   void variant(const struct ir3_shader_variant *&v)
+   {
+      ir3_store_variant(blob, v);
+   }
+};
 
-   ir3_store_variant(blob, shader->variant);
+struct tu_blob_read : mesa::blob_read {
+   struct ir3_compiler *const compiler;
 
-   if (shader->safe_const_variant) {
-      blob_write_uint8(blob, 1);
-      ir3_store_variant(blob, shader->safe_const_variant);
-   } else {
-      blob_write_uint8(blob, 0);
+   tu_blob_read(struct blob_reader *r, struct ir3_compiler *c): mesa::blob_read(r), compiler(c)
+   {
    }
 
+   void variant(const struct ir3_shader_variant *&v)
+   {
+      v = ir3_retrieve_variant(reader, compiler, NULL);
+   }
+};
 
+template <typename IO>
+static void
+tu_shader_cache_process_blob(IO &io, struct tu_shader *shader)
+{
+   io.bytes(&shader->const_state, sizeof(shader->const_state));
+   io.bytes(shader->dynamic_descriptor_sizes, sizeof(shader->dynamic_descriptor_sizes));
+   io.u32(shader->view_mask);
+   io.u8(shader->active_desc_sets);
+   io.boolean(shader->per_layer_viewport);
+
+   io.variant(shader->variant);
+
+   uint8_t has_safe_const;
+   if constexpr (IO::is_write())
+      has_safe_const = shader->safe_const_variant ? 1 : 0;
+   io.u8(has_safe_const);
+   if (has_safe_const)
+      io.variant(shader->safe_const_variant);
 
    switch (shader->variant->type) {
    case MESA_SHADER_TESS_EVAL:
-      blob_write_bytes(blob, &shader->tes, sizeof(shader->tes));
+      io.bytes(&shader->tes, sizeof(shader->tes));
       break;
    case MESA_SHADER_FRAGMENT:
-      blob_write_bytes(blob, &shader->fs, sizeof(shader->fs));
+      io.bytes(&shader->fs, sizeof(shader->fs));
       break;
    default:
       break;
    }
+}
+
+static bool
+tu_shader_serialize(struct vk_pipeline_cache_object *object, struct blob *blob)
+{
+   struct tu_shader *shader = container_of(object, struct tu_shader, base);
+
+   tu_blob_write writer { blob };
+   tu_shader_cache_process_blob(writer, shader);
 
    return true;
 }
@@ -3375,29 +3401,8 @@ tu_shader_deserialize(struct vk_pipeline_cache *cache,
    if (!shader)
       return NULL;
 
-   blob_copy_bytes(blob, &shader->const_state, sizeof(shader->const_state));
-   blob_copy_bytes(blob, &shader->dynamic_descriptor_sizes,
-                   sizeof(shader->dynamic_descriptor_sizes));
-   shader->view_mask = blob_read_uint32(blob);
-   shader->active_desc_sets = blob_read_uint8(blob);
-   shader->per_layer_viewport = blob_read_uint8(blob);
-
-   shader->variant = ir3_retrieve_variant(blob, dev->compiler, NULL);
-
-   bool has_safe_const = blob_read_uint8(blob);
-   if (has_safe_const)
-      shader->safe_const_variant = ir3_retrieve_variant(blob, dev->compiler, NULL);
-
-   switch (shader->variant->type) {
-   case MESA_SHADER_TESS_EVAL:
-      blob_copy_bytes(blob, &shader->tes, sizeof(shader->tes));
-      break;
-   case MESA_SHADER_FRAGMENT:
-      blob_copy_bytes(blob, &shader->fs, sizeof(shader->fs));
-      break;
-   default:
-      break;
-   }
+   tu_blob_read reader { blob, dev->compiler };
+   tu_shader_cache_process_blob(reader, shader);
 
    VkResult result = tu_upload_shader(dev, shader);
    if (result != VK_SUCCESS) {
