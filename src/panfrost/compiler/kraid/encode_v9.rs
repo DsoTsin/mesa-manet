@@ -251,7 +251,7 @@ fn encode_typed_src(src: &Src, src_type: DataType) -> v9::EncodedSrc {
     }
 
     v9::EncodedSrc {
-        encoded,
+        encoded: encoded.into(),
         swizzle: swizzle_widen.into(),
         abs: matches!(src.src_mod, SrcMod::FAbs | SrcMod::FNegAbs),
         neg: matches!(src.src_mod, SrcMod::FNeg | SrcMod::FNegAbs),

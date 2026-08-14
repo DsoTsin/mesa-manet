@@ -219,7 +219,7 @@ pub trait Instruction<S: EnumAsU8 + 'static, L: EnumAsU8 + 'static> {
 
 #[derive(Clone, Copy)]
 pub struct EncodedSrc<S: Copy> {
-    pub encoded: u8,
+    pub encoded: u16,
     pub swizzle: S,
     pub abs: bool,
     pub neg: bool,
@@ -300,7 +300,7 @@ pub mod v9 {
         EncodeError: From<<R::P3 as TryDecode<u8>>::Error>,
     {
         fn try_decode(
-            v: u8,
+            v: u16,
             arch: u8,
             fau_page_index: u8,
             fau32: bool,
@@ -317,22 +317,31 @@ pub mod v9 {
             let mode2 = (v >> 5) & 0b1;
             match (mode, mode2) {
                 (0b00, _) | (0b01, _) => Ok(SourceEncodingX::Register {
-                    idx: if bit0_is_zext { v & 0x3e } else { v & 0x3f },
+                    idx: if bit0_is_zext {
+                        (v & 0x3e).try_into().unwrap()
+                    } else {
+                        (v & 0x3f).try_into().unwrap()
+                    },
                     last: mode != 0,
                     zext,
                 }),
                 (0b10, _) => Ok(SourceEncodingX::Fau {
-                    idx: if bit0_is_zext { v & 0x3e } else { v & 0x3f },
+                    idx: if bit0_is_zext {
+                        (v & 0x3e).try_into().unwrap()
+                    } else {
+                        (v & 0x3f).try_into().unwrap()
+                    },
                     page: fau_page_index,
                     fau32,
                     zext,
                 }),
                 (0b11, 0b0) => {
-                    let as_enum = T::try_decode((v & 0x1f) as u8, arch)?;
+                    let as_enum =
+                        T::try_decode((v & 0x1f).try_into().unwrap(), arch)?;
                     Ok(SourceEncodingX::SmallConst(as_enum))
                 }
                 (0b11, 0b1) => {
-                    let idx32 = (v & 0x1f) >> 1;
+                    let idx32: u8 = ((v & 0x1f) >> 1).try_into().unwrap();
                     let name = R::get_name(fau_page_index, idx32, arch)?;
                     Ok(SourceEncodingX::FauSpec {
                         word_select: !IS64 && bit0,
