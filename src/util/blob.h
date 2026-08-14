@@ -436,7 +436,49 @@ char *
 blob_read_string(struct blob_reader *blob);
 
 #ifdef __cplusplus
-}
+} /* extern "C" */
+
+namespace mesa
+{
+
+struct blob_write {
+   struct blob *const blob;
+
+   blob_write(struct blob *b): blob(b) {}
+
+   static constexpr bool is_write() { return true; }
+
+   bool bytes(const void *p, size_t n) { return blob_write_bytes(blob, p, n); }
+
+   bool u8(uint8_t v)      { return blob_write_uint8(blob, v);  }
+   bool u16(uint16_t v)    { return blob_write_uint16(blob, v); }
+   bool u32(uint32_t v)    { return blob_write_uint32(blob, v); }
+   bool u64(uint64_t v)    { return blob_write_uint64(blob, v); }
+   bool intptr(intptr_t v) { return blob_write_intptr(blob, v); }
+   bool str(const char *s) { return blob_write_string(blob, s); }
+   bool boolean(bool v)    { return blob_write_uint8(blob, v);  }
+};
+
+struct blob_read {
+   struct blob_reader *const reader;
+
+   blob_read(struct blob_reader *r) : reader(r) {}
+
+   static constexpr bool is_write() { return false; }
+
+   void bytes(void *p, size_t n) { blob_copy_bytes(reader, p, n); }
+
+   void u8(uint8_t &v)        { v = blob_read_uint8(reader);  }
+   void u16(uint16_t &v)      { v = blob_read_uint16(reader); }
+   void u32(uint32_t &v)      { v = blob_read_uint32(reader); }
+   void u64(uint64_t &v)      { v = blob_read_uint64(reader); }
+   void intptr(intptr_t &v)   { v = blob_read_intptr(reader); }
+   void str(const char * &s)  { s = blob_read_string(reader); }
+   void boolean(bool &v) { v = static_cast<bool>(blob_read_uint8(reader)); }
+};
+
+} /* namespace mesa */
+
 #endif
 
 #endif /* BLOB_H */
