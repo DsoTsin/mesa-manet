@@ -452,7 +452,7 @@ pub fn model_for_gpu_id(
     let arch = u8::try_from(unsafe { pan_arch(gpu_id) }).unwrap();
     let pan_model = unsafe { pan_get_model(gpu_id, gpu_variant) };
 
-    if arch >= 15 {
+    if arch >= 16 {
         Err("Kraid does not yet support this GPU")
     } else if arch >= 9 {
         Ok(Box::new(ValhallModel::new(arch, pan_model)))
