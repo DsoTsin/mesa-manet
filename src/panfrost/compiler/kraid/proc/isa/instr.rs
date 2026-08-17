@@ -227,6 +227,7 @@ impl PhysicalField {
         xml: XmlElement,
         _arch: Range<u8>,
         enums: &EnumSet,
+        rewrite_rules: &Vec<&EnumRewriteRule>,
     ) -> Result<PhysicalField> {
         assert_eq!(xml.name.local_name, "field");
 
@@ -247,11 +248,19 @@ impl PhysicalField {
 
         let type_name = xml.attrs.get("type");
         let type_ = match type_name {
-            Some(name) => Some(FieldType::from_name(
-                name,
-                u8::try_from(bits.len()).unwrap() + mod_.extra_bits(),
-                enums,
-            )?),
+            Some(name) => {
+                let mut final_name = name.as_str();
+                for rule in rewrite_rules {
+                    if rule.orig_enum == name {
+                        final_name = rule.new_enum;
+                    }
+                }
+                Some(FieldType::from_name(
+                    final_name,
+                    u8::try_from(bits.len()).unwrap() + mod_.extra_bits(),
+                    enums,
+                )?)
+            }
             None => None,
         };
 
@@ -614,11 +623,26 @@ impl Instr {
             syntax: Default::default(),
         };
 
+        let mut instr_rewrite_rules = Vec::new();
+        let arch_set: ArchSet = i.arch.clone().into();
+        for rule in ENUM_REWRITE_RULES {
+            if rule.instr.contains(&i.name.as_str())
+                && arch_set.contains_range(rule.arch.clone())
+            {
+                instr_rewrite_rules.push(rule);
+            }
+        }
+
         for child in xml.children.into_iter() {
             let arch = i.arch.clone();
             match child.name.local_name.as_str() {
                 "field" => {
-                    let f = PhysicalField::from_xml(child, arch, enums)?;
+                    let f = PhysicalField::from_xml(
+                        child,
+                        arch,
+                        enums,
+                        &instr_rewrite_rules,
+                    )?;
                     i.total_bits = i.total_bits.max(f.bits.end);
                     i.fields.push(InstrField::Physical(f));
                 }
