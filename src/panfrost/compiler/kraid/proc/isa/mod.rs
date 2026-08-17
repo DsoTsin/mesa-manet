@@ -211,6 +211,15 @@ impl std::ops::BitOrAssign<ArchSet> for ArchSet {
     }
 }
 
+struct EnumRewriteRule {
+    arch: Range<u8>,
+    instr: &'static [&'static str],
+    orig_enum: &'static str,
+    new_enum: &'static str,
+}
+
+const ENUM_REWRITE_RULES: &[EnumRewriteRule] = &[];
+
 pub struct ISA {
     pub arch: Range<u8>,
     pub enums: EnumSet,

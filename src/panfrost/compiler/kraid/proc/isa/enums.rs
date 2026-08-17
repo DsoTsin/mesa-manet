@@ -10,6 +10,7 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet, btree_map};
 use std::rc::{Rc, Weak};
 
+#[derive(Clone)]
 pub struct EnumValue {
     pub name: String,
     pub ident: Ident,
@@ -124,6 +125,33 @@ impl Enum {
         }
 
         Ok(e)
+    }
+
+    fn alias(&self, rule: &EnumRewriteRule) -> Enum {
+        assert!(self.meta.get().is_none());
+        assert_eq!(self.name, rule.orig_enum);
+        assert!(self.arch.contains_range(rule.arch.clone()));
+
+        let new_name = rule.new_enum.to_string();
+        let new_camel_name = to_camel_case(&new_name);
+        let ident = Ident::new(&new_camel_name, Span::call_site());
+
+        let mut ne = Enum {
+            name: new_name,
+            ident,
+            arch: rule.arch.clone().into(),
+            has_none: self.has_none,
+            is_bool: self.is_bool,
+            is_data_type: self.is_data_type,
+            values: Default::default(),
+            meta: Default::default(),
+        };
+
+        for (name, value) in self.values.iter() {
+            ne.values.insert(name.clone(), value.clone());
+        }
+
+        ne
     }
 
     fn merge(&mut self, other: Enum) {
@@ -810,6 +838,16 @@ impl EnumSet {
         let e = Enum::from_xml(xml, arch)?;
         if !e.arch.is_empty() {
             use std::collections::btree_map::Entry;
+            let mut e_alias: Option<Enum> = None;
+            for rule in ENUM_REWRITE_RULES {
+                if e.name == rule.orig_enum
+                    && e.arch.contains_range(rule.arch.clone())
+                {
+                    assert!(e_alias.is_none());
+                    e_alias = Some(e.alias(rule));
+                }
+            }
+
             match self.enums.entry(e.name.clone()) {
                 Entry::Vacant(entry) => {
                     entry.insert(Rc::new(e));
@@ -819,6 +857,18 @@ impl EnumSet {
                         .ok_or("Meta enums must be added last")?
                         .merge(e);
                 }
+            }
+
+            match e_alias {
+                Some(ne) => match self.enums.entry(ne.name.clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(Rc::new(ne));
+                    }
+                    Entry::Occupied(_) => {
+                        panic!("Enum aliases should never be added twice")
+                    }
+                },
+                _ => {}
             }
         }
         Ok(())
