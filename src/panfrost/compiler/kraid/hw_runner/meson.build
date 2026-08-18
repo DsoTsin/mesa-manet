@@ -45,7 +45,7 @@ _libkraid_hw_runner_bindings_rs = static_library(
 )
 
 _hw_runner_per_arch_libs = []
-foreach ver : ['10', '12', '13']
+foreach ver : ['10', '12', '13', '14', '15']
   _hw_runner_per_arch_libs += static_library(
     'kraid_hw_runner_c_v' + ver,
     files('hw_runner_vX.c'),
