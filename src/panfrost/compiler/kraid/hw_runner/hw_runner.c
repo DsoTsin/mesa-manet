@@ -18,6 +18,8 @@ hw_runner_new_cmd_stream(struct pan_kmod_dev *kdev,
    case 10: hw_runner_new_cmd_stream_v10(kdev, info, out); break;
    case 12: hw_runner_new_cmd_stream_v12(kdev, info, out); break;
    case 13: hw_runner_new_cmd_stream_v13(kdev, info, out); break;
+   case 14: hw_runner_new_cmd_stream_v14(kdev, info, out); break;
+   case 15: hw_runner_new_cmd_stream_v15(kdev, info, out); break;
    default: UNREACHABLE("Unsupported architecture");
    }
 }

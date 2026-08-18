@@ -39,6 +39,7 @@ struct hw_runner_cmdstream_info {
    uint8_t fau_count;
 
    uint64_t shader_program_descriptor_device_ptr;
+   uint8_t register_count;
 
    uint64_t thread_storage_descriptor_device_ptr;
 };
@@ -91,8 +92,18 @@ hw_runner_fill_cmd_stream(struct pan_kmod_dev *dev,
    cs_move64_to(b, cs_sr_reg64(b, COMPUTE, FAU_0), fau);
 
    assert((info->shader_program_descriptor_device_ptr & BITFIELD64_MASK(5)) == 0);
+#if PAN_ARCH >= 15
+   struct mali_shader_program_pointer_packed spp;
+   pan_pack(&spp, SHADER_PROGRAM_POINTER, ctx) {
+      ctx.register_count = MAX2(info->register_count, 16);
+      ctx.pointer = info->shader_program_descriptor_device_ptr;
+   }
+   uint64_t ptr = ((uint64_t)spp.opaque[1] << 32) | spp.opaque[0];
+   cs_move64_to(b, cs_sr_reg64(b, COMPUTE, SPD_0), ptr);
+#else
    cs_move64_to(b, cs_sr_reg64(b, COMPUTE, SPD_0),
                 info->shader_program_descriptor_device_ptr);
+#endif
 
    assert((info->thread_storage_descriptor_device_ptr & BITFIELD64_MASK(6)) == 0);
    cs_move64_to(b, cs_sr_reg64(b, COMPUTE, TSD_0),
@@ -226,16 +237,22 @@ GENX(hw_runner_new_cmd_stream)(struct pan_kmod_dev *kdev,
    struct mali_shader_program_packed *spd_packed = descr_ptr + spd_offset;
    pan_pack(spd_packed, SHADER_PROGRAM, spd) {
       spd.stage = MALI_SHADER_STAGE_COMPUTE;
+      assert(info->register_count <= 64);
+#if PAN_ARCH >= 15
+      spd.register_count = MAX2(info->register_count, 16);
+      spd.preload.r0_r15 = info->register_preload;
+#else
       assert((info->register_preload & ((1ull << 48) - 1)) == 0);
       spd.preload.r48_r63 = info->register_preload >> 48;
+      spd.register_allocation =
+         info->register_count <= 32
+            ? MALI_SHADER_REGISTER_ALLOCATION_32_PER_THREAD
+            : MALI_SHADER_REGISTER_ALLOCATION_64_PER_THREAD;
+#endif
       spd.suppress_nan = false;
       spd.flush_to_zero_mode = MALI_FLUSH_TO_ZERO_MODE_PRESERVE_SUBNORMALS;
       spd.suppress_inf = false;
       spd.shader_contains_jump_ex = false;
-      assert(info->register_count <= 64);
-      spd.register_allocation = info->register_count <= 32 ?
-         MALI_SHADER_REGISTER_ALLOCATION_32_PER_THREAD :
-         MALI_SHADER_REGISTER_ALLOCATION_64_PER_THREAD;
 #if PAN_ARCH >= 12
       spd.max_warps = 1;
 #endif
@@ -282,6 +299,7 @@ GENX(hw_runner_new_cmd_stream)(struct pan_kmod_dev *kdev,
       .fau_device_ptr = fau_device_ptr,
       .fau_count = (info->fau_size_B / 4),
       .shader_program_descriptor_device_ptr = info->descr_bo_device_ptr + spd_offset,
+      .register_count = info->register_count,
       .thread_storage_descriptor_device_ptr = info->descr_bo_device_ptr + tsd_offset,
    };
 
