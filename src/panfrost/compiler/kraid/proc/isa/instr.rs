@@ -134,6 +134,8 @@ impl VirtualField {
 
         let restrict = if let Some(res_attr) = xml.attrs.get("restrict") {
             Some(FieldRestrict::from_xml_attr(res_attr, Some(&type_))?)
+        } else if let Some(exact_attr) = xml.attrs.get("exact") {
+            Some(FieldRestrict::from_xml_attr(exact_attr, Some(&type_))?)
         } else {
             None
         };

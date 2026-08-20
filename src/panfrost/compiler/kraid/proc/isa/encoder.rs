@@ -1000,12 +1000,7 @@ impl InstrEncVariant {
                 InstrField::Virtual(f) => {
                     // Virtual fields are always sources since they're used to
                     // calculate computed physical fields.
-                    let mut restrict = f.restrict.clone();
-                    if let Some(lit) = f.expr.as_enum() {
-                        restrict = Some(Rc::new(FieldRestrict {
-                            values: vec![lit.clone()],
-                        }));
-                    }
+                    let restrict = f.restrict.clone();
                     (&f.name, &f.type_, restrict)
                 }
                 InstrField::Physical(f) => {
