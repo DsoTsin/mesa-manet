@@ -11,9 +11,9 @@ fn main() {
     args.remove(0);
 
     let ts =
-        kraid_proc::isa::encoder::gen_encoder(args.clone(), 9..15).unwrap();
+        kraid_proc::isa::encoder::gen_encoder(args.clone(), 9..16).unwrap();
     println!("{ts}");
 
-    let ts = kraid_proc::isa::decoder::gen_decoder(args, 9..15).unwrap();
+    let ts = kraid_proc::isa::decoder::gen_decoder(args, 9..16).unwrap();
     println!("{ts}");
 }
