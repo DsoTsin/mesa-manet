@@ -1,4 +1,5 @@
 // Copyright © 2026 Collabora, Ltd.
+// Copyright © 2026 Arm, Ltd.
 // SPDX-License-Identifier: MIT
 
 use crate::data_type::*;
@@ -150,11 +151,11 @@ impl V9Encoder<'_> {
         bits
     }
 
-    fn get_msg_slot_idx(&self) -> Option<MessageSlotIndexM> {
+    fn get_msg_slot_idx(&self) -> Option<MessageSlotIndex> {
         self.instr.flow.get_msg_slot_idx().map(|idx| match idx {
-            0 => MessageSlotIndexM::Slot0,
-            1 => MessageSlotIndexM::Slot1,
-            2 => MessageSlotIndexM::Slot2,
+            0 => MessageSlotIndex::Slot0,
+            1 => MessageSlotIndex::Slot1,
+            2 => MessageSlotIndex::Slot2,
             _ => panic!("Invalid message slot index"),
         })
     }
@@ -603,7 +604,7 @@ impl V9Instr for OpATest {
     }
 
     fn encode(&self, e: V9Encoder) -> EncodedInstr {
-        assert!(e.get_msg_slot_idx() == Some(MessageSlotIndexM::Slot0));
+        assert!(e.get_msg_slot_idx() == Some(MessageSlotIndex::Slot0));
         assert_eq!(self.coverage.src_ref.as_reg().unwrap().idx, 60);
         assert_eq!(self.dst.dst_ref.as_reg().unwrap().idx, 60);
         e.encode(Atest {
@@ -1507,7 +1508,7 @@ impl V9Instr for OpFmaRScale {
             src1: op_encode_src(self, &self.srcs[1]),
             src2: op_encode_src(self, &self.srcs[2]),
             src3: op_encode_src(self, &self.scale),
-            special: FmaRscaleSpecial32M::None,
+            special: FmaRscaleSpecial::None,
             clamp: self.clamp.into(),
             round: self.round.into(),
         })

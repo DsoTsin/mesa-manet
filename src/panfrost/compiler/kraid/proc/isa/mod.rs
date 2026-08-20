@@ -218,7 +218,20 @@ struct EnumRewriteRule {
     new_enum: &'static str,
 }
 
-const ENUM_REWRITE_RULES: &[EnumRewriteRule] = &[];
+const ENUM_REWRITE_RULES: &[EnumRewriteRule] = &[
+    EnumRewriteRule {
+        arch: 15..16,
+        instr: &["LD_PKA", "LOAD"],
+        orig_enum: "lane8_m",
+        new_enum: "dst_lane8_m",
+    },
+    EnumRewriteRule {
+        arch: 15..16,
+        instr: &["LD_PKA", "LOAD"],
+        orig_enum: "lane16_m",
+        new_enum: "dst_lane16_m",
+    },
+];
 
 pub struct ISA {
     pub arch: Range<u8>,

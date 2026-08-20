@@ -1,4 +1,5 @@
 // Copyright © 2026 Collabora, Ltd.
+// Copyright © 2026 Arm, Ltd.
 // SPDX-License-Identifier: MIT
 
 use crate::ident;
@@ -41,6 +42,8 @@ const DST_LANES_ENUMS: &[&'static str] = &[
     "dest_width_narrow_m",
     "dest_width_replicate_m",
     "dest_width_single_lane_16_bit_m",
+    "dst_lane8_m",
+    "dst_lane16_m",
     "lane_all_m",
     "load_lane_16_m",
     "load_lane_32_m",
@@ -67,26 +70,102 @@ impl SrControl {
 fn get_instr_sr_control(instr: &Instr) -> SrControl {
     if instr.name.starts_with("TEX_") {
         // Texture instructions don't actually have a sr_control fields but
-        // we knoa a priori that they're ReadWrite.
+        // we know a priori that they're ReadWrite.
         return SrControl::ReadWrite;
     }
 
-    for f in &instr.fields {
-        let InstrField::Physical(f) = f else {
-            continue;
-        };
+    if instr.arch.start >= 15 {
+        for f in &instr.fields {
+            let InstrField::Physical(f) = f else {
+                continue;
+            };
 
-        if !f.type_.as_ref().is_some_and(|t| t.is_enum("sr_control_t")) {
-            continue;
+            if !f.type_.as_ref().is_some_and(|t| {
+                t.is_enum("instruction_msg_sr_control_t")
+                    || t.is_enum(
+                        "instruction_msg_operands3_or_var_tex_sr_control_t",
+                    )
+            }) {
+                continue;
+            }
+
+            let lit = f.expr.as_ref().unwrap().as_enum().unwrap();
+            return match lit.value_name.as_str() {
+                "write" => SrControl::Write,
+                "read_or_read_write" => {
+                    for f2 in &instr.fields {
+                        let InstrField::Physical(f2) = f2 else {
+                            continue;
+                        };
+
+                        if !f2.type_.as_ref().is_some_and(|t| {
+                            t.is_enum("instruction_msg_sr_control2_t")
+                        }) {
+                            continue;
+                        }
+
+                        let lit2 = f2.expr.as_ref().unwrap().as_enum().unwrap();
+                        return match lit2.value_name.as_str() {
+                            "read" => SrControl::Read,
+                            "read_write" => SrControl::ReadWrite,
+                            _ => panic!(
+                                "Unknown instruction_msg_sr_control2_t value"
+                            ),
+                        };
+                    }
+                    panic!(
+                        "read_or_read_write without instruction_msg_sr_control2_t"
+                    );
+                }
+                "read_or_write_var_tex" => {
+                    for f2 in &instr.fields {
+                        let InstrField::Physical(f2) = f2 else {
+                            continue;
+                        };
+
+                        if !f2.type_.as_ref().is_some_and(|t| {
+                            t.is_enum("instruction_msg_operands3_or_var_tex_sr_control2_t")
+                        }) {
+                            continue;
+                        }
+
+                        let lit2 = f2.expr.as_ref().unwrap().as_enum().unwrap();
+                        return match lit2.value_name.as_str() {
+                            "read" => SrControl::Read,
+                            "write_var_tex" => SrControl::Write,
+                            _ => panic!(
+                                "Unknown instruction_msg_operands3_or_var_tex_sr_control2_t value"
+                            ),
+                        };
+                    }
+                    panic!(
+                        "read_or_write_var_tex without instruction_msg_operands3_or_var_tex_sr_control2_t"
+                    );
+                }
+                _ => panic!(
+                    "Unknown instruction_msg_sr_control_t/instruction_msg_operands3_or_var_tex_sr_control_t value"
+                ),
+            };
         }
+    } else {
+        assert!(instr.arch.end <= 15);
+        for f in &instr.fields {
+            let InstrField::Physical(f) = f else {
+                continue;
+            };
 
-        let lit = f.expr.as_ref().unwrap().as_enum().unwrap();
-        return match lit.value_name.as_str() {
-            "read" => SrControl::Read,
-            "write" => SrControl::Write,
-            "read_write" => SrControl::ReadWrite,
-            _ => panic!("Unknown sr_control_t value"),
-        };
+            if !f.type_.as_ref().is_some_and(|t| t.is_enum("sr_control_t")) {
+                continue;
+            }
+
+            let lit = f.expr.as_ref().unwrap().as_enum().unwrap();
+            return match lit.value_name.as_str() {
+                "read" => SrControl::Read,
+                "write" => SrControl::Write,
+                "read_write" => SrControl::ReadWrite,
+                _ => panic!("Unknown sr_control_t value"),
+            };
+        }
     }
 
     SrControl::None
@@ -1453,6 +1532,7 @@ pub fn gen_encoder(
                 "ldexp_round_m",
                 "hadd_round_m",
                 "fma_rscale_round_m",
+                "fma_rscale_32_round_m",
             ],
             [],
         )
@@ -1477,6 +1557,22 @@ pub fn gen_encoder(
             [],
         )
         .expect("Failed to create sample_position meta-enum");
+
+    isa.enums
+        .add_meta_enum(
+            "message_slot_index",
+            ["message_slot_index_m", "message_slot_narrow_index_m"],
+            [],
+        )
+        .expect("Failed to create slot_index meta-enum");
+
+    isa.enums
+        .add_meta_enum(
+            "fma_rscale_special",
+            ["fma_rscale_special_m", "fma_rscale_special_32_m"],
+            [],
+        )
+        .expect("Failed to create rscale_special meta-enum");
 
     isa.enums.declare(&mut ts, true);
 
