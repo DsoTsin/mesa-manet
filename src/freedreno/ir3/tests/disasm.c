@@ -335,7 +335,10 @@ static const struct test {
 
    /* dEQP-VK.compute.basic.shared_var_single_group */
    INSTR_6XX(c1060500_01800008, "stl.u32 l[r0.z], r1.x, 1"),
+   /* Same, with a 16b type: the data register is a half register. */
+   INSTR_6XX(c1040500_01800008, "stl.u16 l[r0.z], hr1.x, 1"),
    INSTR_6XX(c0460001_01804001, "ldl.u32 r0.y, l[r0.y], 1"),
+   INSTR_6XX(c0440001_01804001, "ldl.u16 hr0.y, l[r0.y], 1"),
 
    INSTR_6XX(c0860018_03820001, "ldp.u32 r6.x, p[r2.x], 3"),
    INSTR_6XX(c0420002_01808019, "ldl.f32 r0.z, l[r0.z+12], 1"),
@@ -456,6 +459,7 @@ static const struct test {
    INSTR_6XX(c1425b50_01803e02, "stp.f32 p[r11.y-176], r0.y, 1"),
    INSTR_6XX(c1425b98_02803e14, "stp.f32 p[r11.y-104], r2.z, 2"),
    INSTR_6XX(c1465ba0_01803e2a, "stp.u32 p[r11.y-96], r5.y, 1"),
+   INSTR_6XX(c1445ba0_01803e2a, "stp.u16 p[r11.y-96], hr5.y, 1"),
    INSTR_6XX(c0860008_01860001, "ldp.u32 r2.x, p[r6.x], 1"),
    /* Custom stp based on above to catch a disasm bug. */
    INSTR_6XX(c1465b00_0180022a, "stp.u32 p[r11.y+256], r5.y, 1"),

@@ -415,7 +415,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		LoaD Local
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} {DST}, l[{SRC}{OFF}], {SIZE}
+		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, l[{SRC}{OFF}], {SIZE}
 	</display>
 	<pattern low="54" high="58">00001</pattern>  <!-- OPC -->
 </bitset>
@@ -435,7 +435,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		LoaD Local (variant used for passing data between geom stages)
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} {DST}, l[{SRC}{OFF}], {SIZE}
+		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, l[{SRC}{OFF}], {SIZE}
 	</display>
 	<pattern low="54" high="58">01010</pattern>  <!-- OPC -->
 </bitset>
@@ -445,7 +445,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		LoaD Local Varying - read directly from varying storage
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} {DST}, l[{OFF}], {SIZE}
+		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, l[{OFF}], {SIZE}
 	</display>
 	<pattern pos="0"           >0</pattern>
 	<field   low="1"  high="13" name="OFF" type="uint"/>
@@ -495,7 +495,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		STore Local
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {SRC}, {SIZE}
+		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {TYPE_HALF}{SRC}, {SIZE}
 	</display>
 	<pattern pos="0"           >x</pattern>
 	<pattern low="54" high="58">00100</pattern>  <!-- OPC -->
@@ -506,7 +506,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		STore Private
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} p[{DST}{OFF}], {SRC}, {SIZE}
+		{SY}{JP}{NAME}.{TYPE} p[{DST}{OFF}], {TYPE_HALF}{SRC}, {SIZE}
 	</display>
 	<pattern pos="0"           >0</pattern>  <!-- SRC_OFF -->
 	<pattern low="54" high="58">00101</pattern>  <!-- OPC -->
@@ -517,7 +517,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		STore Local (variant used for passing data between geom stages)
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {SRC}, {SIZE}
+		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {TYPE_HALF}{SRC}, {SIZE}
 	</display>
 	<pattern pos="0"           >x</pattern>
 	<pattern low="54" high="58">01011</pattern>  <!-- OPC -->
