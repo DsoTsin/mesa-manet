@@ -133,6 +133,8 @@ void vk_android_get_ahb_buffer_properties(
 bool vk_android_rp_attachment_has_external_format(
    const VkAttachmentDescription2 *desc);
 
+VkFormat vk_android_get_external_format(const void *pnext);
+
 #else /* defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26 */
 
 static inline uint64_t
@@ -192,11 +194,17 @@ vk_android_get_ahb_buffer_properties(
 {
 }
 
-static bool
+static inline bool
 vk_android_rp_attachment_has_external_format(
    const VkAttachmentDescription2 *desc)
 {
    return false;
+}
+
+static inline VkFormat
+vk_android_get_external_format(const void *pnext)
+{
+   return VK_FORMAT_UNDEFINED;
 }
 
 #endif /* ANDROID_API_LEVEL >= 26 */
