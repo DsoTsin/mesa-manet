@@ -1336,14 +1336,20 @@ vk_android_get_ahb_buffer_properties(
    };
 }
 
-bool vk_android_rp_attachment_has_external_format(
+bool
+vk_android_rp_attachment_has_external_format(
    const VkAttachmentDescription2 *desc)
 {
-   const VkExternalFormatANDROID *format_info =
-      vk_find_struct_const(desc->pNext,
-                           EXTERNAL_FORMAT_ANDROID);
-   return (desc->format == VK_FORMAT_UNDEFINED) &&
-          (format_info != NULL);
+   return desc->format == VK_FORMAT_UNDEFINED &&
+          vk_android_get_external_format(desc->pNext) != VK_FORMAT_UNDEFINED;
+}
+
+VkFormat
+vk_android_get_external_format(const void *pnext)
+{
+   const VkExternalFormatANDROID *info =
+      vk_find_struct_const(pnext, EXTERNAL_FORMAT_ANDROID);
+   return info ? (VkFormat)info->externalFormat : VK_FORMAT_UNDEFINED;
 }
 
 #endif /* ANDROID_API_LEVEL >= 26 */

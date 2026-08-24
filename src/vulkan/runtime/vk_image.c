@@ -135,13 +135,13 @@ vk_image_init(struct vk_device *device,
       image->android_buffer_type = ANDROID_BUFFER_NATIVE_ALIAS;
    }
 
-   const VkExternalFormatANDROID *ext_format =
-      vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_FORMAT_ANDROID);
-   if (ext_format && ext_format->externalFormat != 0) {
+   const VkFormat external_format =
+      vk_android_get_external_format(pCreateInfo->pNext);
+   if (external_format != VK_FORMAT_UNDEFINED) {
       assert(image->format == VK_FORMAT_UNDEFINED);
       assert(image->external_handle_types &
              VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID);
-      vk_image_set_format(image, (VkFormat)ext_format->externalFormat);
+      vk_image_set_format(image, external_format);
    }
 
    image->ahb_format = vk_image_format_to_ahb_format(image->format);

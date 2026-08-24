@@ -25,6 +25,7 @@
 
 #include <vulkan/vulkan_android.h>
 
+#include "vk_android.h"
 #include "vk_common_entrypoints.h"
 #include "vk_device.h"
 #include "vk_format.h"
@@ -52,14 +53,11 @@ vk_common_CreateSamplerYcbcrConversion(VkDevice _device,
    state->ycbcr_model = pCreateInfo->ycbcrModel;
    state->ycbcr_range = pCreateInfo->ycbcrRange;
 
-   /* Search for VkExternalFormatANDROID and resolve the format. */
-   const VkExternalFormatANDROID *android_ext_info =
-      vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_FORMAT_ANDROID);
-
-   /* We assume that Android externalFormat is just a VkFormat */
-   if (android_ext_info && android_ext_info->externalFormat) {
+   const VkFormat external_format =
+      vk_android_get_external_format(pCreateInfo->pNext);
+   if (external_format != VK_FORMAT_UNDEFINED) {
       assert(pCreateInfo->format == VK_FORMAT_UNDEFINED);
-      state->format = android_ext_info->externalFormat;
+      state->format = external_format;
    } else {
       /* The Vulkan 1.1.95 spec says:
        *
