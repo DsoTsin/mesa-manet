@@ -1381,7 +1381,9 @@ union packed_tex_data {
       unsigned array_is_lowered_cube : 1;
       unsigned is_gather_implicit_lod : 1;
       unsigned can_speculate : 1;
-      unsigned unused : 1; /* Mark unused for valgrind. */
+      unsigned input_attachment_index : 1;
+      unsigned input_attachment_depth : 1;
+      unsigned input_attachment_stencil : 1;
    } u;
 };
 
@@ -1401,6 +1403,7 @@ write_tex(write_ctx *ctx, const nir_tex_instr *tex)
    write_def(ctx, &tex->def, header, tex->instr.type);
 
    blob_write_uint32(ctx->blob, tex->texture_index);
+   blob_write_uint32(ctx->blob, tex->texture_array_size);
    blob_write_uint32(ctx->blob, tex->sampler_index);
    blob_write_uint32(ctx->blob, tex->backend_flags);
    if (tex->op == nir_texop_tg4)
@@ -1424,6 +1427,9 @@ write_tex(write_ctx *ctx, const nir_tex_instr *tex)
       .u.array_is_lowered_cube = tex->array_is_lowered_cube,
       .u.is_gather_implicit_lod = tex->is_gather_implicit_lod,
       .u.can_speculate = tex->can_speculate,
+      .u.input_attachment_index = tex->input_attachment_index,
+      .u.input_attachment_depth = tex->input_attachment_depth,
+      .u.input_attachment_stencil = tex->input_attachment_stencil,
    };
    blob_write_uint32(ctx->blob, packed.u32);
 
@@ -1444,6 +1450,7 @@ read_tex(read_ctx *ctx, union packed_instr header)
 
    tex->op = header.tex.op;
    tex->texture_index = blob_read_uint32(ctx->blob);
+   tex->texture_array_size = blob_read_uint32(ctx->blob);
    tex->sampler_index = blob_read_uint32(ctx->blob);
    tex->backend_flags = blob_read_uint32(ctx->blob);
    if (tex->op == nir_texop_tg4)
@@ -1467,6 +1474,9 @@ read_tex(read_ctx *ctx, union packed_instr header)
    tex->array_is_lowered_cube = packed.u.array_is_lowered_cube;
    tex->is_gather_implicit_lod = packed.u.is_gather_implicit_lod;
    tex->can_speculate = packed.u.can_speculate;
+   tex->input_attachment_index = packed.u.input_attachment_index;
+   tex->input_attachment_depth = packed.u.input_attachment_depth;
+   tex->input_attachment_stencil = packed.u.input_attachment_stencil;
 
    for (unsigned i = 0; i < tex->num_srcs; i++) {
       union packed_src src = read_src(ctx, &tex->src[i].src);

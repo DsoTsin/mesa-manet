@@ -2849,12 +2849,34 @@ typedef struct nir_tex_instr {
     */
    bool can_speculate;
 
+   /** True if this instruction is fetching from an input attachment with an
+    * index. If true, texture_index is the base input attachment offset,
+    * texture_offset is the offset in the array if any, and texture_array_size
+    * is the bound for texture_offset.
+    */
+   bool input_attachment_index;
+
+   /** True if this instruction is fetching from a depth input attachment. */
+   bool input_attachment_depth;
+
+   /** True if this instruction is fetching from a stencil input attachment. */
+   bool input_attachment_stencil;
+
    /** The texture index
     *
     * If this texture instruction has a nir_tex_src_texture_offset source,
     * then the texture index is given by texture_index + texture_offset.
     */
    unsigned texture_index;
+
+   /** The size of the texture array.
+    *
+    * If there is a texture_offset source, this is maximum value it can have,
+    * plus one. Otherwise 0.
+    *
+    * Currently only used for input attachments.
+    */
+   unsigned texture_array_size;
 
    /** The sampler index
     *

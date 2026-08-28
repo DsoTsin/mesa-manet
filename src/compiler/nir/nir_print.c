@@ -2187,8 +2187,22 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       fprintf(fp, " } (offsets)");
    }
 
-   if (instr->op != nir_texop_txf_ms_fb && !has_texture_deref) {
+   if (instr->op != nir_texop_txf_ms_fb &&
+       (!has_texture_deref || instr->input_attachment_index)) {
       fprintf(fp, ", %u (texture)", instr->texture_index);
+   }
+
+   if (instr->input_attachment_index) {
+      fprintf(fp, ", %u (texture array size), input attachment",
+              instr->texture_array_size);
+   }
+
+   if (instr->input_attachment_depth) {
+      fprintf(fp, ", input attachment depth");
+   }
+
+   if (instr->input_attachment_stencil) {
+      fprintf(fp, ", input attachment stencil");
    }
 
    if (nir_tex_instr_need_sampler(instr) && !has_sampler_deref) {
