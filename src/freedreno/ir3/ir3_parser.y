@@ -1053,6 +1053,9 @@ cat6_store:        T_OP_STG   { new_instr(OPC_STG); dummy_dst(); }   cat6_type '
 |                  T_OP_STL  { new_instr(OPC_STL); dummy_dst(); }  cat6_type 'l' '[' src cat6_dst_offset ']' ',' src ',' immediate
 |                  T_OP_STLW { new_instr(OPC_STLW); dummy_dst(); } cat6_type 'l' '[' src cat6_dst_offset ']' ',' src ',' immediate
 
+cat6_blockcopy:    T_OP_G2L { new_instr(OPC_G2L); dummy_dst(); } cat6_type 'l' '[' src ']' ',' 'g' '[' src ']' ',' immediate
+|                  T_OP_L2G { new_instr(OPC_L2G); dummy_dst(); } cat6_type 'g' '[' src ']' ',' 'l' '[' src ']' ',' immediate
+
 cat6_loadib:       T_OP_LDIB { new_instr(OPC_LDIB); } cat6_typed cat6_dim cat6_type '.' cat6_immed dst_reg ',' 'g' '[' immediate ']' ',' src ',' src
 cat6_storeib:      T_OP_STIB { new_instr(OPC_STIB); dummy_dst(); } cat6_typed cat6_dim cat6_type '.' cat6_immed'g' '[' immediate ']' ',' src ',' src ',' src
 
@@ -1201,6 +1204,7 @@ cat6_todo:         T_OP_G2L                 { new_instr(OPC_G2L); }
 |                  T_OP_RESFMT              { new_instr(OPC_RESFMT); }
 
 cat6_instr:        cat6_load
+|                  cat6_blockcopy
 |                  cat6_loadib
 |                  cat6_store
 |                  cat6_storeib

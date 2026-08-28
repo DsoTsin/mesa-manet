@@ -461,6 +461,12 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 	<pattern pos="40"          >1</pattern>
 	<field   low="41" high="48" name="DST" type="#reg-gpr"/>
 	<pattern low="52" high="53">00</pattern>
+
+	<encode>
+		<map name="DST">src->srcs[0]</map>
+		<map name="SRC">src->srcs[1]</map>
+		<map name="SIZE">extract_reg_uim(src->srcs[2])</map>
+	</encode>
 </bitset>
 
 <bitset name="g2l" extends="#instruction-cat6-a3xx-blockcopy">
