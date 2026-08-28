@@ -440,6 +440,51 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 	<pattern low="54" high="58">01010</pattern>  <!-- OPC -->
 </bitset>
 
+<bitset name="#instruction-cat6-a3xx-blockcopy" extends="#instruction-cat6-a3xx">
+	<gen max="599"/>
+	<doc>
+		A block copy between global memory and local (LDS), which the vendor
+		compiler emits for async_work_group_copy.  SIZE is a byte count and
+		the hardware takes 1, 2, 4, 8 or 16 of them; a longer copy is a loop
+		of 16 byte steps and a tail of the remaining powers of two.  The
+		global side names the first register of an address pair, the local
+		side a single address register.
+	</doc>
+
+	<pattern pos="0"           >1</pattern>
+	<pattern low="1"  high="13">0000000000000</pattern>
+	<field   low="14" high="21" name="SRC" type="#reg-gpr"/>
+	<pattern pos="22"          >0</pattern>
+	<pattern pos="23"          >1</pattern>
+	<field   low="24" high="31" name="SIZE" type="uint"/>
+	<pattern low="32" high="39">00000000</pattern>
+	<pattern pos="40"          >1</pattern>
+	<field   low="41" high="48" name="DST" type="#reg-gpr"/>
+	<pattern low="52" high="53">00</pattern>
+</bitset>
+
+<bitset name="g2l" extends="#instruction-cat6-a3xx-blockcopy">
+	<doc>
+		Global to Local: copy SIZE bytes from the global address in the
+		register pair SRC into local memory at DST.
+	</doc>
+	<display>
+		{SY}{JP}{NAME}.{TYPE} l[{DST}], g[{SRC}], {SIZE}
+	</display>
+	<pattern low="54" high="58">00111</pattern>  <!-- OPC -->
+</bitset>
+
+<bitset name="l2g" extends="#instruction-cat6-a3xx-blockcopy">
+	<doc>
+		Local to Global: copy SIZE bytes from local memory at SRC to the
+		global address in the register pair DST.
+	</doc>
+	<display>
+		{SY}{JP}{NAME}.{TYPE} g[{DST}], l[{SRC}], {SIZE}
+	</display>
+	<pattern low="54" high="58">01000</pattern>  <!-- OPC -->
+</bitset>
+
 <bitset name="ldlv" extends="#instruction-cat6-a3xx">
 	<doc>
 		LoaD Local Varying - read directly from varying storage
