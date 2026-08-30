@@ -109,6 +109,8 @@ VkFormat vk_ahb_format_to_image_format(uint32_t ahb_format);
 
 uint32_t vk_image_format_to_ahb_format(VkFormat vk_format);
 
+VkFormat vk_external_format_to_efr_format(VkFormat external_format);
+
 uint64_t vk_image_usage_to_ahb_usage(const VkImageCreateFlags2KHR vk_create,
                                      const VkImageUsageFlags2KHR vk_usage);
 
@@ -153,6 +155,12 @@ static inline uint32_t
 vk_image_format_to_ahb_format(VkFormat vk_format)
 {
    return 0;
+}
+
+static inline VkFormat
+vk_external_format_to_efr_format(VkFormat external_format)
+{
+   return VK_FORMAT_UNDEFINED;
 }
 
 static inline uint64_t

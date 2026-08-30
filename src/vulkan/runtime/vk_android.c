@@ -793,6 +793,27 @@ vk_image_format_to_ahb_format(VkFormat vk_format)
    }
 }
 
+VkFormat
+vk_external_format_to_efr_format(VkFormat external_format)
+{
+   /* passthrough for RGB formats */
+   if (!vk_format_get_ycbcr_info(external_format))
+      return external_format;
+
+   switch (external_format) {
+   case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+   case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+      return VK_FORMAT_R8G8B8A8_UNORM;
+   case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16:
+      return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+   default:
+      break;
+   }
+
+   /* no support beyond the potentially required YUV formats */
+   return VK_FORMAT_UNDEFINED;
+}
+
 /* Construct ahw usage mask from image usage bits, see
  * 'AHardwareBuffer Usage Equivalence' in Vulkan spec.
  */
@@ -1205,20 +1226,15 @@ vk_common_GetAndroidHardwareBufferPropertiesANDROID(
    }
 
    if (format_resolve) {
-      if (device->enabled_extensions.ANDROID_external_format_resolve) {
-         assert(format_prop2->externalFormat != VK_FORMAT_UNDEFINED);
-         const uint32_t num_bits = vk_format_get_component_bits(
-            format_prop2->externalFormat, UTIL_FORMAT_COLORSPACE_RGB, 1);
-         format_resolve->colorAttachmentFormat =
-            num_bits == 8 ? VK_FORMAT_R8G8B8A8_UNORM
-                          : VK_FORMAT_R16G16B16A16_UNORM;
+      assert(format_prop2->externalFormat != VK_FORMAT_UNDEFINED);
+      format_resolve->colorAttachmentFormat =
+         vk_external_format_to_efr_format((VkFormat)format_prop2->externalFormat);
 
+      if (format_resolve->colorAttachmentFormat != VK_FORMAT_UNDEFINED) {
          format_prop2->formatFeatures |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
          if (format_prop) {
             format_prop->formatFeatures |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
          }
-      } else {
-         format_resolve->colorAttachmentFormat = VK_FORMAT_UNDEFINED;
       }
    }
 
