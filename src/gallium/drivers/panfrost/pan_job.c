@@ -358,17 +358,16 @@ panfrost_batch_read_rsrc(struct panfrost_batch *batch,
    if (rsrc->base.next)
       panfrost_batch_read_rsrc(batch, pan_resource(rsrc->base.next));
 
+   if (rsrc->separate_stencil)
+      panfrost_batch_read_rsrc(batch, rsrc->separate_stencil);
+
+   if (rsrc->shadow_image)
+      panfrost_batch_read_rsrc(batch, rsrc->shadow_image);
+
    uint32_t access = PAN_BO_ACCESS_READ | PAN_BO_ACCESS_PER_CTX_TRACKING;
 
    pan_resource_update_access(batch->ctx, rsrc, false);
-
    panfrost_batch_add_bo_old(batch, rsrc->bo, access);
-
-   if (rsrc->separate_stencil)
-      panfrost_batch_add_bo_old(batch, rsrc->separate_stencil->bo, access);
-   if (rsrc->shadow_image)
-      panfrost_batch_add_bo_old(batch, rsrc->shadow_image->bo, access);
-
    panfrost_batch_update_access(batch, rsrc, false);
 }
 
@@ -382,17 +381,16 @@ panfrost_batch_write_rsrc(struct panfrost_batch *batch,
    if (rsrc->base.next)
       panfrost_batch_write_rsrc(batch, pan_resource(rsrc->base.next));
 
+   if (rsrc->separate_stencil)
+      panfrost_batch_write_rsrc(batch, rsrc->separate_stencil);
+
+   if (rsrc->shadow_image)
+      panfrost_batch_write_rsrc(batch, rsrc->shadow_image);
+
    uint32_t access = PAN_BO_ACCESS_WRITE | PAN_BO_ACCESS_PER_CTX_TRACKING;
 
    pan_resource_update_access(batch->ctx, rsrc, true);
-
    panfrost_batch_add_bo_old(batch, rsrc->bo, access);
-
-   if (rsrc->separate_stencil)
-      panfrost_batch_add_bo_old(batch, rsrc->separate_stencil->bo, access);
-   if (rsrc->shadow_image)
-      panfrost_batch_add_bo_old(batch, rsrc->shadow_image->bo, access);
-
    panfrost_batch_update_access(batch, rsrc, true);
 }
 
