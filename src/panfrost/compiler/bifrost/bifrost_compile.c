@@ -1968,7 +1968,10 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
          bi_mmul_f32_to(b, dst, a, b_mat, c);
          break;
       case nir_type_float16:
-         bi_mmul_v2f16_to(b, dst, a, b_mat, c);
+         if (b->shader->arch >= 15)
+            bi_mmul_f32_to(b, dst, a, b_mat, c);
+         else
+            bi_mmul_v2f16_to(b, dst, a, b_mat, c);
          break;
       case nir_type_int8:
          bi_mmul_v4s8_to(b, dst, a, b_mat, c);
