@@ -338,6 +338,25 @@
     <value name="BT 2020" value="6"/>
   </enum>
 
+  <enum name="YUV Writeback Format">
+    <value name="Y8U8V8" value="0"/>
+    <value name="Y8U8V8A8" value="1"/>
+    <value name="Y8U8Y8V8" value="2"/>
+    <value name="V8Y8U8Y8" value="3"/>
+    <value name="Y8 U8V8 422" value="4"/>
+    <value name="Y8 U8 V8 422" value="5"/>
+    <value name="Y8 U8V8 420" value="6"/>
+    <value name="Y8 U8 V8 420" value="7"/>
+    <value name="Y10U10V10A2" value="8"/>
+    <value name="YUYAAYVYAA" value="10"/>
+    <value name="Y10X6U10X6V10X6" value="16"/>
+    <value name="Y10X6U10X6V10X6A10X6" value="17"/>
+    <value name="Y10X6U10X6Y10X6V10X6" value="18"/>
+    <value name="V10X6Y10X6U10X6Y10X6" value="19"/>
+    <value name="Y10X6 U10X6V10X6 422" value="20"/>
+    <value name="Y10X6 U10X6V10X6 420" value="22"/>
+  </enum>
+
   <enum name="YUV Cr Siting">
     <value name="Co-Sited" value="0"/>
     <value name="Center Y" value="1"/>
@@ -2105,7 +2124,7 @@
     <field name="Dithered Clear" size="1" start="0:25" type="bool"/>
     <field name="Internal Format" size="6" start="0:26" type="Color Buffer Internal Format"/>
     <field name="Write Enable" size="1" start="1:0" type="bool"/>
-    <field name="Writeback Format" size="5" start="1:3" type="Color Format"/>
+    <field name="Writeback Format" size="5" start="1:3" type="YUV Writeback Format"/>
     <field name="Writeback Block Format" size="4" start="1:8" type="Block Format"/>
     <field name="Writeback MSAA" size="2" start="1:12" type="MSAA"/>
     <field name="sRGB" size="1" start="1:14" type="bool"/>
@@ -2164,7 +2183,7 @@
     <field name="Dithered Clear" size="1" start="0:25" type="bool"/>
     <field name="Internal Format" size="6" start="0:26" type="Color Buffer Internal Format"/>
     <field name="Write Enable" size="1" start="1:0" type="bool"/>
-    <field name="Writeback Format" size="5" start="1:3" type="Color Format"/>
+    <field name="Writeback Format" size="5" start="1:3" type="YUV Writeback Format"/>
     <field name="Writeback Block Format" size="4" start="1:8" type="Block Format"/>
     <field name="Writeback MSAA" size="2" start="1:12" type="MSAA"/>
     <field name="sRGB" size="1" start="1:14" type="bool"/>
