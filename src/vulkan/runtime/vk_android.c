@@ -1453,4 +1453,31 @@ vk_android_create_efr_rp(struct vk_device *device,
    return result;
 }
 
+bool
+vk_android_is_efr_rendering_info(const VkRenderingInfo *info)
+{
+   /* implies nullColorAttachmentWithExternalFormatResolve == VK_TRUE */
+   assert(info);
+   return info->colorAttachmentCount == 1 &&
+          info->pColorAttachments[0].imageView == VK_NULL_HANDLE &&
+          info->pColorAttachments[0].resolveMode ==
+             VK_RESOLVE_MODE_EXTERNAL_FORMAT_DOWNSAMPLE_BIT_ANDROID;
+}
+
+const VkRenderingInfo *
+vk_android_get_efr_rendering_info(const VkRenderingInfo *info,
+                                  VkRenderingInfo *local_info,
+                                  VkRenderingAttachmentInfo *local_color_att)
+{
+   *local_color_att = info->pColorAttachments[0];
+   local_color_att->imageView = local_color_att->resolveImageView;
+   local_color_att->imageLayout = local_color_att->resolveImageLayout;
+   local_color_att->resolveImageView = VK_NULL_HANDLE;
+   local_color_att->resolveMode = VK_RESOLVE_MODE_NONE;
+
+   *local_info = *info;
+   local_info->pColorAttachments = local_color_att;
+   return local_info;
+}
+
 #endif /* ANDROID_API_LEVEL >= 26 */
