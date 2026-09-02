@@ -145,6 +145,13 @@ VkResult vk_android_create_efr_rp(struct vk_device *device,
                                   const VkAllocationCallbacks *alloc,
                                   VkRenderPass *out_rp_handle);
 
+bool vk_android_is_efr_rendering_info(const VkRenderingInfo *info);
+
+const VkRenderingInfo *vk_android_get_efr_rendering_info(
+   const VkRenderingInfo *info,
+   VkRenderingInfo *local_info,
+   VkRenderingAttachmentInfo *local_color_att);
+
 #else /* defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26 */
 
 static inline uint64_t
@@ -237,6 +244,20 @@ vk_android_create_efr_rp(struct vk_device *device,
                          VkRenderPass *out_rp_handle)
 {
    return VK_ERROR_UNKNOWN;
+}
+
+static inline bool
+vk_android_is_efr_rendering_info(const VkRenderingInfo *info)
+{
+   return false;
+}
+
+static inline const VkRenderingInfo *
+vk_android_get_efr_rendering_info(const VkRenderingInfo *info,
+                                  VkRenderingInfo *local_info,
+                                  VkRenderingAttachmentInfo *local_color_att)
+{
+   return NULL;
 }
 
 #endif /* ANDROID_API_LEVEL >= 26 */
