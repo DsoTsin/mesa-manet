@@ -152,6 +152,17 @@ const VkRenderingInfo *vk_android_get_efr_rendering_info(
    VkRenderingInfo *local_info,
    VkRenderingAttachmentInfo *local_color_att);
 
+bool vk_android_is_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info);
+
+const VkCommandBufferInheritanceRenderingInfo *
+vk_android_get_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info,
+   VkCommandBufferInheritanceRenderingInfo *local_info,
+   VkFormat *local_color_format);
+
 #else /* defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26 */
 
 static inline uint64_t
@@ -256,6 +267,24 @@ static inline const VkRenderingInfo *
 vk_android_get_efr_rendering_info(const VkRenderingInfo *info,
                                   VkRenderingInfo *local_info,
                                   VkRenderingAttachmentInfo *local_color_att)
+{
+   return NULL;
+}
+
+static inline bool
+vk_android_is_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info)
+{
+   return false;
+}
+
+static inline const VkCommandBufferInheritanceRenderingInfo *
+vk_android_get_efr_inheritance_rendering_info(
+   const VkCommandBufferInheritanceInfo *info,
+   const VkCommandBufferInheritanceRenderingInfo *r_info,
+   VkCommandBufferInheritanceRenderingInfo *local_info,
+   VkFormat *local_color_format)
 {
    return NULL;
 }
