@@ -1368,4 +1368,89 @@ vk_android_get_external_format(const void *pnext)
    return info ? (VkFormat)info->externalFormat : VK_FORMAT_UNDEFINED;
 }
 
+static bool
+subpass_uses_efr(const VkRenderPassCreateInfo2 *info, uint32_t s)
+{
+   const VkSubpassDescription2 *subpass = &info->pSubpasses[s];
+   if (!subpass->pResolveAttachments || subpass->colorAttachmentCount != 1)
+      return false;
+
+   const VkAttachmentReference2 *resolve_ref =
+      &subpass->pResolveAttachments[0];
+   return resolve_ref->attachment != VK_ATTACHMENT_UNUSED &&
+          vk_android_rp_attachment_has_external_format(
+             &info->pAttachments[resolve_ref->attachment]);
+}
+
+bool
+vk_android_is_efr_rp(struct vk_device *device,
+                     const VkRenderPassCreateInfo2 *info)
+{
+   const struct vk_properties *props = &device->physical->properties;
+   if (props->nullColorAttachmentWithExternalFormatResolve != VK_TRUE)
+      return false;
+
+   for (uint32_t s = 0; s < info->subpassCount; s++) {
+      if (subpass_uses_efr(info, s))
+         return true;
+   }
+
+   return false;
+}
+
+VkResult
+vk_android_create_efr_rp(struct vk_device *device,
+                         const VkRenderPassCreateInfo2 *info,
+                         const VkAllocationCallbacks *alloc,
+                         VkRenderPass *out_rp_handle)
+{
+   uint32_t efr_subpass_count = 0;
+   for (uint32_t s = 0; s < info->subpassCount; s++) {
+      if (subpass_uses_efr(info, s))
+         efr_subpass_count++;
+   }
+
+   STACK_ARRAY(VkAttachmentDescription2, attachments, info->attachmentCount);
+   STACK_ARRAY(VkSubpassDescription2, subpasses, info->subpassCount);
+   STACK_ARRAY(VkAttachmentReference2, color_refs, efr_subpass_count);
+
+   VkRenderPassCreateInfo2 local_info = *info;
+   local_info.pAttachments = attachments;
+   local_info.pSubpasses = subpasses;
+
+   typed_memcpy(attachments, info->pAttachments, info->attachmentCount);
+   for (uint32_t a = 0; a < info->attachmentCount; a++) {
+      VkAttachmentDescription2 *att = &attachments[a];
+      if (vk_android_rp_attachment_has_external_format(att)) {
+         VkFormat external_format = vk_android_get_external_format(att->pNext);
+         att->format = vk_external_format_to_efr_format(external_format);
+      }
+   }
+
+   VkAttachmentReference2 *color_ref_ptr = color_refs;
+
+   typed_memcpy(subpasses, info->pSubpasses, info->subpassCount);
+   for (uint32_t s = 0; s < info->subpassCount; s++) {
+      if (!subpass_uses_efr(info, s))
+         continue;
+
+      VkSubpassDescription2 *subpass = &subpasses[s];
+      assert(subpass->colorAttachmentCount == 1);
+      assert(subpass->pResolveAttachments);
+
+      *color_ref_ptr = subpass->pResolveAttachments[0];
+      subpass->pColorAttachments = color_ref_ptr++;
+      subpass->pResolveAttachments = NULL;
+   }
+
+   VkResult result = device->dispatch_table.CreateRenderPass2(
+      vk_device_to_handle(device), &local_info, alloc, out_rp_handle);
+
+   STACK_ARRAY_FINISH(attachments);
+   STACK_ARRAY_FINISH(subpasses);
+   STACK_ARRAY_FINISH(color_refs);
+
+   return result;
+}
+
 #endif /* ANDROID_API_LEVEL >= 26 */

@@ -137,6 +137,14 @@ bool vk_android_rp_attachment_has_external_format(
 
 VkFormat vk_android_get_external_format(const void *pnext);
 
+bool vk_android_is_efr_rp(struct vk_device *device,
+                          const VkRenderPassCreateInfo2 *info);
+
+VkResult vk_android_create_efr_rp(struct vk_device *device,
+                                  const VkRenderPassCreateInfo2 *info,
+                                  const VkAllocationCallbacks *alloc,
+                                  VkRenderPass *out_rp_handle);
+
 #else /* defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26 */
 
 static inline uint64_t
@@ -213,6 +221,22 @@ static inline VkFormat
 vk_android_get_external_format(const void *pnext)
 {
    return VK_FORMAT_UNDEFINED;
+}
+
+static inline bool
+vk_android_is_efr_rp(struct vk_device *device,
+                     const VkRenderPassCreateInfo2 *info)
+{
+   return false;
+}
+
+static inline VkResult
+vk_android_create_efr_rp(struct vk_device *device,
+                         const VkRenderPassCreateInfo2 *info,
+                         const VkAllocationCallbacks *alloc,
+                         VkRenderPass *out_rp_handle)
+{
+   return VK_ERROR_UNKNOWN;
 }
 
 #endif /* ANDROID_API_LEVEL >= 26 */
