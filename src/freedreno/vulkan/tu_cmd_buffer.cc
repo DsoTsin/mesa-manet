@@ -6305,10 +6305,12 @@ tu_flush_for_stage(struct tu_cache_state *cache,
    }
 }
 
-void
-tu_render_pass_state_merge(struct tu_render_pass_state *dst,
-                           const struct tu_render_pass_state *src)
+static void
+tu_render_pass_state_merge(struct tu_cmd_buffer *cmd, const struct tu_render_pass_state *src, struct tu_cs *cs)
 {
+   tu_lrz_merge_stencil_tag_state_at_rp_boundary(cmd, *src, cs);
+
+   struct tu_render_pass_state *dst = &cmd->state.rp;
    dst->xfb_used |= src->xfb_used;
    dst->has_tess |= src->has_tess;
    dst->has_prim_generated_query_in_rp |= src->has_prim_generated_query_in_rp;
@@ -6378,8 +6380,7 @@ void
 tu_append_pre_chain(struct tu_cmd_buffer *cmd,
                     struct tu_cmd_buffer *secondary)
 {
-   tu_render_pass_state_merge(&cmd->state.rp,
-                              &secondary->pre_chain.state);
+   tu_render_pass_state_merge(cmd, &secondary->pre_chain.state, &cmd->draw_cs);
 
    tu_cs_add_entries(&cmd->draw_cs, &secondary->pre_chain.draw_cs);
    tu_cs_add_entries(&cmd->draw_epilogue_cs,
@@ -6422,8 +6423,7 @@ void
 tu_append_pre_post_chain(struct tu_cmd_buffer *cmd,
                          struct tu_cmd_buffer *secondary)
 {
-   tu_render_pass_state_merge(&cmd->state.rp,
-                              &secondary->state.rp);
+   tu_render_pass_state_merge(cmd, &secondary->state.rp, &cmd->draw_cs);
 
    tu_cs_add_entries(&cmd->draw_cs, &secondary->draw_cs);
    tu_cs_add_entries(&cmd->draw_epilogue_cs, &secondary->draw_epilogue_cs);
@@ -6503,7 +6503,7 @@ tu_CmdExecuteCommands(VkCommandBuffer commandBuffer,
           VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) {
          assert(tu_cs_is_empty(&secondary->cs));
 
-         tu_render_pass_state_merge(&cmd->state.rp, &secondary->state.rp);
+         tu_render_pass_state_merge(cmd, &secondary->state.rp, &cmd->draw_cs);
 
          TU_CALLX(cmd->device, tu_lrz_flush_valid_at_secondary_rp_boundary)(cmd, secondary->state.lrz, &cmd->draw_cs);
 
@@ -7551,13 +7551,15 @@ tu_CmdSetRenderingInputAttachmentIndicesKHR(
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
    const uint8_t old_depth_att = cmd->vk.dynamic_graphics_state.ial.depth_att;
+   const uint8_t old_stencil_att = cmd->vk.dynamic_graphics_state.ial.stencil_att;
 
    vk_common_CmdSetRenderingInputAttachmentIndicesKHR(commandBuffer, pLocationInfo);
 
    const struct vk_input_attachment_location_state *ial =
       &cmd->vk.dynamic_graphics_state.ial;
 
-   if (old_depth_att != ial->depth_att)
+   if (old_depth_att != ial->depth_att ||
+       old_stencil_att != ial->stencil_att)
       cmd->state.dirty |= TU_CMD_DIRTY_LRZ;
 
    struct tu_subpass *subpass = &cmd->dynamic_subpasses[0];

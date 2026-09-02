@@ -53,6 +53,8 @@ struct tu_lrz_state
    enum tu_lrz_direction prev_direction;
 };
 
+struct tu_render_pass_state;
+
 template <chip CHIP>
 void
 tu6_emit_lrz(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
@@ -127,6 +129,11 @@ tu_lrz_flush_valid_at_secondary_rp_boundary(
    struct tu_cmd_buffer *cmd,
    const struct tu_lrz_state &secondary_lrz,
    struct tu_cs *cs);
+
+void
+tu_lrz_merge_stencil_tag_state_at_rp_boundary(struct tu_cmd_buffer *cmd,
+                                              const struct tu_render_pass_state &secondary_rp,
+                                              struct tu_cs *cs);
 
 template <chip CHIP>
 void

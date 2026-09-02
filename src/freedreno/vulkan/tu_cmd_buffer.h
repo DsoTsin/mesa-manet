@@ -328,6 +328,15 @@ struct tu_render_pass_state
    /* Sticky for the RP duration */
    bool lrz_write_disabled;
 
+   /* We need to track a specific stencil state to determine if we can keep LRZ writes
+    * in stencil-writes-based-on-depth-test case.
+    */
+   struct {
+      uint8_t write_mask;
+      bool has_depth_dependent_stencil_write;
+      bool incompatible;
+   } lrz_stencil_tag;
+
    /* This is set if, at any point in the render pass, we were not able to
     * duplicate the viewport per-view due to the user using multiple viewports
     * and instead we used the state from view 0 to transform each viewport. If
@@ -830,9 +839,6 @@ tu_attachment_gmem_offset_stencil(struct tu_cmd_buffer *cmd,
       layer * cmd->state.tiling->tile0.width * cmd->state.tiling->tile0.height *
       att->samples;
 }
-
-void tu_render_pass_state_merge(struct tu_render_pass_state *dst,
-                                const struct tu_render_pass_state *src);
 
 VkResult tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd_buffer,
                              const VkCommandBufferBeginInfo *pBeginInfo);
