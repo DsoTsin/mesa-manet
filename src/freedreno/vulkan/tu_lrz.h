@@ -36,9 +36,6 @@ struct tu_lrz_state
    /* Being invalid at the very start means ew could e.g. skip the clearing. */
    bool valid_at_start: 1;
 
-   /* Sticky for the RP duration */
-   bool disable_write_for_rp : 1;
-
    /* Allows to temporary disable LRZ */
    bool enabled : 1;
    bool fast_clear : 1;

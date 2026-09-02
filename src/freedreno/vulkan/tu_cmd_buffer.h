@@ -325,6 +325,8 @@ struct tu_render_pass_state
    bool disable_gmem;
    bool sysmem_single_prim_mode;
    bool lrz_disable_for_next_rp;
+   /* Sticky for the RP duration */
+   bool lrz_write_disabled;
 
    /* This is set if, at any point in the render pass, we were not able to
     * duplicate the viewport per-view due to the user using multiple viewports
@@ -596,6 +598,7 @@ struct tu_cmd_state
       VkClearValue *clear_values;
 
       struct tu_lrz_state lrz;
+      bool lrz_write_disabled;
    } suspended_pass;
 
    bool fdm_enabled;

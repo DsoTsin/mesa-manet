@@ -6317,6 +6317,7 @@ tu_render_pass_state_merge(struct tu_render_pass_state *dst,
    dst->disable_gmem |= src->disable_gmem;
    dst->sysmem_single_prim_mode |= src->sysmem_single_prim_mode;
    dst->lrz_disable_for_next_rp |= src->lrz_disable_for_next_rp;
+   dst->lrz_write_disabled |= src->lrz_write_disabled;
    dst->draw_cs_writes_to_cond_pred |= src->draw_cs_writes_to_cond_pred;
    dst->shared_viewport |= src->shared_viewport;
    dst->read_only_input_attachments |= src->read_only_input_attachments;
@@ -6363,6 +6364,7 @@ tu_restore_suspended_pass(struct tu_cmd_buffer *cmd,
    cmd->state.tiling = tu_framebuffer_get_tiling_config(cmd->state.framebuffer, cmd->device, cmd->state.pass,
                                                         cmd->state.gmem_layout, cmd->state.gmem_layout_divisor);
    cmd->state.lrz = suspended->state.suspended_pass.lrz;
+   cmd->state.rp.lrz_write_disabled |= suspended->state.suspended_pass.lrz_write_disabled;
 
 #ifdef HAVE_PERFETTO
    cmd->vk.dynamic_graphics_state.vp = suspended->vk.dynamic_graphics_state.vp;
@@ -6523,7 +6525,6 @@ tu_CmdExecuteCommands(VkCommandBuffer commandBuffer,
           */
          if (!secondary->state.lrz.valid)
             cmd->state.lrz.valid = false;
-         cmd->state.lrz.disable_write_for_rp |= secondary->state.lrz.disable_write_for_rp;
          if (secondary->state.lrz.gpu_dir_set)
             cmd->state.lrz.gpu_dir_set = true;
          if (cmd->state.lrz.prev_direction == TU_LRZ_UNKNOWN &&
@@ -7272,7 +7273,7 @@ tu_emit_rendering_attachment_locations(struct tu_cmd_buffer *cmd)
    }
 
    /* Same case as a drawcall not writing to some color attachments. */
-   if (skips_att && cmd->state.lrz.valid && !cmd->state.lrz.disable_write_for_rp) {
+   if (skips_att && cmd->state.lrz.valid && !cmd->state.rp.lrz_write_disabled) {
       tu_lrz_disable_write_for_rp(cmd, "CmdSetRenderingAttachmentLocations with skipped color attachments");
       cmd->state.dirty |= TU_CMD_DIRTY_LRZ;
    }
@@ -10153,6 +10154,7 @@ tu_CmdEndRendering2EXT(VkCommandBuffer commandBuffer,
 
    if (cmd_buffer->state.suspending) {
       cmd_buffer->state.suspended_pass.lrz = cmd_buffer->state.lrz;
+      cmd_buffer->state.suspended_pass.lrz_write_disabled = cmd_buffer->state.rp.lrz_write_disabled;
       /* Flush LRZ validity and sticky write-disable state across the
        * resuming renderpass, which cannot inherit our CPU-tracked LRZ state.
        */

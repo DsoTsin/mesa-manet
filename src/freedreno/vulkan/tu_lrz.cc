@@ -99,10 +99,10 @@ void
 tu_lrz_disable_write_for_rp(struct tu_cmd_buffer *cmd, const char *reason)
 {
    assert(reason);
-   if (cmd->state.lrz.disable_write_for_rp)
+   if (cmd->state.rp.lrz_write_disabled)
       return;
 
-   cmd->state.lrz.disable_write_for_rp = true;
+   cmd->state.rp.lrz_write_disabled = true;
    cmd->state.rp.lrz_write_disabled_at_draw = cmd->state.rp.drawcall_count;
    cmd->state.rp.lrz_write_disable_reason = reason;
    perf_debug(
@@ -281,7 +281,6 @@ tu_lrz_init_state(struct tu_cmd_buffer *cmd,
 
    cmd->state.lrz.valid = true;
    cmd->state.lrz.valid_at_start = true;
-   cmd->state.lrz.disable_write_for_rp = false;
    /* We have to assume previous draws may have set color_written_with_z_test */
    cmd->state.lrz.color_written_with_z_test = cmd->state.resuming;
    cmd->state.lrz.has_lrz_write_with_skipped_color_writes = false;
@@ -338,7 +337,6 @@ tu_lrz_init_secondary(struct tu_cmd_buffer *cmd,
 
    cmd->state.lrz.valid = true;
    cmd->state.lrz.valid_at_start = true;
-   cmd->state.lrz.disable_write_for_rp = false;
    /* We will disable LRZ via tu_lrz_flush_valid_at_secondary_rp_boundary
     * if assumption about color_written_with_z_test is wrong.
     */
@@ -417,6 +415,7 @@ tu_lrz_begin_renderpass(struct tu_cmd_buffer *cmd)
 {
    const struct tu_render_pass *pass = cmd->state.pass;
 
+   cmd->state.rp.lrz_write_disabled = false;
    cmd->state.rp.lrz_disable_reason = NULL;
    cmd->state.rp.lrz_disabled_at_draw = 0;
    cmd->state.rp.lrz_write_disable_reason = NULL;
@@ -1132,15 +1131,14 @@ tu_lrz_flush_valid_at_secondary_rp_boundary(
       cmd->state.lrz.color_written_with_z_test &&
       secondary_lrz.has_lrz_write_with_skipped_color_writes;
    const bool lrz_valid = cmd->state.lrz.valid && secondary_lrz.valid;
-   const bool disable_write_for_rp =
-      cmd->state.lrz.disable_write_for_rp || secondary_lrz.disable_write_for_rp || lrz_blending_skipped_color_writes;
+   const bool lrz_write_disabled = cmd->state.rp.lrz_write_disabled || lrz_blending_skipped_color_writes;
 
-   if (lrz_valid && !disable_write_for_rp)
+   if (lrz_valid && !lrz_write_disabled)
       return;
 
    if (lrz_valid) {
       /* Secondary command buffers cannot inherit the sticky write-disable state. */
-      if (!cmd->state.lrz.disable_write_for_rp) {
+      if (!cmd->state.rp.lrz_write_disabled) {
          const char *reason = lrz_blending_skipped_color_writes ? "Depth write + no color writes with secondary cmdbuf"
                                                                 : "Disabled LRZ write in secondary cmdbuf";
          tu_lrz_disable_write_for_rp(cmd, reason);
@@ -1159,7 +1157,7 @@ void
 tu_lrz_flush_valid_at_suspending_rp_boundary(struct tu_cmd_buffer *cmd,
                                              struct tu_cs *cs)
 {
-   if (cmd->state.lrz.valid && !cmd->state.lrz.disable_write_for_rp)
+   if (cmd->state.lrz.valid && !cmd->state.rp.lrz_write_disabled)
       return;
 
    if (cmd->state.lrz.valid) {
@@ -1441,7 +1439,7 @@ tu6_calculate_lrz_state(struct tu_cmd_buffer *cmd,
       tu_lrz_disable_write_for_rp(cmd, "stencil write based on depth test");
    }
 
-   if (cmd->state.lrz.disable_write_for_rp)
+   if (cmd->state.rp.lrz_write_disabled)
       gras_lrz_cntl.lrz_write = false;
 
    if (temporary_disable_lrz)
