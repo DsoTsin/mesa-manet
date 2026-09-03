@@ -176,8 +176,9 @@ pan_image_view_layer_or_3d_slice_count(const struct pan_image_view *iview)
 static inline struct pan_image_plane_ref
 pan_image_view_get_color_plane(const struct pan_image_view *iview)
 {
-   /* We only support rendering to plane 0 */
-   assert(pan_image_view_get_plane(iview, 1).image == NULL);
+   /* For YUV target, only image-level metadata is needed for the callers.
+    * e.g. pan_align_fb_tiling_area and pan_fb_get_clean_tile
+    */
    return pan_image_view_get_plane(iview, 0);
 }
 
