@@ -46,6 +46,7 @@
 #include "pan_shader.h"
 
 #include "util/bitscan.h"
+#include "vk_android.h"
 #include "vk_format.h"
 #include "vk_meta.h"
 #include "vk_pipeline_layout.h"
@@ -3705,6 +3706,17 @@ panvk_per_arch(cmd_inherit_render_state)(
       vk_get_command_buffer_inheritance_rendering_info(cmdbuf->vk.level,
                                                        pBeginInfo);
    assert(inheritance_info);
+
+   /* patch inheritance rendering info in-place for Android efr support */
+   VkCommandBufferInheritanceRenderingInfo local_inheritance_info;
+   VkFormat local_color_format;
+   if (vk_android_is_efr_inheritance_rendering_info(
+          pBeginInfo->pInheritanceInfo, inheritance_info)) {
+      inheritance_info = vk_android_get_efr_inheritance_rendering_info(
+         pBeginInfo->pInheritanceInfo, inheritance_info,
+         &local_inheritance_info, &local_color_format);
+   }
+
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
@@ -3836,6 +3848,15 @@ panvk_per_arch(CmdBeginRendering)(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
    ASSERTED struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
+
+   /* patch rendering info in-place for Android efr support */
+   VkRenderingInfo local_rendering_info;
+   VkRenderingAttachmentInfo local_color_att;
+   if (vk_android_is_efr_rendering_info(pRenderingInfo)) {
+      pRenderingInfo = vk_android_get_efr_rendering_info(
+         pRenderingInfo, &local_rendering_info, &local_color_att);
+   }
+
    bool resuming = pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT;
 
    panvk_per_arch(cmd_init_render_state)(cmdbuf, pRenderingInfo);

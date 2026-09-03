@@ -12,6 +12,8 @@
 #include "pan_desc.h"
 #include "pan_util.h"
 
+#include "vk_android.h"
+
 static enum pan_fb_load_op
 get_att_fb_load_op(const VkRenderingAttachmentInfo *att)
 {
@@ -148,11 +150,20 @@ render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
    struct panvk_image *img =
       container_of(iview->vk.image, struct panvk_image, vk);
 
+   /* With Android efr, the image view can be the YUV resolve target. Map it to
+    * the resolved RGBA format targeted by the graphics pipeline.
+    */
+   VkFormat fmt = iview->vk.format;
+   if (vk_format_get_ycbcr_info(fmt)) {
+      fmt = vk_external_format_to_efr_format(fmt);
+      assert(fmt != VK_FORMAT_UNDEFINED);
+   }
+
    render->bound_attachments |= MESA_VK_RP_ATTACHMENT_COLOR_BIT(index);
    render->color_attachments.iviews[index] = iview;
    render->color_attachments.preload_iviews[index] =
       ms2ss ? iview_ss : NULL;
-   render->color_attachments.fmts[index] = iview->vk.format;
+   render->color_attachments.fmts[index] = fmt;
    render->color_attachments.samples[index] = img->vk.samples;
 
 #if PAN_ARCH < 9
