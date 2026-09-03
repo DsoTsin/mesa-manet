@@ -728,6 +728,78 @@ get_rt_formats(enum pipe_format pfmt, uint32_t *writeback, uint32_t *internal,
    *pswizzle = pan_translate_swizzle_4(swizzle);
 }
 
+static void
+get_yuv_rt_formats(enum pipe_format pfmt, uint32_t *writeback,
+                   uint32_t *internal, uint32_t *pswizzle,
+                   uint32_t *yuv_swizzle)
+{
+   assert(pan_format_is_yuv(pfmt));
+
+   const unsigned char swizzle[4] = {PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y,
+                                     PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W};
+   *pswizzle = pan_translate_swizzle_4(swizzle);
+
+   switch (pfmt) {
+#if PAN_ARCH >= 9
+   case PIPE_FORMAT_G8_B8R8_420_UNORM:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y8_U8V8_420;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
+   case PIPE_FORMAT_G8_B8_R8_420_UNORM:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y8_U8_V8_420;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
+   case PIPE_FORMAT_X6G10_X6B10X6R10_420_UNORM:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R10G10B10A2;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y10X6_U10X6V10X6_420;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
+#endif
+   default:
+      UNREACHABLE("invalid yuv pipe format");
+   }
+}
+
+static void
+emit_yuv_color_attachment(const struct pan_attachment_info *att, void *payload)
+{
+#if PAN_ARCH >= 10
+   const struct pan_image_view *iview = att->iview;
+   assert(pan_format_is_yuv(iview->format));
+
+   uint64_t base[3] = {0};
+   uint64_t row_stride[2] = {0};
+   uint64_t dummy_stride;
+
+   for (unsigned p = 0; p < util_format_get_num_planes(iview->format); p++) {
+      get_tiled_or_linear_att_mem_props(
+         pan_image_view_get_plane(iview, p), iview->first_level,
+         att->layer_or_z_slice, &base[p],
+         p < 2 ? &row_stride[p] : &dummy_stride, &dummy_stride);
+   }
+
+   pan_cast_and_pack(payload, YUV_RENDER_TARGET, cfg) {
+      cfg.write_enable = true;
+      cfg.writeback_block_format = MALI_BLOCK_FORMAT_LINEAR;
+      get_yuv_rt_formats(iview->format, &cfg.writeback_format,
+                         &cfg.internal_format, &cfg.swizzle, &cfg.yuv_swizzle);
+      cfg.conversion_mode = MALI_YUV_CONVERSION_MODE_NO_CONVERSION;
+      cfg.full_range = true;
+      cfg.unsigned_cr_range = true;
+      cfg.cr_siting = MALI_YUV_CR_SITING_CENTER;
+      cfg.plane_0_base = base[0];
+      cfg.plane_1_base = base[1];
+      cfg.plane_2_base = base[2];
+      cfg.plane_0_stride = row_stride[0];
+      cfg.plane_1_2_stride = row_stride[1];
+   }
+#else
+   UNREACHABLE("Unsupported YUV RT");
+#endif
+}
+
 void
 GENX(pan_emit_default_color_attachment)(enum pipe_format format,
                                         void *payload)
@@ -837,13 +909,17 @@ GENX(pan_emit_linear_color_attachment)(const struct pan_attachment_info *att,
                                        void *payload)
 {
    const struct pan_image_view *iview = att->iview;
+   if (pan_format_is_yuv(iview->format)) {
+      emit_yuv_color_attachment(att, payload);
+      return;
+   }
+
    uint64_t base, row_stride, surf_stride;
 
    get_tiled_or_linear_att_mem_props(pan_image_view_get_color_plane(iview),
                                      iview->first_level, att->layer_or_z_slice,
                                      &base, &row_stride, &surf_stride);
 
-   /* TODO: YUV RT. */
    assert(!pan_format_is_yuv(iview->format));
    pan_cast_and_pack(payload, RGB_RENDER_TARGET, cfg) {
       cfg.write_enable = true;
