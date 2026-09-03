@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Collabora, Ltd.
+ * Copyright © 2026 Google LLC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -163,6 +164,17 @@ vk_android_get_efr_inheritance_rendering_info(
    VkCommandBufferInheritanceRenderingInfo *local_info,
    VkFormat *local_color_format);
 
+bool vk_android_is_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info);
+
+const VkPipelineRenderingCreateInfo *
+vk_android_get_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info,
+   VkPipelineRenderingCreateInfo *local_info,
+   VkFormat *local_color_format);
+
 #else /* defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26 */
 
 static inline uint64_t
@@ -284,6 +296,24 @@ vk_android_get_efr_inheritance_rendering_info(
    const VkCommandBufferInheritanceInfo *info,
    const VkCommandBufferInheritanceRenderingInfo *r_info,
    VkCommandBufferInheritanceRenderingInfo *local_info,
+   VkFormat *local_color_format)
+{
+   return NULL;
+}
+
+static inline bool
+vk_android_is_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info)
+{
+   return false;
+}
+
+static inline const VkPipelineRenderingCreateInfo *
+vk_android_get_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info,
+   VkPipelineRenderingCreateInfo *local_info,
    VkFormat *local_color_format)
 {
    return NULL;

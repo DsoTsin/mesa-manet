@@ -1,6 +1,7 @@
 /*
  * Copyright © 2026 NXP
  * Copyright © 2022 Intel Corporation
+ * Copyright © 2026 Google LLC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1501,6 +1502,33 @@ vk_android_get_efr_inheritance_rendering_info(
 {
    VkFormat external_format = vk_android_get_external_format(info->pNext);
    *local_color_format = vk_external_format_to_efr_format(external_format);
+   *local_info = *r_info;
+   local_info->pColorAttachmentFormats = local_color_format;
+   return local_info;
+}
+
+bool
+vk_android_is_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info)
+{
+   /* implies nullColorAttachmentWithExternalFormatResolve == VK_TRUE */
+   assert(info && r_info);
+   return r_info->colorAttachmentCount == 1 &&
+          r_info->pColorAttachmentFormats[0] == VK_FORMAT_UNDEFINED &&
+          vk_android_get_external_format(info->pNext) != VK_FORMAT_UNDEFINED;
+}
+
+const VkPipelineRenderingCreateInfo *
+vk_android_get_efr_pipeline_rendering_info(
+   const VkGraphicsPipelineCreateInfo *info,
+   const VkPipelineRenderingCreateInfo *r_info,
+   VkPipelineRenderingCreateInfo *local_info,
+   VkFormat *local_color_format)
+{
+   VkFormat external_format = vk_android_get_external_format(info->pNext);
+   *local_color_format = vk_external_format_to_efr_format(external_format);
+
    *local_info = *r_info;
    local_info->pColorAttachmentFormats = local_color_format;
    return local_info;
