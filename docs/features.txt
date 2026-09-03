@@ -729,6 +729,7 @@ Khronos extensions that are not part of any Vulkan version:
   VK_AMD_shader_image_load_store_lod                    DONE (kk, radv)
   VK_AMD_shader_trinary_minmax                          DONE (radv)
   VK_AMD_texture_gather_bias_lod                        DONE (anv, radv)
+  VK_ANDROID_external_format_resolve                    DONE (anv, panvk/v10+)
   VK_ANDROID_external_memory_android_hardware_buffer    DONE (anv, hasvk, lvp, panvk, radv, tu, v3dv, vn)
   VK_ANDROID_native_buffer                              DONE (anv, hasvk, lvp, panvk, radv, tu, v3dv, vn)
   VK_ARM_rasterization_order_attachment_access          DONE (lvp, panvk/v10+, tu, vn)

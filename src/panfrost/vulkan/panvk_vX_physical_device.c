@@ -231,6 +231,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_ycbcr_image_arrays = PAN_ARCH >= 10,
       .EXT_zero_initialize_device_memory = true,
       .EXT_inline_uniform_block = true,
+      .ANDROID_external_format_resolve = has_gralloc && PAN_ARCH >= 10,
       .ANDROID_external_memory_android_hardware_buffer = has_gralloc,
       .ANDROID_native_buffer = has_gralloc,
       .GOOGLE_decorate_string = true,
@@ -297,6 +298,7 @@ panvk_per_arch(get_physical_device_features)(
    const struct panvk_instance *instance,
    const struct panvk_physical_device *device, struct vk_features *features)
 {
+   const bool has_gralloc = vk_android_get_ugralloc() != NULL;
    bool has_sparse = PAN_ARCH >= 10;
 
    *features = (struct vk_features){
@@ -776,6 +778,9 @@ panvk_per_arch(get_physical_device_features)(
       .rasterizationOrderColorAttachmentAccess = PAN_ARCH >= 10,
       .rasterizationOrderDepthAttachmentAccess = PAN_ARCH >= 10,
       .rasterizationOrderStencilAttachmentAccess = PAN_ARCH >= 10,
+
+      /* VK_ANDROID_external_format_resolve */
+      .externalFormatResolve = has_gralloc && PAN_ARCH >= 10,
    };
 }
 
@@ -1311,6 +1316,11 @@ panvk_per_arch(get_physical_device_properties)(
       .shaderTileImageCoherentReadAccelerated = PAN_ARCH >= 9,
       .shaderTileImageReadSampleFromPixelRateInvocation = PAN_ARCH >= 9,
       .shaderTileImageReadFromHelperInvocation = PAN_ARCH >= 9,
+
+      /* VK_ANDROID_external_format_resolve */
+      .nullColorAttachmentWithExternalFormatResolve = true,
+      .externalFormatResolveChromaOffsetX = VK_CHROMA_LOCATION_MIDPOINT,
+      .externalFormatResolveChromaOffsetY = VK_CHROMA_LOCATION_MIDPOINT,
 
       /* VK_ANDROID_native_buffer */
       .sharedImage = vk_android_get_front_buffer_usage() != 0,
