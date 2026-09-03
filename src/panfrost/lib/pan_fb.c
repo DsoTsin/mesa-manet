@@ -562,6 +562,62 @@ emit_zs_crc_desc(const struct pan_fb_desc_info *info,
 }
 
 static void
+emit_yuv_rt_desc(const struct pan_fb_desc_info *info,
+                 const struct pan_fb_clean_tile ct, unsigned rt,
+                 uint32_t tile_rt_offset_B,
+                 struct mali_yuv_render_target_packed *yuv_rt)
+{
+#if PAN_ARCH >= 10
+   const struct pan_fb_layout *fb = info->fb;
+   const struct pan_fb_load *load = info->load;
+   const struct pan_fb_store *store = info->store;
+
+   pan_pack(yuv_rt, YUV_RENDER_TARGET, cfg) {
+      cfg.yuv_enable = true;
+      cfg.internal_buffer_offset = tile_rt_offset_B;
+      cfg.dithering_enable = true;
+      cfg.writeback_msaa = MALI_MSAA_SINGLE;
+      cfg.clean_tile_write_enable = !!(ct.rts & BITFIELD_BIT(rt));
+
+      if (load && pan_target_has_clear(&load->rts[rt])) {
+         uint32_t packed[4] = {};
+         pan_pack_color(GENX(pan_blendable_formats), packed,
+                        &load->rts[rt].clear.color, fb->rt_formats[rt],
+                        false /* dithered */);
+
+         cfg.clear = (struct MALI_RT_CLEAR){
+            .color_0 = packed[0],
+            .color_1 = packed[1],
+            .color_2 = packed[2],
+            .color_3 = packed[3],
+         };
+      }
+   }
+
+   if (store && store->rts[rt].store) {
+      const struct pan_image_view *iview = store->rts[rt].iview;
+      const struct pan_mod_handler *mod_handler =
+         pan_image_view_get_color_plane(iview).image->mod_handler;
+
+      assert(pan_image_view_get_nr_samples(iview) == 1);
+
+      assert(info->layer < pan_image_view_layer_or_3d_slice_count(iview));
+      const struct pan_attachment_info att = {
+         .iview = iview,
+         .layer_or_z_slice = iview->first_layer_or_z_slice + info->layer,
+         .fb_tile_size_px = fb->tile_size_px,
+      };
+
+      struct mali_yuv_render_target_packed desc;
+      mod_handler->emit_color_attachment(&att, &desc);
+      pan_merge(yuv_rt, &desc, YUV_RENDER_TARGET);
+   }
+#else
+   UNREACHABLE("Unsupported YUV RT");
+#endif
+}
+
+static void
 emit_rgb_rt_desc(const struct pan_fb_desc_info *info,
                  const struct pan_fb_clean_tile ct,
                  unsigned rt, uint32_t tile_rt_offset_B,
@@ -646,7 +702,11 @@ emit_rts(const struct pan_fb_desc_info *info,
 
    uint32_t tile_rt_offset_B = 0;
    for (unsigned rt = 0; rt < fb->rt_count; rt++) {
-      emit_rgb_rt_desc(info, ct, rt, tile_rt_offset_B, rts);
+      if (pan_format_is_yuv(fb->rt_formats[rt])) {
+         emit_yuv_rt_desc(info, ct, rt, tile_rt_offset_B, (void *)rts);
+      } else {
+         emit_rgb_rt_desc(info, ct, rt, tile_rt_offset_B, rts);
+      }
       rts++;
 
       if (fb->rt_formats[rt] != PIPE_FORMAT_NONE) {
