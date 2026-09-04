@@ -337,7 +337,8 @@ bi_compute_liveness_ra(bi_context *ctx)
 #define EVEN_BITS_MASK (0x5555555555555555ull)
 
 static uint64_t
-bi_make_affinity(uint64_t clobber, unsigned count, bool split_file)
+bi_make_affinity(uint64_t clobber, unsigned count, bool split_file,
+                 bool contains_blend, unsigned arch)
 {
    uint64_t clobbered = 0;
 
@@ -358,6 +359,13 @@ bi_make_affinity(uint64_t clobber, unsigned count, bool split_file)
    if (split_file)
       clobbered |= BITFIELD64_MASK(32) << 16;
 
+   /* Blend shaders might read sample_id, but unlike cumulative_coverage, it's
+    * not explicitly preloaded by BLEND.
+    * Mark it as clobbered to ensure it's not written to before being read in
+    * the blend shader. */
+   if (contains_blend)
+      clobbered |= BITFIELD64_BIT(bi_preload_reg(BI_PRELOAD_SAMPLE_ID, arch));
+
    /* We can use a register iff it's not clobberred */
    return ~clobbered;
 }
@@ -365,7 +373,7 @@ bi_make_affinity(uint64_t clobber, unsigned count, bool split_file)
 static void
 bi_mark_interference(bi_block *block, struct lcra_state *l, uint8_t *live,
                      uint64_t preload_live, unsigned node_count, bool is_blend,
-                     bool split_file, unsigned arch)
+                     bool contains_blend, bool split_file, unsigned arch)
 {
    bool aligned_sr = arch >= 9;
    bi_foreach_instr_in_block_rev(block, ins) {
@@ -383,8 +391,9 @@ bi_mark_interference(bi_block *block, struct lcra_state *l, uint8_t *live,
           * offset, so we shift right. */
          unsigned count = bi_count_write_registers(ins, d);
          unsigned offset = ins->dest[d].offset;
-         uint64_t affinity =
-            bi_make_affinity(preload_live, count, split_file) >> offset;
+         uint64_t affinity = bi_make_affinity(preload_live, count, split_file,
+                                              contains_blend, arch) >>
+                             offset;
          /* Valhall needs >= 64-bit staging writes to be pair-aligned */
          if (aligned_sr && (count >= 2 || offset))
             affinity &= EVEN_BITS_MASK;
@@ -468,7 +477,8 @@ bi_mark_interference(bi_block *block, struct lcra_state *l, uint8_t *live,
 }
 
 static void
-bi_compute_interference(bi_context *ctx, struct lcra_state *l, bool full_regs)
+bi_compute_interference(bi_context *ctx, struct lcra_state *l, bool full_regs,
+                        bool contains_blend)
 {
    bi_compute_liveness_ra(ctx);
    bi_postra_liveness(ctx);
@@ -477,7 +487,8 @@ bi_compute_interference(bi_context *ctx, struct lcra_state *l, bool full_regs)
       uint8_t *live = mem_dup(blk->live_out, ctx->ssa_alloc);
 
       bi_mark_interference(blk, l, live, blk->reg_live_out, ctx->ssa_alloc,
-                           ctx->inputs->is_blend, !full_regs, ctx->arch);
+                           ctx->inputs->is_blend, contains_blend, !full_regs,
+                           ctx->arch);
 
       free(live);
    }
@@ -536,6 +547,8 @@ bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
    if (bifrost_debug & BIFROST_DBG_SPILL && !ctx->inputs->is_blend && (bifrost_debug & BIFROST_DBG_NOSSARA))
       default_affinity &= BITFIELD64_MASK(48) << 8;
 
+   bool contains_blend = false;
+
    bi_foreach_instr_global(ctx, ins) {
       bi_foreach_dest(ins, d)
          l->affinity[ins->dest[d].value] = default_affinity;
@@ -543,6 +556,8 @@ bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
       /* Blend shaders expect the src colour to be in blend_src0_c0
        * through c3 */
       if (ins->op == BI_OPCODE_BLEND && !ctx->inputs->is_blend) {
+         contains_blend = true;
+
          assert(bi_is_ssa(ins->src[0]));
          l->solutions[ins->src[0].value] =
             bi_preload_reg(BI_PRELOAD_BLEND_SRC0_C0, ctx->arch);
@@ -580,7 +595,7 @@ bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
       }
    }
 
-   bi_compute_interference(ctx, l, full_regs);
+   bi_compute_interference(ctx, l, full_regs, contains_blend);
    bi_add_move_hints(ctx, l);
 
    /* Coalesce register moves if we're allowed. We need to be careful due
