@@ -587,6 +587,10 @@ delay_update(struct ir3_compiler *compiler,
 
          for (unsigned consumer_alu = 0; consumer_alu < 2; consumer_alu++) {
             for (unsigned matching_size = 0; matching_size < 2; matching_size++) {
+               /* half and full registers only alias with merged register files */
+               if (!matching_size && !compiler->mergedregs)
+                  continue;
+
                unsigned *ready_slot =
                   get_ready_slot(state, dst, num, consumer_alu, matching_size);
 
