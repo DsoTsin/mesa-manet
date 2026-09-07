@@ -218,17 +218,20 @@ pub struct ISA {
 }
 
 impl ISA {
-    fn from_xml(xml: XmlElement, arch: Range<u8>) -> Result<ISA> {
-        assert_eq!(xml.name.local_name, "mali-isa");
-
+    fn from_xml(xmls: Vec<XmlElement>, arch: Range<u8>) -> Result<ISA> {
         // Process enums first since we need those for everything else
         let mut enums = EnumSet::new();
         let mut children = Vec::new();
-        for child in xml.children.into_iter() {
-            if child.name.local_name == "enum" {
-                enums.add_xml_enum(child, arch.clone())?;
-            } else {
-                children.push(child);
+
+        for xml in xmls {
+            assert_eq!(xml.name.local_name, "mali-isa");
+
+            for child in xml.children.into_iter() {
+                if child.name.local_name == "enum" {
+                    enums.add_xml_enum(child, arch.clone())?;
+                } else {
+                    children.push(child);
+                }
             }
         }
 
@@ -252,7 +255,15 @@ impl ISA {
         })
     }
 
-    pub fn from_xml_file(file: std::fs::File, arch: Range<u8>) -> Result<ISA> {
-        ISA::from_xml(xml::XmlElement::from_xml_file(file)?, arch)
+    pub fn from_xml_files(
+        files: Vec<std::fs::File>,
+        arch: Range<u8>,
+    ) -> Result<ISA> {
+        let mut xmls = Vec::new();
+        for file in files {
+            let xml = xml::XmlElement::from_xml_file(file)?;
+            xmls.push(xml);
+        }
+        ISA::from_xml(xmls, arch)
     }
 }

@@ -1394,10 +1394,15 @@ impl ToTokens for InstrEnc {
 }
 
 pub fn gen_encoder(
-    xml_file: &str,
+    xml_files: Vec<String>,
     arch: std::ops::Range<u8>,
 ) -> Result<TokenStream2> {
-    let mut isa = ISA::from_xml_file(std::fs::File::open(xml_file)?, arch)?;
+    let mut files = Vec::new();
+    for xml_file in xml_files {
+        let file = std::fs::File::open(xml_file)?;
+        files.push(file);
+    }
+    let mut isa = ISA::from_xml_files(files, arch)?;
 
     let mut ts = quote! {
         use crate::isa::*;

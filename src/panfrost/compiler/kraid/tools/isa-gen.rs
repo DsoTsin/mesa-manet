@@ -6,12 +6,14 @@ extern crate kraid_proc;
 use std::env;
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let xml_file = &args[1];
+    let mut args: Vec<String> = env::args().collect();
+    // Remove the binary name
+    args.remove(0);
 
-    let ts = kraid_proc::isa::encoder::gen_encoder(xml_file, 9..15).unwrap();
+    let ts =
+        kraid_proc::isa::encoder::gen_encoder(args.clone(), 9..15).unwrap();
     println!("{ts}");
 
-    let ts = kraid_proc::isa::decoder::gen_decoder(xml_file, 9..15).unwrap();
+    let ts = kraid_proc::isa::decoder::gen_decoder(args, 9..15).unwrap();
     println!("{ts}");
 }
