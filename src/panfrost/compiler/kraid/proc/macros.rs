@@ -10,7 +10,8 @@ use std::ops::{Add, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
 use syn::parse::{Parse, ParseStream};
-use syn::parse_macro_input;
+use syn::punctuated::Punctuated;
+use syn::{Token, bracketed, parse_macro_input};
 
 #[proc_macro_attribute]
 pub fn variants(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -87,18 +88,21 @@ impl Parse for LitRange {
 }
 
 struct GenIsaArgs {
-    xml: String,
+    xmls: Vec<String>,
     arch: Range<u8>,
 }
 
 impl Parse for GenIsaArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let xml: syn::LitStr = input.parse()?;
+        let xml_list;
+        bracketed!(xml_list in input);
+        let xmls =
+            Punctuated::<syn::LitStr, Token![,]>::parse_terminated(&xml_list)?;
         let _: syn::token::Comma = input.parse()?;
         let arch: LitRange = input.parse()?;
 
         Ok(GenIsaArgs {
-            xml: xml.value(),
+            xmls: xmls.iter().map(|xml| xml.value()).collect(),
             arch: arch.as_range(),
         })
     }
@@ -138,24 +142,27 @@ fn cfg_args() -> CfgArgs {
     CfgArgs { args }
 }
 
-fn cfg_isa_xml_path(args: &GenIsaArgs) -> String {
+fn cfg_isa_xml_paths(args: &GenIsaArgs) -> Vec<String> {
     let isa_xml_path = cfg_args()
         .find(|(key, _value)| key == "kraid_isa_xml_path")
         .and_then(|(_key, value)| value)
         .expect("kraid_isa_xml_path not specified");
 
-    let mut xml_path = PathBuf::from(isa_xml_path);
-    xml_path.push(&args.xml);
+    let xml_path = PathBuf::from(isa_xml_path);
+    let mut xmls = Vec::new();
+    for xml in args.xmls.iter() {
+        xmls.push(xml_path.join(xml).to_string_lossy().into_owned());
+    }
 
-    String::from(xml_path.to_str().unwrap())
+    xmls
 }
 
 #[proc_macro]
 pub fn gen_isa_encode(item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(item as GenIsaArgs);
-    let xml_path = cfg_isa_xml_path(&args);
+    let xml_paths = cfg_isa_xml_paths(&args);
 
-    isa::encoder::gen_encoder(&xml_path, args.arch)
+    isa::encoder::gen_encoder(xml_paths, args.arch)
         .unwrap()
         .into()
 }
@@ -163,9 +170,9 @@ pub fn gen_isa_encode(item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn gen_isa_decode(item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(item as GenIsaArgs);
-    let xml_path = cfg_isa_xml_path(&args);
+    let xml_paths = cfg_isa_xml_paths(&args);
 
-    isa::decoder::gen_decoder(&xml_path, args.arch)
+    isa::decoder::gen_decoder(xml_paths, args.arch)
         .unwrap()
         .into()
 }

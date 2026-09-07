@@ -972,10 +972,15 @@ fn gen_decode(isa: &ISA, name_e: Ident, var_e: Ident) -> TokenStream {
 }
 
 pub fn gen_decoder(
-    xml_file: &str,
+    xml_files: Vec<String>,
     arch: std::ops::Range<u8>,
 ) -> Result<TokenStream> {
-    let isa = ISA::from_xml_file(std::fs::File::open(xml_file)?, arch)?;
+    let mut files = Vec::new();
+    for xml_file in xml_files {
+        let file = std::fs::File::open(xml_file)?;
+        files.push(file);
+    }
+    let isa = ISA::from_xml_files(files, arch)?;
 
     let instr_names: HashSet<String> =
         isa.instrs.iter().map(|i| i.name.clone()).collect();
