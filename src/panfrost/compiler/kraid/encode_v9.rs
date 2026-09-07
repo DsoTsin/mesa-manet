@@ -2849,7 +2849,14 @@ impl V9Instr for OpMMulF16 {
 impl V9Instr for OpMMulF32 {
     fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
         V9InstrInfo::from_isa(
-            Mmul::get_info(self.src_type, arch),
+            Mmul::get_info(
+                if arch >= 15 {
+                    DataType::F32
+                } else {
+                    self.src_type
+                },
+                arch,
+            ),
             src_map! {
                 src0: a,
                 src1: b,
@@ -2867,7 +2874,11 @@ impl V9Instr for OpMMulF32 {
             assert_ne!(self.b_submat, F16SubMat::None);
         }
         e.encode(Mmul {
-            variant: self.src_type.try_into().unwrap(),
+            variant: if e.arch >= 15 {
+                MmulVariant::F32
+            } else {
+                self.src_type.try_into().unwrap()
+            },
             dst: op_encode_dst(self, &self.dst),
             src0: op_encode_src(self, &self.a, e.arch),
             src1: op_encode_src(self, &self.b, e.arch),
