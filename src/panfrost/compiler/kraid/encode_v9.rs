@@ -143,10 +143,17 @@ impl V9Encoder<'_> {
             .expect("Failed to encode instruction");
 
         let mut b = BitMutView::new(&mut bits);
-        if let Some(page) = instr_fau_page(&self.instr) {
-            b.set_field(57..59, page);
+        if self.arch >= 15 {
+            if let Some(page) = instr_fau_page(&self.instr) {
+                b.set_field(62..64, page);
+            }
+            b.set_field(58..62, flow);
+        } else {
+            if let Some(page) = instr_fau_page(&self.instr) {
+                b.set_field(57..59, page);
+            }
+            b.set_field(59..63, flow);
         }
-        b.set_field(59..63, flow);
 
         bits
     }
