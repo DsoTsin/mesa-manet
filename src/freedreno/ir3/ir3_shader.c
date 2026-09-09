@@ -851,6 +851,7 @@ ir3_setup_used_key(struct ir3_shader *shader)
        */
       key->msaa = shader->compiler->gen < 6 &&
                   (info->fs.uses_sample_qualifier ||
+                   info->fs.uses_sample_shading ||
                    (BITSET_TEST(info->system_values_read,
                                 SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID) ||
                     BITSET_TEST(info->system_values_read,
