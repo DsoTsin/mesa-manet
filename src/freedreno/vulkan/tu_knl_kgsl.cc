@@ -160,6 +160,11 @@ bo_init_new_ion_legacy(struct tu_device *dev, struct tu_bo **out_bo, uint64_t si
 
    ret = safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_SHARE, &share);
    if (ret) {
+      struct ion_handle_data free = {
+         .handle = alloc.handle,
+      };
+      safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_FREE, &free);
+
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "ION_IOC_SHARE failed (%s)", strerror(errno));
    }
@@ -169,6 +174,7 @@ bo_init_new_ion_legacy(struct tu_device *dev, struct tu_bo **out_bo, uint64_t si
    };
    ret = safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_FREE, &free);
    if (ret) {
+      close(share.fd);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "ION_IOC_FREE failed (%s)", strerror(errno));
    }
