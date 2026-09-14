@@ -2533,13 +2533,18 @@ impl<'a> ShaderFromNir<'a> {
                         offset: 0,
                     });
                 } else {
-                    let sample_id =
-                        self.preload(b, PreloadReg::SampleCentroidId);
+                    // v15 has sample_id in the same preload as coverage, so pass that to not
+                    // confuse the RA for ATEST (which only writes the first word in the register).
+                    let sample_id = if self.model.arch() >= 15 {
+                        coverage.clone()
+                    } else {
+                        self.preload(b, PreloadReg::SampleCentroidId).into()
+                    };
                     b.push_op(OpBlendCall {
                         color_type,
                         descr,
                         coverage,
-                        sample_id: sample_id.into(),
+                        sample_id: sample_id,
                         color,
                         second_color,
                         render_target_idx,
