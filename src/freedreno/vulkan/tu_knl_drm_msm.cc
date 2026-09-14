@@ -1107,12 +1107,11 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
                                  DRM_MSM_VM_BIND,
                                  &req, sizeof(req));
       }
-      int errno_ = errno;
 
       u_rwlock_rdunlock(&queue->device->vm_bind_fence_lock);
 
       if (ret) {
-         assert(errno_ != EINVAL);
+         assert(errno != EINVAL);
          if (errno == ENOMEM) {
             MESA_TRACE_SCOPE("DRM_MSM_VM_BIND OOM path");
 
