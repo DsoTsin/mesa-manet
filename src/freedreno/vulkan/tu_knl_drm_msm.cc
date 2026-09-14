@@ -716,7 +716,12 @@ msm_bo_init(struct tu_device *dev,
    if (result == VK_SUCCESS &&
        (mem_property & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) &&
        !(mem_property & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-      tu_bo_map(dev, bo, NULL);
+      result = tu_bo_map(dev, bo, NULL);
+      if (result != VK_SUCCESS) {
+         tu_bo_finish(dev, bo);
+         *out_bo = NULL;
+         return result;
+      }
 
       /* Cached non-coherent memory may already have dirty cache lines,
        * we should clean the cache lines before GPU got the chance to

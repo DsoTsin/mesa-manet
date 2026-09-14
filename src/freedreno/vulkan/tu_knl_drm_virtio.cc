@@ -777,7 +777,12 @@ virtio_bo_init(struct tu_device *dev,
 
    if ((mem_property & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) &&
        !(mem_property & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-      tu_bo_map(dev, bo, NULL);
+      result = tu_bo_map(dev, bo, NULL);
+      if (result != VK_SUCCESS) {
+         tu_bo_finish(dev, bo);
+         *out_bo = NULL;
+         return result;
+      }
 
       /* Cached non-coherent memory may already have dirty cache lines,
        * we should clean the cache lines before GPU got the chance to
@@ -925,7 +930,7 @@ virtio_bo_finish(struct tu_device *dev, struct tu_bo *bo)
    tu_debug_bos_del(dev, bo);
    tu_dump_bo_del(dev, bo);
 
-   if (bo->map)
+   if (bo->map && bo->map != MAP_FAILED)
       munmap(bo->map, bo->size);
 
    tu_bo_list_del(dev, bo);
