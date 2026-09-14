@@ -195,6 +195,7 @@ kgsl_bo_user_map(struct tu_device *dev, struct tu_bo *bo, uint64_t client_iova)
    }
 
    if (client_iova && (uint64_t)map != client_iova) {
+      munmap(map, bo->size);
       kgsl_bo_finish(dev, bo);
 
       return vk_errorf(dev, VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS,
