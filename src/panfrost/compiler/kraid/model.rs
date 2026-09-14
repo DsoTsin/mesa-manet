@@ -342,7 +342,10 @@ impl Model for ValhallModel {
                     }
                 } else if ptr::eq(&op.coverage, src) {
                     coverage
-                } else if ptr::eq(&op.sample_id, src) {
+                // v15 has sample_id in the same preload as coverage, so do not preload
+                // SampleCentroidID to not confuse the RA for ATEST (which only writes the first
+                // word in the register).
+                } else if ptr::eq(&op.sample_id, src) && self.arch < 15 {
                     preg(PreloadReg::SampleCentroidId)
                 } else {
                     None
