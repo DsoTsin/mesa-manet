@@ -87,7 +87,7 @@ impl Arena {
 
     /// Creates a new register arena for blend shaders
     pub fn new_blend(model: &dyn Model) -> Arena {
-        let limit = 16 * 4;
+        let limit = if model.arch() < 15 { 16 * 4 } else { 20 * 4 };
         Arena {
             limit: limit.into(),
             used: 0.into(),
@@ -306,8 +306,13 @@ pub fn instr_clobbered_regs(model: &dyn Model, op: &Op) -> Vec<RegRef> {
     match op {
         Op::BlendCall(_) => {
             let link = model.preload_reg(PreloadReg::BlendReturnAddr).unwrap();
-            let lower16 = RegRef::new(0, RegRange::Regs(16));
-            vec![lower16, link]
+            let blend_arena = Arena::new_blend(model);
+            let blend_regs_max = blend_arena.limit() / 4;
+            let blend_regs = RegRef::new(
+                0,
+                RegRange::Regs(blend_regs_max.try_into().unwrap()),
+            );
+            vec![blend_regs, link]
         }
         _ => Vec::new(),
     }
