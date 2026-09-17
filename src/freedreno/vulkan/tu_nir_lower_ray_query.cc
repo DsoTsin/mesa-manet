@@ -177,6 +177,11 @@ get_rq_initialize_uav_index(nir_intrinsic_instr *intr, struct rq_var *var)
    }
 }
 
+struct rq_uav_data {
+   nir_def *uav_index;
+   gl_access_qualifier access;
+};
+
 /* Before we modify control flow, walk the shader and determine ray query
  * instructions for which we know the ray query has been initialized via a
  * descriptor instead of a pointer, and record the UAV descriptor.
@@ -222,7 +227,10 @@ calc_uav_index(nir_function_impl *impl, struct hash_table *ht)
             if (rq->initialization &&
                 nir_block_dominates(rq->initialization->instr.block,
                                     block) && rq->uav_index) {
-               _mesa_hash_table_insert(ht, instr, rq->uav_index);
+               struct rq_uav_data *data = ralloc(ht, struct rq_uav_data);
+               data->uav_index = rq->uav_index;
+               data->access = nir_intrinsic_access(rq->initialization);
+               _mesa_hash_table_insert(ht, instr, data);
             }
          }
       }
@@ -231,14 +239,20 @@ calc_uav_index(nir_function_impl *impl, struct hash_table *ht)
 
 /* Return a pointer to the TLAS descriptor, which is actually a UAV
  * descriptor, if we know that the ray query has been initialized via a
- * descriptor and not a pointer. If not known, returns NULL.
+ * descriptor and not a pointer. If not known, returns NULL. Also return
+ * access flags to use when accessing the descriptor.
  */
 static nir_def *
-get_uav_index(nir_instr *cur_instr, struct hash_table *ht)
+get_uav_index(nir_instr *cur_instr, struct hash_table *ht,
+              gl_access_qualifier *access)
 {
    struct hash_entry *entry = _mesa_hash_table_search(ht, cur_instr);
-   if (entry)
-      return static_cast<nir_def *>(entry->data);
+   if (entry) {
+      const struct rq_uav_data *data = static_cast<const struct rq_uav_data *>(entry->data);
+      *access = data->access;
+      return data->uav_index;
+   }
+   *access = (gl_access_qualifier)0;
    return NULL;
 }
 
@@ -248,7 +262,7 @@ get_uav_index(nir_instr *cur_instr, struct hash_table *ht)
  */
 static nir_def *
 load_tlas(nir_builder *b, nir_def *tlas,
-          nir_def *uav_index, nir_def *index,
+          nir_def *uav_index, gl_access_qualifier access, nir_def *index,
           unsigned offset, unsigned components)
 {
    if (uav_index) {
@@ -256,7 +270,7 @@ load_tlas(nir_builder *b, nir_def *tlas,
                               nir_vec2(b, index, nir_imm_int(b, offset / 4)),
                               .access = static_cast<gl_access_qualifier>(
                                           ACCESS_NON_WRITEABLE |
-                                          ACCESS_CAN_REORDER),
+                                          ACCESS_CAN_REORDER | access),
                               .align_mul = AS_RECORD_SIZE,
                               .align_offset = offset);
    } else {
@@ -274,14 +288,14 @@ load_tlas(nir_builder *b, nir_def *tlas,
  * instances, so we need to add 1 to the instance ID when reading data in an
  * instance.
  */
-#define load_instance_offset(b, tlas, uav_index, instance, \
+#define load_instance_offset(b, tlas, uav_index, access, instance, \
                              field, offset, components) \
-   load_tlas(b, tlas, uav_index, nir_iadd_imm(b, instance, 1), \
+   load_tlas(b, tlas, uav_index, access, nir_iadd_imm(b, instance, 1), \
              offsetof(struct tu_instance_descriptor, field) + offset, \
              components)
 
-#define load_instance(b, tlas, uav_index, instance, field, components) \
-   load_instance_offset(b, tlas, uav_index, instance, field, 0, components)
+#define load_instance(b, tlas, uav_index, access, instance, field, components) \
+   load_instance_offset(b, tlas, uav_index, access, instance, field, 0, components)
 
 #define rq_deref(b, _rq, name) nir_build_deref_struct(b, _rq, rq_index_##name)
 #define rq_load(b, _rq, name) nir_load_deref(b, rq_deref(b, _rq, name))
@@ -306,6 +320,7 @@ lower_rq_initialize(nir_builder *b, struct hash_table *ht,
       var->initialization = NULL;
    }
 
+   gl_access_qualifier access = nir_intrinsic_access(intr);
    nir_def *uav_index = get_rq_initialize_uav_index(intr, var);
 
    nir_def *tlas = intr->src[1].ssa;
@@ -318,7 +333,7 @@ lower_rq_initialize(nir_builder *b, struct hash_table *ht,
 
    nir_def *tlas_base;
    if (uav_index) {
-      tlas_base = load_tlas(b, NULL, uav_index, nir_imm_int(b, 0),
+      tlas_base = load_tlas(b, NULL, uav_index, access, nir_imm_int(b, 0),
                             offsetof(struct tu_accel_struct_header,
                                      self_ptr), 2);
    } else {
@@ -327,7 +342,7 @@ lower_rq_initialize(nir_builder *b, struct hash_table *ht,
 
    rq_store(b, rq, accel_struct_base, tlas_base, 0x3);
 
-   nir_def *root_bvh_base = load_tlas(b, tlas_base, uav_index, nir_imm_int(b, 0),
+   nir_def *root_bvh_base = load_tlas(b, tlas_base, uav_index, access, nir_imm_int(b, 0),
                                       offsetof(struct tu_accel_struct_header,
                                                bvh_ptr), 2);
 
@@ -421,7 +436,8 @@ lower_rq_load(nir_builder *b, struct hash_table *ht, nir_intrinsic_instr *intr)
 {
    struct rq_var *var;
    nir_deref_instr *rq = get_rq_deref(b, ht, intr->src[0].ssa, &var);
-   nir_def *uav_index = get_uav_index(&intr->instr, ht);
+   gl_access_qualifier access;
+   nir_def *uav_index = get_uav_index(&intr->instr, ht, &access);
    nir_def *tlas = rq_load(b, rq, accel_struct_base);
    nir_deref_instr *closest = rq_deref(b, rq, closest);
    nir_deref_instr *candidate = rq_deref(b, rq, candidate);
@@ -452,7 +468,7 @@ lower_rq_load(nir_builder *b, struct hash_table *ht, nir_intrinsic_instr *intr)
       return rqi_load(b, intersection, geometry_id);
    case nir_ray_query_value_intersection_instance_custom_index: {
       nir_def *instance = rqi_load(b, intersection, instance);
-      return load_instance(b, tlas, uav_index, instance, custom_instance_index, 1);
+      return load_instance(b, tlas, uav_index, access, instance, custom_instance_index, 1);
    }
    case nir_ray_query_value_intersection_instance_id:
       return rqi_load(b, intersection, instance);
@@ -466,7 +482,7 @@ lower_rq_load(nir_builder *b, struct hash_table *ht, nir_intrinsic_instr *intr)
       nir_def *instance = rqi_load(b, intersection, instance);
       nir_def *rows[3];
       for (unsigned r = 0; r < 3; ++r)
-         rows[r] = load_instance_offset(b, tlas, uav_index, instance,
+         rows[r] = load_instance_offset(b, tlas, uav_index, access, instance,
                                         otw_matrix.values,
                                         r * 16, 4);
 
@@ -495,7 +511,7 @@ lower_rq_load(nir_builder *b, struct hash_table *ht, nir_intrinsic_instr *intr)
       nir_def *instance = rqi_load(b, intersection, instance);
       nir_def *rows[3];
       for (unsigned r = 0; r < 3; ++r)
-         rows[r] = load_instance_offset(b, tlas, uav_index, instance,
+         rows[r] = load_instance_offset(b, tlas, uav_index, access, instance,
                                         wto_matrix.values, r * 16, 4);
 
       return nir_vec3(b, nir_channel(b, rows[0], column), nir_channel(b, rows[1], column),
@@ -549,7 +565,8 @@ fetch_parent_node(nir_builder *b, nir_def *bvh, nir_def *node)
 
 static nir_def *
 build_ray_traversal(nir_builder *b, nir_deref_instr *rq,
-                    nir_def *tlas, nir_def *uav_index)
+                    nir_def *tlas, nir_def *uav_index,
+                    gl_access_qualifier access)
 {
    nir_deref_instr *candidate = rq_deref(b, rq, candidate);
    nir_deref_instr *closest = rq_deref(b, rq, closest);
@@ -728,15 +745,16 @@ build_ray_traversal(nir_builder *b, nir_deref_instr *rq,
             nir_def *wto_matrix[3];
             for (unsigned i = 0; i < 3; i++)
                wto_matrix[i] = load_instance_offset(b, tlas, uav_index,
+                                                    access,
                                                     intersection_id,
                                                     wto_matrix.values,
                                                     i * 16, 4);
 
             nir_def *sbt_offset_and_flags =
-               load_instance(b, tlas, uav_index, intersection_id,
+               load_instance(b, tlas, uav_index, access, intersection_id,
                              sbt_offset_and_flags, 1);
             nir_def *blas_bvh =
-               load_instance(b, tlas, uav_index, intersection_id,
+               load_instance(b, tlas, uav_index, access, intersection_id,
                              bvh_ptr, 2);
 
             nir_def *instance_flags = nir_iand_imm(b, sbt_offset_and_flags,
@@ -937,12 +955,13 @@ lower_rq_proceed(nir_builder *b, struct hash_table *ht, nir_intrinsic_instr *int
 {
    struct rq_var *var;
    nir_deref_instr *rq = get_rq_deref(b, ht, intr->src[0].ssa, &var);
-   nir_def *uav_index = get_uav_index(&intr->instr, ht);
+   gl_access_qualifier access;
+   nir_def *uav_index = get_uav_index(&intr->instr, ht, &access);
    nir_def *tlas = rq_load(b, rq, accel_struct_base);
 
    nir_push_if(b, nir_load_deref(b, rq_deref(b, rq, incomplete)));
    {
-      nir_def *incomplete = build_ray_traversal(b, rq, tlas, uav_index);
+      nir_def *incomplete = build_ray_traversal(b, rq, tlas, uav_index, access);
       nir_store_deref(b, rq_deref(b, rq, incomplete), incomplete, 0x1);
    }
    nir_pop_if(b, NULL);
