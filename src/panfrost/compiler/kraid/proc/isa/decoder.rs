@@ -197,7 +197,8 @@ impl DecoderNode<'_> {
 }
 
 struct LoadField<'a> {
-    name: String,
+    ident: Ident,
+    alias_ident: Option<Ident>,
     field: &'a InstrField,
 }
 
@@ -207,21 +208,28 @@ impl LoadField<'_> {
     fn new<'a>(name: &str, instr: &'a Instr) -> LoadField<'a> {
         let field = instr.get_named_field(name).unwrap();
 
+        let print_from_alias =
+            matches!(field.field_type(), Some(FieldType::Enum(_)));
+        let alias_ident = if print_from_alias {
+            Some(Ident::new(
+                &to_snake_case(&format!("{}_", name)),
+                Span::call_site(),
+            ))
+        } else {
+            None
+        };
+
         LoadField {
-            name: String::from(name),
+            ident: Ident::new(&to_snake_case(&name), Span::call_site()),
+            alias_ident,
             field,
         }
     }
 
-    fn print_from_alias(&self) -> bool {
-        matches!(self.field.field_type(), Some(FieldType::Enum(_)))
-    }
-
     fn ident_print(&self) -> Ident {
-        if self.print_from_alias() {
-            Ident::new(&format!("{}_", &self.name), Span::call_site())
-        } else {
-            Ident::new(&self.name, Span::call_site())
+        match &self.alias_ident {
+            Some(alias_ident) => alias_ident.clone(),
+            None => self.ident.clone(),
         }
     }
 
@@ -305,7 +313,7 @@ impl ToTokens for LoadField<'_> {
             InstrField::Reserved(_) => unreachable!("Can't load reserved"),
         };
 
-        let ident = Ident::new(self.field.name().unwrap(), Span::call_site());
+        let ident = self.ident.clone();
         ts.extend(quote! {let #ident = #raw_load_ts; });
 
         let cast_ts = self.as_field_type_ts(&ident);
@@ -901,23 +909,9 @@ impl ToTokens for SimpleEnum {
             self.values.iter().map(|n| ident!("{n}")).collect();
         idents.sort();
 
-        let display_cases: Vec<TokenStream> = idents
-            .iter()
-            .zip(&self.values)
-            .map(|(i, s)| quote! {#name_id::#i => write!(f, #s)})
-            .collect();
-
         ts.extend(quote! {
             pub enum #name_id {
                 #(#idents),*
-            }
-
-            impl std::fmt::Display for #name_id {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    match self {
-                        #(#display_cases),*
-                    }
-                }
             }
         })
     }
