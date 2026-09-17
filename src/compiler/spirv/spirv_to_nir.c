@@ -6929,6 +6929,8 @@ vtn_handle_ray_query_intrinsic(struct vtn_builder *b, SpvOp opcode,
       /* The sources are in the same order in the NIR intrinsic */
       for (unsigned i = 0; i < 8; i++)
          intrin->src[i] = nir_src_for_ssa(vtn_ssa_value(b, w[i + 1])->def);
+      if (vtn_value_is_non_uniform(b, vtn_untyped_value(b, w[2])))
+         nir_intrinsic_set_access(intrin, ACCESS_NON_UNIFORM);
       nir_builder_instr_insert(&b->nb, &intrin->instr);
       break;
    }
