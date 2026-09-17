@@ -757,7 +757,10 @@ intrinsic("execute_callable", src_comp=[1, -1])
 #   5. Ray Tmin
 #   6. Ray Direction
 #   7. Ray Tmax
-intrinsic("rq_initialize", src_comp=[-1, -1, 1, 1, 3, 1, 3, 1])
+#
+# The access applies to all subsequent accesses of the acceleration structure
+# using this ray query.
+intrinsic("rq_initialize", src_comp=[-1, -1, 1, 1, 3, 1, 3, 1], indices=[ACCESS])
 # src[] = { query }
 intrinsic("rq_terminate", src_comp=[-1])
 # src[] = { query }
