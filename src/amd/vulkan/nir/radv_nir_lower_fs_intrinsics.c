@@ -109,7 +109,9 @@ static bool
 lower_load_input_attachment(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
 {
    switch (intrin->intrinsic) {
-   case nir_intrinsic_load_input_attachment_coord: {
+   case nir_intrinsic_load_input_attachment_coord:
+   case nir_intrinsic_load_depth_input_attachment_coord:
+   case nir_intrinsic_load_stencil_input_attachment_coord: {
       b->cursor = nir_before_instr(&intrin->instr);
 
       nir_def *pos = nir_u2f32(b, nir_load_pixel_coord(b));

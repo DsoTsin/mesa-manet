@@ -1168,6 +1168,8 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       return lower_sysval_to_root_table(b, intrin, draw.view_index, ctx);
 
    case nir_intrinsic_load_input_attachment_coord:
+   case nir_intrinsic_load_depth_input_attachment_coord:
+   case nir_intrinsic_load_stencil_input_attachment_coord:
       return lower_load_input_attachment_coord(b, intrin, ctx);
 
    case nir_intrinsic_image_deref_load:

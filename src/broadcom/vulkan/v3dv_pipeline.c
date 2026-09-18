@@ -262,7 +262,9 @@ static bool
 try_lower_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
 {
    switch (intrin->intrinsic) {
-   case nir_intrinsic_load_input_attachment_coord: {
+   case nir_intrinsic_load_input_attachment_coord:
+   case nir_intrinsic_load_depth_input_attachment_coord:
+   case nir_intrinsic_load_stencil_input_attachment_coord: {
       b->cursor = nir_before_instr(&intrin->instr);
 
       nir_variable *pos_var =

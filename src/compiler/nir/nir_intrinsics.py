@@ -1265,7 +1265,13 @@ intrinsic("load_sample_pos_from_id", src_comp=[1], dest_comp=2,
 # Takes an input attachment index and returns an ivec with the position in
 # input attachment space in .xy and the input attachment array index in .z.
 intrinsic("load_input_attachment_coord", src_comp=[1], dest_comp=3,
-          bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
+          bit_sizes=[32], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+intrinsic("load_depth_input_attachment_coord", dest_comp=3, bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
+intrinsic("load_stencil_input_attachment_coord", dest_comp=3, bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # Demote a subset of samples given by a specified sample mask. This acts like a
 # per-sample demote, or an inverted accumulating gl_SampleMask write.
