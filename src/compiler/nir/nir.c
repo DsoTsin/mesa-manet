@@ -2885,6 +2885,9 @@ nir_rewrite_image_intrinsic(nir_intrinsic_instr *intrin, nir_def *src,
       }                                                         \
       break;
       CASE(load)
+      CASE(input_attachment_load)
+      CASE(depth_input_attachment_load)
+      CASE(stencil_input_attachment_load)
       CASE(sparse_load)
       CASE(store)
       CASE(atomic)

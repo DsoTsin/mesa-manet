@@ -859,6 +859,11 @@ def image(name, src_comp=[], extra_indices=[], **kwargs):
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
 
 image("load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
+# The fourth source is in the input attachment index. The BASE is implicitly
+# added, and the RANGE indicates how many input attachments can be accessed.
+image("input_attachment_load", src_comp=[2, 1, 1], extra_indices=[DEST_TYPE, BASE, RANGE], dest_comp=0, flags=[CAN_REORDER, CAN_ELIMINATE])
+image("depth_input_attachment_load", src_comp=[2, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_REORDER, CAN_ELIMINATE])
+image("stencil_input_attachment_load", src_comp=[2, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_REORDER, CAN_ELIMINATE])
 image("sparse_load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
 image("store", src_comp=[4, 1, 0, 1], extra_indices=[SRC_TYPE])
 image("atomic",  src_comp=[4, 1, 0], dest_comp=0, extra_indices=[ATOMIC_OP])
