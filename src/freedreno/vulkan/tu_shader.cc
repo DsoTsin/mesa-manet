@@ -1617,6 +1617,8 @@ struct lower_fdm_options {
    bool adjust_fragcoord;
    bool use_layer;
    bool adjust_gmem_fragcoord;
+   bool gmem_depth_stencil;
+   uint32_t gmem_input_attachment;
 };
 
 static bool
@@ -1630,7 +1632,9 @@ lower_fdm_filter(const nir_instr *instr, const void *data)
 
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
    return intrin->intrinsic == nir_intrinsic_load_frag_size ||
-      intrin->intrinsic == nir_intrinsic_load_frag_coord_gmem_ir3 ||
+      intrin->intrinsic == nir_intrinsic_load_input_attachment_coord ||
+      intrin->intrinsic == nir_intrinsic_load_depth_input_attachment_coord ||
+      intrin->intrinsic == nir_intrinsic_load_stencil_input_attachment_coord ||
       (intrin->intrinsic == nir_intrinsic_load_frag_coord &&
        options->adjust_fragcoord);
 }
@@ -1643,60 +1647,87 @@ lower_fdm_instr(struct nir_builder *b, nir_instr *instr, void *data)
 
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
 
-   nir_def *view;
-   if (options->num_views > 1) {
-      gl_varying_slot slot = options->use_layer ?
-         VARYING_SLOT_LAYER : VARYING_SLOT_VIEW_INDEX;
-      nir_variable *view_var =
-         nir_find_variable_with_location(b->shader, nir_var_shader_in,
-                                         slot);
+   gl_varying_slot slot = options->use_layer ?
+      VARYING_SLOT_LAYER : VARYING_SLOT_VIEW_INDEX;
+   nir_variable *layer_var =
+      nir_find_variable_with_location(b->shader, nir_var_shader_in,
+                                      slot);
 
-      if (view_var == NULL) {
-         view_var = nir_variable_create(b->shader, nir_var_shader_in,
-                                        glsl_int_type(), NULL);
-         view_var->data.location = slot;
-         view_var->data.interpolation = INTERP_MODE_FLAT;
-         view_var->data.driver_location = b->shader->num_inputs++;
-      }
+   if (layer_var == NULL) {
+      layer_var = nir_variable_create(b->shader, nir_var_shader_in,
+                                      glsl_int_type(), NULL);
+      layer_var->data.location = slot;
+      layer_var->data.interpolation = INTERP_MODE_FLAT;
+      layer_var->data.driver_location = b->shader->num_inputs++;
+   }
 
-      view = nir_load_var(b, view_var);
-   } else {
+   nir_def *layer = nir_load_var(b, layer_var);
+
+   nir_def *view = layer;
+   if (options->num_views == 1) {
+      /* If FDM is not per-layer, force frag_size/frag_offset to use layer 0.
+       */
       view = nir_imm_int(b, 0);
    }
 
    nir_def *frag_size =
       nir_load_frag_size_ir3(b, view, .range = options->num_views);
 
-   if (intrin->intrinsic == nir_intrinsic_load_frag_coord) {
+   if (intrin->intrinsic == nir_intrinsic_load_frag_coord ||
+       intrin->intrinsic == nir_intrinsic_load_input_attachment_coord ||
+       intrin->intrinsic == nir_intrinsic_load_depth_input_attachment_coord ||
+       intrin->intrinsic == nir_intrinsic_load_stencil_input_attachment_coord) {
       nir_def *frag_offset =
          nir_load_frag_offset_ir3(b, view, .range = options->num_views);
       nir_def *unscaled_coord = nir_load_frag_coord_unscaled_ir3(b);
-      nir_def *xy = nir_trim_vector(b, unscaled_coord, 2);
-      xy = nir_fmul(b, nir_fsub(b, xy, frag_offset), nir_i2f32(b, frag_size));
-      return nir_vec4(b,
-                      nir_channel(b, xy, 0),
-                      nir_channel(b, xy, 1),
-                      nir_channel(b, unscaled_coord, 2),
-                      nir_channel(b, unscaled_coord, 3));
-   }
+      nir_def *unscaled_xy = nir_trim_vector(b, unscaled_coord, 2);
+      nir_def *xy = unscaled_xy;
+      if (options->adjust_fragcoord)
+         xy = nir_fmul(b, nir_fsub(b, unscaled_xy, frag_offset), nir_i2f32(b, frag_size));
 
-   if (intrin->intrinsic == nir_intrinsic_load_frag_coord_gmem_ir3) {
-      nir_def *unscaled_coord = nir_load_frag_coord_unscaled_ir3(b);
+      if (intrin->intrinsic == nir_intrinsic_load_frag_coord) {
+         return nir_vec4(b,
+                         nir_channel(b, xy, 0),
+                         nir_channel(b, xy, 1),
+                         nir_channel(b, unscaled_coord, 2),
+                         nir_channel(b, unscaled_coord, 3));
+      } else {
+         if (options->adjust_fragcoord) {
+            /* Calculate fragment coordinates in rendering space. This is the
+             * space used to access attachments in GMEM.
+             */
+            nir_def *gmem_xy = unscaled_xy;
+            if (options->adjust_gmem_fragcoord) {
+               nir_def *gmem_frag_offset =
+                  nir_load_gmem_frag_offset_ir3(b, view, .range = options->num_views);
+               nir_def *gmem_frag_scale =
+                  nir_load_gmem_frag_scale_ir3(b, view, .range = options->num_views);
+               gmem_xy = nir_fadd(b, nir_fmul(b, unscaled_xy, gmem_frag_scale),
+                                  gmem_frag_offset);
+            }
 
-      if (!options->adjust_gmem_fragcoord)
-         return unscaled_coord;
+            /* Select between gmem_xy (the xy coordinates in rendering space) and
+             * xy (the xy coordinates in framebuffer space) depending on whether
+             * the input attachment is in GMEM or not.
+             */
+            if (intrin->intrinsic == nir_intrinsic_load_depth_input_attachment_coord ||
+                intrin->intrinsic == nir_intrinsic_load_stencil_input_attachment_coord) {
+               if (options->gmem_depth_stencil)
+                  xy = gmem_xy;
+            } else {
+               unsigned base = nir_intrinsic_base(intrin);
+               nir_def *offset = intrin->src[0].ssa;
+               nir_def *is_gmem =
+                  nir_i2b(b, nir_iand(b, nir_ishr(b, nir_imm_int(b, options->gmem_input_attachment >> base), offset),
+                                      nir_imm_int(b, 1)));
+               xy = nir_bcsel(b, is_gmem, gmem_xy, xy);
+            }
+         }
 
-      nir_def *frag_offset =
-         nir_load_gmem_frag_offset_ir3(b, view, .range = options->num_views);
-      nir_def *frag_scale =
-         nir_load_gmem_frag_scale_ir3(b, view, .range = options->num_views);
-      nir_def *xy = nir_trim_vector(b, unscaled_coord, 2);
-      xy = nir_fadd(b, nir_fmul(b, xy, frag_scale), frag_offset);
-      return nir_vec4(b,
-                      nir_channel(b, xy, 0),
-                      nir_channel(b, xy, 1),
-                      nir_channel(b, unscaled_coord, 2),
-                      nir_channel(b, unscaled_coord, 3));
+         xy = nir_f2i32(b, xy);
+         return nir_vec3(b, nir_channel(b, xy, 0), nir_channel(b, xy, 1),
+                         layer);
+      }
    }
 
    assert(intrin->intrinsic == nir_intrinsic_load_frag_size);
@@ -3408,18 +3439,7 @@ tu_lower_nir(struct tu_device *dev,
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       const nir_input_attachment_options att_options = {
-         /* When using multiview rendering, we must use
-          * gl_ViewIndex as the layer id to pass to the texture
-          * sampling function. gl_Layer doesn't work when
-          * multiview is enabled.
-          */
-         .use_view_id_for_layer = key->multiview_mask != 0,
-         .gmem_depth_stencil_ir3 =
-            key->dynamic_renderpass && !(key->read_only_input_attachments & 1),
-         .gmem_input_attachment_ir3 =
-            key->dynamic_renderpass ?
-            ~(key->read_only_input_attachments >> 1) :
-            key->unscaled_input_fragcoord,
+         .use_ia_coord_intrin = true,
       };
       NIR_PASS(_, nir, nir_lower_input_attachments, &att_options);
 
@@ -3440,9 +3460,6 @@ tu_lower_nir(struct tu_device *dev,
       NIR_PASS(_, nir, nir_lower_sysvals_to_varyings, &sysval_options);
    }
 
-   /* This has to happen before lower_input_attachments, because we have to
-    * lower input attachment coordinates except if unscaled.
-    */
    const struct lower_fdm_options fdm_options = {
       .num_views = MAX2(key->multiview_mask ?
                         util_last_bit(key->multiview_mask) :
@@ -3450,6 +3467,12 @@ tu_lower_nir(struct tu_device *dev,
       .adjust_fragcoord = key->fragment_density_map,
       .use_layer = !key->multiview_mask || !has_hw_multiview,
       .adjust_gmem_fragcoord = key->fragment_density_map && key->custom_resolve,
+      .gmem_depth_stencil =
+         key->dynamic_renderpass && !(key->read_only_input_attachments & 1),
+      .gmem_input_attachment =
+         key->dynamic_renderpass ?
+         ~(key->read_only_input_attachments >> 1) :
+         key->unscaled_input_fragcoord,
    };
    NIR_PASS(_, nir, tu_nir_lower_fdm, &fdm_options);
 
