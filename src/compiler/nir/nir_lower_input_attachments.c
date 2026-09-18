@@ -72,7 +72,7 @@ load_coord(nir_builder *b, nir_deref_instr *deref,
 
 static bool
 try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
-                     bool is_deref, bool is_sparse,
+                     bool is_deref,
                      const nir_input_attachment_options *options)
 {
    nir_tex_src_type handle_src_type;
@@ -130,7 +130,7 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
    tex->dest_type = dest_type;
    tex->is_array = true;
    tex->is_shadow = false;
-   tex->is_sparse = is_sparse;
+   tex->is_sparse = false;
 
    tex->texture_index = 0;
    tex->sampler_index = 0;
@@ -153,17 +153,7 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
    nir_def_init(&tex->instr, &tex->def, nir_tex_instr_dest_size(tex), 32);
    nir_builder_instr_insert(b, &tex->instr);
 
-   if (tex->is_sparse) {
-      unsigned load_result_size = load->def.num_components - 1;
-      nir_component_mask_t load_result_mask = nir_component_mask(load_result_size);
-      nir_def *res = nir_channels(
-         b, &tex->def, load_result_mask | 0x10);
-
-      nir_def_replace(&load->def, res);
-   } else {
-      nir_def_replace(&load->def, &tex->def);
-   }
-
+   nir_def_replace(&load->def, &tex->def);
    return true;
 }
 
@@ -219,15 +209,11 @@ lower_input_attachments_instr(nir_builder *b, nir_instr *instr, void *_data)
 
       switch (load->intrinsic) {
       case nir_intrinsic_image_deref_load:
-      case nir_intrinsic_image_deref_sparse_load:
          return try_lower_input_load(
-            b, load, true /* is_deref */,
-            load->intrinsic == nir_intrinsic_image_deref_sparse_load, options);
+            b, load, true /* is_deref */, options);
       case nir_intrinsic_image_heap_load:
-      case nir_intrinsic_image_heap_sparse_load:
          return try_lower_input_load(
-            b, load, false /* is_deref */,
-            load->intrinsic == nir_intrinsic_image_heap_sparse_load, options);
+            b, load, false /* is_deref */, options);
       default:
          return false;
       }
