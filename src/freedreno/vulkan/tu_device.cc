@@ -3182,6 +3182,10 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    device->perfcntrs = fd_perfcntr_state_alloc(
       &physical_device->dev_id,
       is_kgsl(physical_device->instance) ? -1 : device->fd);
+   if (!device->perfcntrs) {
+      result = vk_startup_errorf(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY, "failed to allocate perfcounter state");
+      goto fail_autotune;
+   }
 
    device->autotune = new tu_autotune(device, result);
    if (result != VK_SUCCESS)

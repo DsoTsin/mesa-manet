@@ -138,6 +138,8 @@ fd_perfcntr_state_alloc(const struct fd_dev_id *id, int fd)
       return NULL;
 
    struct fd_perfcntr_state *perfcntrs = rzalloc(NULL, struct fd_perfcntr_state);
+   if (!perfcntrs)
+      return NULL;
 
    simple_mtx_init(&perfcntrs->lock, mtx_plain);
    perfcntrs->fd = fd;
@@ -146,6 +148,10 @@ fd_perfcntr_state_alloc(const struct fd_dev_id *id, int fd)
    perfcntrs->groups = groups;
    perfcntrs->group_configs =
       rzalloc_array(perfcntrs, struct drm_msm_perfcntr_group, nr_groups);
+   if (!perfcntrs->group_configs) {
+      ralloc_free(perfcntrs);
+      return NULL;
+   }
 
    for (unsigned i = 0; i < nr_groups; i++) {
       assert(strlen(groups[i].name) < sizeof(perfcntrs->group_configs[i].group_name));
@@ -159,7 +165,16 @@ fd_perfcntr_state_alloc(const struct fd_dev_id *id, int fd)
    };
 
    perfcntrs->assigned_counters = rzalloc_array(perfcntrs, assigned_counters_t, nr_groups);
+   if (!perfcntrs->assigned_counters) {
+      ralloc_free(perfcntrs);
+      return NULL;
+   }
+
    perfcntrs->counter_state = _mesa_pointer_hash_table_create(perfcntrs);
+   if (!perfcntrs->counter_state) {
+      ralloc_free(perfcntrs);
+      return NULL;
+   }
 
    /* Probe for kernel PERFCNTR_CONFIG support with empty config: */
    if (update_reserved_counters(perfcntrs))
