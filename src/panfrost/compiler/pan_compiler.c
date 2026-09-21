@@ -160,10 +160,12 @@ pan_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
    else
       midgard_preprocess_nir(nir, gpu_id);
 
+   bool is_kraid = pan_use_kraid(pan_arch(gpu_id), nir->info.stage,
+                                 nir->info.internal);
    /* Lower textures early */
    nir_lower_tex_options lower_tex_options = {
       .lower_txs_lod = true,
-      .lower_txp = ~0,
+      .lower_txp = (is_kraid && pan_arch(gpu_id) >= 11) ? 0 : ~0,
       .lower_tg4_offsets = true,
       .lower_tg4_broadcom_swizzle = true,
       .lower_txd = pan_arch(gpu_id) < 6,

@@ -3440,6 +3440,7 @@ bi_emit_tex_valhall(bi_builder *b, nir_tex_instr *tex)
    struct pan_va_tex_flags flags;
    STATIC_ASSERT(sizeof(tex->backend_flags) == sizeof(flags));
    memcpy(&flags, &tex->backend_flags, sizeof(flags));
+   assert(!flags.projection_enable);
 
    bi_index src0 = bi_extract(b, bi_def_index(tex_h), 0);
    bi_index src1 = bi_extract(b, bi_def_index(tex_h), 1);
