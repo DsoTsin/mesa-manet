@@ -34,34 +34,17 @@ load_layer_id(nir_builder *b, const nir_input_attachment_options *options)
 }
 
 static nir_def *
-load_coord(nir_builder *b, nir_deref_instr *deref,
+load_coord(nir_builder *b, nir_tex_instr *tex, nir_def *offset,
            const nir_input_attachment_options *options)
 {
    if (options->use_ia_coord_intrin) {
-      nir_def *index;
-      nir_variable *var;
-      if (deref->deref_type == nir_deref_type_array) {
-         ASSERTED nir_deref_instr *parent = nir_deref_instr_parent(deref);
-         assert(parent->deref_type == nir_deref_type_var);
-         var = parent->var;
-         index = deref->arr.index.ssa;
+      if (tex->input_attachment_depth) {
+         return nir_load_depth_input_attachment_coord(b);
+      } else if (tex->input_attachment_stencil) {
+         return nir_load_stencil_input_attachment_coord(b);
       } else {
-         assert(deref->deref_type == nir_deref_type_var);
-         var = deref->var;
-         index = nir_imm_int(b, 0);
-      }
-
-      if (var->data.index == NIR_VARIABLE_NO_INDEX) {
-         /* Depth vs. stencil input attachment is determined by the sampler
-          * result type.
-          */
-         bool is_stencil =
-            glsl_base_type_is_integer(glsl_get_sampler_result_type(var->type));
-         return is_stencil ?
-            nir_load_stencil_input_attachment_coord(b) :
-            nir_load_depth_input_attachment_coord(b);
-      } else {
-         return nir_load_input_attachment_coord(b, index, .base = var->data.index);
+         return nir_load_input_attachment_coord(b, offset, .base =
+                                                tex->texture_index);
       }
    } else {
       nir_def *pos = nir_f2i32(b, nir_build_frag_coord(b, 2));
@@ -78,7 +61,7 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
    nir_tex_src_type handle_src_type;
    enum glsl_sampler_dim image_dim;
    nir_alu_type dest_type;
-   nir_def *handle, *coord;
+   nir_def *handle;
 
    b->cursor = nir_after_instr(&load->instr);
 
@@ -87,11 +70,6 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
       assert(glsl_type_is_image(deref->type));
 
       image_dim = glsl_get_sampler_dim(deref->type);
-
-      nir_def *offset = nir_vec3(b, nir_channel(b, load->src[1].ssa, 0),
-                                    nir_channel(b, load->src[1].ssa, 1),
-                                    nir_imm_int(b, 0));
-      coord = nir_iadd(b, load_coord(b, deref, options), offset);
 
       handle = &deref->def;
       handle_src_type = nir_tex_src_texture_deref;
@@ -103,13 +81,6 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
       if (image_dim != GLSL_SAMPLER_DIM_SUBPASS &&
           image_dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
          return false;
-
-      nir_def *frag_coord = nir_f2i32(b, nir_build_frag_coord(b, 2));
-      coord = nir_vec3(
-         b,
-         nir_iadd(b, nir_channel(b, frag_coord, 0), nir_channel(b, load->src[1].ssa, 0)),
-         nir_iadd(b, nir_channel(b, frag_coord, 1), nir_channel(b, load->src[1].ssa, 1)),
-         load_layer_id(b, options));
 
       handle = load->src[0].ssa;
       handle_src_type = nir_tex_src_texture_heap_offset;
@@ -159,6 +130,11 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
    if (input_attachment_index)
       tex->texture_index = nir_intrinsic_base(load);
 
+   nir_def *offset = nir_vec3(b, nir_channel(b, load->src[1].ssa, 0),
+                                 nir_channel(b, load->src[1].ssa, 1),
+                                 nir_imm_int(b, 0));
+   nir_def *coord = nir_iadd(b, load_coord(b, tex, load->src[3].ssa, options), offset);
+
    tex->src[src++] = nir_tex_src_for_ssa(handle_src_type, handle);
    tex->src[src++] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
    tex->coord_components = 3;
@@ -203,7 +179,13 @@ try_lower_input_texop(nir_builder *b, nir_tex_instr *tex,
    offset = nir_vec3(b, nir_channel(b, offset, 0),
                         nir_channel(b, offset, 1),
                         nir_imm_int(b, 0));
-   nir_def *coord = nir_iadd(b, load_coord(b, deref, options), offset);
+
+   int texture_offset_idx =
+      nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+   nir_def *texture_offset =
+      texture_offset_idx >= 0 ? tex->src[texture_offset_idx].src.ssa :
+      nir_imm_int(b, 0);
+   nir_def *coord = nir_iadd(b, load_coord(b, tex, texture_offset, options), offset);
 
    tex->coord_components = 3;
 
