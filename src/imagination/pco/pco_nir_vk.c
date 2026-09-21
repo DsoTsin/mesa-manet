@@ -301,6 +301,9 @@ lower_vk_intr(nir_builder *b, nir_intrinsic_instr *intr, void *cb_data)
       return lower_load_vulkan_descriptor(b, intr, common);
 
    case nir_intrinsic_image_deref_load:
+   case nir_intrinsic_image_deref_input_attachment_load:
+   case nir_intrinsic_image_deref_depth_input_attachment_load:
+   case nir_intrinsic_image_deref_stencil_input_attachment_load:
    case nir_intrinsic_image_deref_store:
    case nir_intrinsic_image_deref_atomic:
    case nir_intrinsic_image_deref_atomic_swap:

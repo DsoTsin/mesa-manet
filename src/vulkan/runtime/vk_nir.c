@@ -26,6 +26,7 @@
 
 #include "compiler/nir/nir_xfb_info.h"
 #include "compiler/nir/nir.h"
+#include "compiler/nir/nir_builder.h"
 #include "compiler/spirv/nir_spirv.h"
 #include "vk_device.h"
 #include "vk_log.h"
@@ -115,6 +116,132 @@ nir_vk_is_not_xfb_output(nir_variable *var, void *data)
    }
 }
 
+/* Input attachment loads are OpImageRead in SPIR-V. Extract the input
+ * attachment index from the deref chain and variable, and turn it into an
+ * intrinsic which contains the index directly.
+ */
+static bool
+lower_input_attachment_load(nir_builder *b, nir_instr *instr,
+                            void *cb_data)
+{
+   nir_deref_instr *deref;
+
+   if (instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+      if (intrin->intrinsic != nir_intrinsic_image_deref_load)
+         return false;
+
+      deref = nir_src_as_deref(intrin->src[0]);
+
+      assert(glsl_type_is_image(deref->type));
+   } else if (instr->type == nir_instr_type_tex) {
+      nir_tex_instr *tex = nir_instr_as_tex(instr);
+
+      const int texture_src_idx =
+         nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+      if (texture_src_idx < 0)
+         return false;
+
+      deref = nir_src_as_deref(tex->src[texture_src_idx].src);
+   } else {
+      return false;
+   }
+
+   enum glsl_sampler_dim image_dim = glsl_get_sampler_dim(deref->type);
+   if (image_dim != GLSL_SAMPLER_DIM_SUBPASS &&
+       image_dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
+      return false;
+
+   b->cursor = nir_before_instr(instr);
+
+   nir_def *index;
+   nir_variable *var;
+   unsigned range = 1;
+   if (deref->deref_type == nir_deref_type_array) {
+      ASSERTED nir_deref_instr *parent = nir_deref_instr_parent(deref);
+      assert(parent->deref_type == nir_deref_type_var);
+      var = parent->var;
+      index = deref->arr.index.ssa;
+      range = glsl_array_size(parent->type);
+   } else {
+      assert(deref->deref_type == nir_deref_type_var);
+      var = deref->var;
+      index = nir_imm_int(b, 0);
+   }
+
+   /* Depth vs. stencil input attachment is determined by the sampler
+    * result type.
+    */
+   bool is_stencil =
+      var->data.index == NIR_VARIABLE_NO_INDEX &&
+      glsl_base_type_is_integer(glsl_get_sampler_result_type(var->type));
+   bool is_depth =
+      var->data.index == NIR_VARIABLE_NO_INDEX &&
+      !glsl_base_type_is_integer(glsl_get_sampler_result_type(var->type));
+
+   if (instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+      nir_def *new_def;
+      nir_def *offset = nir_trim_vector(b, intrin->src[1].ssa, 2);
+      nir_def *sample = intrin->src[2].ssa;
+      if (is_stencil) {
+         new_def =
+            nir_image_deref_stencil_input_attachment_load(b,
+               intrin->def.num_components, intrin->def.bit_size,
+               intrin->src[0].ssa, offset, sample,
+               .image_dim = nir_intrinsic_image_dim(intrin),
+               .image_array = nir_intrinsic_image_array(intrin),
+               .access = nir_intrinsic_access(intrin),
+               .dest_type = nir_intrinsic_dest_type(intrin));
+      } else if (is_depth) {
+         new_def =
+            nir_image_deref_depth_input_attachment_load(b,
+               intrin->def.num_components, intrin->def.bit_size,
+               intrin->src[0].ssa, offset, sample,
+               .image_dim = nir_intrinsic_image_dim(intrin),
+               .image_array = nir_intrinsic_image_array(intrin),
+               .access = nir_intrinsic_access(intrin),
+               .dest_type = nir_intrinsic_dest_type(intrin));
+      } else {
+         new_def =
+            nir_image_deref_input_attachment_load(b,
+               intrin->def.num_components, intrin->def.bit_size,
+               intrin->src[0].ssa, offset, sample, index,
+               .image_dim = nir_intrinsic_image_dim(intrin),
+               .image_array = nir_intrinsic_image_array(intrin),
+               .access = nir_intrinsic_access(intrin),
+               .dest_type = nir_intrinsic_dest_type(intrin),
+               .base = var->data.index,
+               .range = range);
+      }
+
+      nir_def_rewrite_uses(&intrin->def, new_def);
+      nir_instr_remove(instr);
+   } else {
+      nir_tex_instr *tex = nir_instr_as_tex(instr);
+
+      tex->input_attachment_depth = is_depth;
+      tex->input_attachment_stencil = is_stencil;
+      tex->input_attachment_index = !is_depth && !is_stencil;
+
+      if (tex->input_attachment_index) {
+         tex->texture_index = var->index;
+         if (deref->deref_type == nir_deref_type_array) {
+            tex->texture_array_size = range;
+            nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, index);
+         }
+      }
+   }
+   return true;
+}
+
+bool
+vk_nir_lower_input_attachment_loads(nir_shader *shader)
+{
+   return nir_shader_instructions_pass(shader, lower_input_attachment_load,
+                                       nir_metadata_control_flow, NULL);
+}
+
 nir_shader *
 vk_spirv_to_nir(struct vk_device *device,
                 const uint32_t *spirv_data, size_t spirv_size_B,
@@ -180,6 +307,9 @@ vk_spirv_to_nir(struct vk_device *device,
 
    /* Pick off the single entrypoint that we want */
    nir_remove_non_cmat_call_entrypoints(nir);
+
+   if (nir->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, vk_nir_lower_input_attachment_loads);
 
    /* Now that we've deleted all but the main function, we can go ahead and
     * lower the rest of the constant initializers.  We do this here so that

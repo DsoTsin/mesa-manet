@@ -87,9 +87,6 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
       assert(glsl_type_is_image(deref->type));
 
       image_dim = glsl_get_sampler_dim(deref->type);
-      if (image_dim != GLSL_SAMPLER_DIM_SUBPASS &&
-          image_dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
-         return false;
 
       nir_def *offset = nir_vec3(b, nir_channel(b, load->src[1].ssa, 0),
                                     nir_channel(b, load->src[1].ssa, 1),
@@ -208,10 +205,14 @@ lower_input_attachments_instr(nir_builder *b, nir_instr *instr, void *_data)
       nir_intrinsic_instr *load = nir_instr_as_intrinsic(instr);
 
       switch (load->intrinsic) {
-      case nir_intrinsic_image_deref_load:
+      case nir_intrinsic_image_deref_input_attachment_load:
+      case nir_intrinsic_image_deref_depth_input_attachment_load:
+      case nir_intrinsic_image_deref_stencil_input_attachment_load:
          return try_lower_input_load(
             b, load, true /* is_deref */, options);
-      case nir_intrinsic_image_heap_load:
+      case nir_intrinsic_image_heap_input_attachment_load:
+      case nir_intrinsic_image_heap_depth_input_attachment_load:
+      case nir_intrinsic_image_heap_stencil_input_attachment_load:
          return try_lower_input_load(
             b, load, false /* is_deref */, options);
       default:

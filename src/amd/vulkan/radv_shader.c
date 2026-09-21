@@ -584,6 +584,9 @@ radv_shader_spirv_to_nir(const struct radv_compiler_info *compiler_info, struct 
       }
       NIR_PASS(_, nir, nir_opt_deref);
 
+      if (nir->info.stage == MESA_SHADER_FRAGMENT)
+         NIR_PASS(_, nir, vk_nir_lower_input_attachment_loads);
+
       /* Make sure we lower constant initializers on output variables so that
        * nir_remove_dead_variables below sees the corresponding stores
        */

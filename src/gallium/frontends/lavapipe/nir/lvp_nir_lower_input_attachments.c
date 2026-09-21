@@ -62,16 +62,25 @@ try_lower_input_load(nir_intrinsic_instr *load, bool use_fragcoord_sysval)
    nir_def *frag_coord = use_fragcoord_sysval ? nir_build_frag_coord(&b, 2)
                                               : load_frag_coord(&b);
    frag_coord = nir_f2i32(&b, frag_coord);
-   nir_def *offset = nir_trim_vector(&b, load->src[1].ssa, 2);
+   nir_def *offset = load->src[1].ssa;
    nir_def *pos = nir_iadd(&b, frag_coord, offset);
 
    nir_def *layer = nir_load_view_index(&b);
    nir_def *coord =
       nir_vec4(&b, nir_channel(&b, pos, 0), nir_channel(&b, pos, 1), layer, nir_imm_int(&b, 0));
 
-   nir_intrinsic_set_image_array(load, true);
+   nir_def *new_load =
+      nir_image_deref_load(&b, load->def.num_components,
+                           load->def.bit_size,
+                           load->src[0].ssa, coord, load->src[2].ssa, nir_imm_int(&b, 0),
+                           .image_dim = image_dim,
+                           .image_array = true,
+                           .access = nir_intrinsic_access(load),
+                           .dest_type = nir_intrinsic_dest_type(load));
 
    nir_src_rewrite(&load->src[1], coord);
+   nir_def_rewrite_uses(&load->def, new_load);
+   nir_instr_remove(&load->instr);
 
    return true;
 }
@@ -90,7 +99,9 @@ lvp_lower_input_attachments(nir_shader *shader, bool use_fragcoord_sysval)
 
             nir_intrinsic_instr *load = nir_instr_as_intrinsic(instr);
 
-            if (load->intrinsic != nir_intrinsic_image_deref_load)
+            if (load->intrinsic != nir_intrinsic_image_deref_input_attachment_load &&
+                load->intrinsic != nir_intrinsic_image_deref_depth_input_attachment_load &&
+                load->intrinsic != nir_intrinsic_image_deref_stencil_input_attachment_load)
                continue;
 
             progress |= try_lower_input_load(load, use_fragcoord_sysval);

@@ -86,15 +86,12 @@ lower_input_attachment_load(nir_builder *b, nir_intrinsic_instr *intr,
 {
    struct panvk_lower_input_attachment_load_ctx *ctx = data;
 
-   if (intr->intrinsic != nir_intrinsic_image_deref_load &&
-       intr->intrinsic != nir_intrinsic_image_deref_sparse_load)
+   if (intr->intrinsic != nir_intrinsic_image_deref_input_attachment_load &&
+       intr->intrinsic != nir_intrinsic_image_deref_depth_input_attachment_load &&
+       intr->intrinsic != nir_intrinsic_image_deref_stencil_input_attachment_load)
       return false;
 
    nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
-   enum glsl_sampler_dim image_dim = glsl_get_sampler_dim(deref->type);
-   if (image_dim != GLSL_SAMPLER_DIM_SUBPASS &&
-       image_dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
-      return false;
 
    b->cursor = nir_before_instr(&intr->instr);
 
