@@ -117,9 +117,16 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
       dest_type = nir_intrinsic_dest_type(load);
    }
 
-   const bool multisampled = (image_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
+   bool input_attachment_index =
+      load->intrinsic == nir_intrinsic_image_deref_input_attachment_load ||
+      load->intrinsic == nir_intrinsic_image_heap_input_attachment_load;
 
-   nir_tex_instr *tex = nir_tex_instr_create(b->shader, 3 + multisampled);
+   const bool multisampled = (image_dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
+   /* A range of 0 means unknown. A range of 1 means the offset must be 0. */
+   const bool arrayed = input_attachment_index &&
+      (nir_intrinsic_range(load) == 0 || nir_intrinsic_range(load) > 1);
+
+   nir_tex_instr *tex = nir_tex_instr_create(b->shader, 3 + arrayed + multisampled);
 
    tex->op = nir_texop_txf;
    tex->sampler_dim = image_dim;
@@ -133,16 +140,35 @@ try_lower_input_load(nir_builder *b, nir_intrinsic_instr *load,
    tex->sampler_index = 0;
    tex->can_speculate = true;
 
-   tex->src[0] = nir_tex_src_for_ssa(handle_src_type, handle);
-   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
+   unsigned src = 0;
+
+   if (arrayed) {
+      tex->src[src++] = nir_tex_src_for_ssa(nir_tex_src_texture_offset,
+                                            load->src[3].ssa);
+      tex->texture_array_size = nir_intrinsic_range(load);
+      tex->texture_non_uniform = nir_intrinsic_access(load) & ACCESS_NON_UNIFORM;
+   }
+
+   tex->input_attachment_depth =
+      load->intrinsic == nir_intrinsic_image_deref_depth_input_attachment_load ||
+      load->intrinsic == nir_intrinsic_image_heap_depth_input_attachment_load;
+   tex->input_attachment_stencil =
+      load->intrinsic == nir_intrinsic_image_deref_stencil_input_attachment_load ||
+      load->intrinsic == nir_intrinsic_image_heap_stencil_input_attachment_load;
+   tex->input_attachment_index = input_attachment_index;
+   if (input_attachment_index)
+      tex->texture_index = nir_intrinsic_base(load);
+
+   tex->src[src++] = nir_tex_src_for_ssa(handle_src_type, handle);
+   tex->src[src++] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
    tex->coord_components = 3;
 
-   tex->src[2] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
+   tex->src[src++] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
 
    if (image_dim == GLSL_SAMPLER_DIM_SUBPASS_MS) {
       tex->op = nir_texop_txf_ms;
-      tex->src[3].src_type = nir_tex_src_ms_index;
-      tex->src[3].src = load->src[2];
+      tex->src[src++] = nir_tex_src_for_ssa(nir_tex_src_ms_index,
+                                            load->src[2].ssa);
    }
 
    tex->texture_non_uniform = nir_intrinsic_access(load) & ACCESS_NON_UNIFORM;

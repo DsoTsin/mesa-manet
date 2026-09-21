@@ -1059,6 +1059,11 @@ lower_tex_impl(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
    int tex_src_idx = nir_tex_instr_src_index(tex, ref ? nir_tex_src_texture_2_deref : nir_tex_src_texture_deref);
    if (tex_src_idx >= 0) {
       nir_deref_instr *deref = nir_src_as_deref(tex->src[tex_src_idx].src);
+      /* Remove texture index from NIR input attachment lowering. */
+      int offset_src = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+      if (offset_src >= 0)
+         nir_tex_instr_remove_src(tex, offset_src);
+      tex->texture_index = 0;
       nir_def *bindless = build_bindless(dev, b, deref, 0, shader, layout,
                                          read_only_input_attachments,
                                          dynamic_renderpass,
