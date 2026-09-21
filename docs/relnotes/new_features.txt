@@ -58,3 +58,25 @@ VK_EXT_image_sliced_view_of_3d on pvr
 VK_EXT_image_compression_control on panvk
 Support for G2-Ultra, G2-Premium and G2-Pro GPUs on Panfrost and PanVK
 VK_KHR_maintenance10 on panvk
+VK_KHR_shader_untyped_pointers on HK
+VK_KHR_maintenance10 on HK
+VK_KHR_shader_fma on HK
+VK_EXT_primitive_restart_index on HK
+GL_EXT_color_buffer_float on etnaviv/HALTI5
+GL_EXT_conservative_depth on etnaviv/HALTI5
+GL_EXT_draw_buffers_indexed on etnaviv/HALTI5
+GL_EXT_EGL_image_storage on etnaviv/HALTI5
+GL_EXT_EGL_image_storage_compression on etnaviv/HALTI5
+GL_EXT_shader_integer_mix on etnaviv/HALTI5
+GL_EXT_sRGB_write_control on etnaviv/HALTI5
+GL_EXT_texture_compression_rgtc on etnaviv/HALTI5
+GL_EXT_texture_sRGB_decode on etnaviv/HALTI5
+GL_EXT_texture_sRGB_R8 on etnaviv/HALTI5
+GL_EXT_texture_sRGB_RG8 on etnaviv/HALTI5
+GL_EXT_texture_storage_compression on etnaviv/HALTI5
+GL_MESA_framebuffer_flip_y on etnaviv/HALTI5
+GL_MESA_shader_integer_functions on etnaviv/HALTI5
+GL_OES_draw_buffers_indexed on etnaviv/HALTI5
+GL_OES_EGL_image_external_essl3 on etnaviv/HALTI5
+GLES 3.0 on etnaviv/HALTI5
+VK_QCOM_rotated_copy_commands on Turnip

@@ -431,6 +431,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .QCOM_multiview_per_view_viewports =
          device->info->props.has_per_view_viewport,
       .QCOM_render_pass_shader_resolve = true,
+      .QCOM_rotated_copy_commands = true,
       .VALVE_buffer_device_address_allocation_alignment =
          device->has_iova_align,
       .VALVE_fragment_density_map_layered = true,
