@@ -572,47 +572,6 @@ build_bindless(struct tu_device *dev, nir_builder *b,
    const struct tu_descriptor_set_binding_layout *bind_layout =
       &set_layout->binding[binding];
 
-   /* input attachments use non bindless workaround */
-   if (bind_layout->type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT &&
-       (!dynamic_renderpass ||
-        (var->data.index == NIR_VARIABLE_NO_INDEX ?
-        !(read_only_input_attachments & 0x1) :
-        !(read_only_input_attachments & (1u << (var->data.index + 1))))) &&
-       !TU_DEBUG(DYNAMIC)) {
-      const struct glsl_type *glsl_type = glsl_without_array(var->type);
-      uint32_t idx;
-
-      /* With dynamic renderpasses, we reserve the first two attachments for
-       * input attachments without an InputAttachmentIndex, which must be for
-       * depth/stencil if they are not read-only, and shift over the rest of
-       * the indices.
-       */
-      if (var->data.index == ~0u) {
-         assert(dynamic_renderpass);
-         idx = 0;
-      } else if (dynamic_renderpass) {
-         idx = (var->data.index + 1) * 2;
-      } else {
-         idx = var->data.index * 2;
-      }
-
-      /* Record which input attachments are used for tracking feedback loops */
-      if (dynamic_renderpass)
-         shader->fs.dynamic_input_attachments_used |= (1u << (idx / 2));
-
-      BITSET_SET_RANGE_INSIDE_WORD(b->shader->info.textures_used, idx, (idx + bind_layout->array_size * 2) - 1);
-
-      /* D24S8 workaround: stencil of D24S8 will be sampled as uint */
-      if (glsl_get_sampler_result_type(glsl_type) == GLSL_TYPE_UINT)
-         idx += 1;
-
-      if (deref->deref_type == nir_deref_type_var)
-         return nir_imm_int(b, idx);
-
-      nir_def *arr_index = deref->arr.index.ssa;
-      return nir_iadd_imm(b, nir_imul_imm(b, arr_index, 2), idx);
-   }
-
    shader->active_desc_sets |= 1u << set;
 
    nir_def *desc_offset;
@@ -1059,11 +1018,6 @@ lower_tex_impl(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
    int tex_src_idx = nir_tex_instr_src_index(tex, ref ? nir_tex_src_texture_2_deref : nir_tex_src_texture_deref);
    if (tex_src_idx >= 0) {
       nir_deref_instr *deref = nir_src_as_deref(tex->src[tex_src_idx].src);
-      /* Remove texture index from NIR input attachment lowering. */
-      int offset_src = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
-      if (offset_src >= 0)
-         nir_tex_instr_remove_src(tex, offset_src);
-      tex->texture_index = 0;
       nir_def *bindless = build_bindless(dev, b, deref, 0, shader, layout,
                                          read_only_input_attachments,
                                          dynamic_renderpass,
@@ -1088,11 +1042,103 @@ lower_tex_impl(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
 }
 
 static bool
+lower_input_attachment(nir_builder *b, nir_tex_instr *tex,
+                       struct tu_shader *shader,
+                       const struct tu_pipeline_layout *layout,
+                       uint32_t read_only_input_attachments,
+                       bool dynamic_renderpass)
+{
+   if (dynamic_renderpass &&
+       ((tex->input_attachment_depth || tex->input_attachment_stencil) ?
+        (read_only_input_attachments & 0x1) :
+        (read_only_input_attachments & (1u << (tex->texture_index + 1)))))
+      return false;
+
+   if (TU_DEBUG(DYNAMIC))
+      return false;
+
+   uint32_t idx;
+   /* With dynamic renderpasses, we reserve the first two attachments for
+    * input attachments without an InputAttachmentIndex, which must be for
+    * depth/stencil if they are not read-only, and shift over the rest of
+    * the indices.
+    */
+   if (tex->input_attachment_depth) {
+      assert(dynamic_renderpass);
+      idx = 0;
+   } else if (tex->input_attachment_stencil) {
+      assert(dynamic_renderpass);
+      idx = 1;
+   } else if (dynamic_renderpass) {
+      idx = (tex->texture_index + 1) * 2;
+      /* D24S8 workaround: stencil of D24S8 will be sampled as uint */
+      if (nir_alu_type_get_base_type(tex->dest_type) != nir_type_float)
+         idx += 1;
+   } else {
+      idx = tex->texture_index * 2;
+      if (nir_alu_type_get_base_type(tex->dest_type) != nir_type_float)
+         idx += 1;
+   }
+
+   unsigned offset_range = 1;
+   int offset_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+   int handle_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+   nir_def *offset = NULL;
+   if (offset_idx >= 0) {
+      offset = tex->src[offset_idx].src.ssa;
+      offset_range = tex->texture_array_size;
+      if (offset_range == 0) {
+         /* If the array size is unspecified, it comes from the pipeline
+          * layout.
+          */
+         nir_deref_instr *deref =
+            nir_src_as_deref(tex->src[handle_idx].src);
+         nir_variable *var = nir_deref_instr_get_variable(deref);
+
+         unsigned set = var->data.descriptor_set;
+         unsigned binding = var->data.binding;
+         const struct tu_descriptor_set_layout *set_layout =
+            layout->set[set].layout;
+         const struct tu_descriptor_set_binding_layout *bind_layout =
+            &set_layout->binding[binding];
+         offset_range = bind_layout->array_size;
+      }
+   }
+
+   /* Record which input attachments are used for tracking feedback loops */
+   if (dynamic_renderpass)
+      shader->fs.dynamic_input_attachments_used |= (1u << (idx / 2));
+
+   BITSET_SET_RANGE_INSIDE_WORD(b->shader->info.textures_used, idx, (idx + offset_range * 2) - 2);
+
+   nir_def *handle = offset ?
+      nir_iadd_imm(b, nir_imul_imm(b, offset, 2), idx) : nir_imm_int(b, idx);
+
+   if (offset_idx >= 0)
+      nir_src_rewrite(&tex->src[offset_idx].src, handle);
+   else
+      nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, handle);
+
+   nir_tex_instr_remove_src(tex, handle_idx);
+   tex->texture_index = 0;
+
+   return true;
+}
+
+static bool
 lower_tex(nir_builder *b, nir_tex_instr *tex, struct tu_device *dev,
           struct tu_shader *shader, const struct tu_pipeline_layout *layout,
           uint32_t read_only_input_attachments, bool dynamic_renderpass)
 {
    tex->can_speculate = true;
+
+   if (tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
+       tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS) {
+      if (lower_input_attachment(b, tex, shader, layout,
+                                 read_only_input_attachments,
+                                 dynamic_renderpass))
+         return true;
+   }
 
    if (tex->op == nir_texop_block_match_sad_qcom ||
        tex->op == nir_texop_block_match_ssd_qcom ||
