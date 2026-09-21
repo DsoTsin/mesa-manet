@@ -21,6 +21,7 @@ struct tex_srcs {
    nir_def *ddx;
    nir_def *ddy;
    nir_def *z_cmpr;
+   nir_def *proj;
 };
 
 static nir_def *
@@ -52,6 +53,7 @@ steal_tex_srcs(nir_builder *b, nir_tex_instr *tex)
       case nir_tex_src_min_lod:        srcs.min_lod = def;  break;
       case nir_tex_src_ddx:            srcs.ddx = def;      break;
       case nir_tex_src_ddy:            srcs.ddy = def;      break;
+      case nir_tex_src_projector:      srcs.proj = def;     break;
       default:
          UNREACHABLE("Unsupported texture source");
       }
@@ -832,6 +834,10 @@ va_lower_tex(nir_builder *b, nir_tex_instr *tex, uint64_t gpu_id)
    } else {
       for (unsigned i = 0; i < coord_comps; i++)
          sr[VA_TEX_SR_COORD_S + i] = nir_channel(b, srcs.coord, i);
+      if (srcs.proj) {
+         sr[VA_TEX_SR_COORD_Q] = srcs.proj;
+         flags.projection_enable = true;
+      }
    }
 
    if (tex->is_array) {
