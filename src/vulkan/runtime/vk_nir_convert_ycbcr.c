@@ -288,7 +288,6 @@ lower_ycbcr_tex_instr(nir_builder *b, nir_tex_instr *tex, void *_state)
       uint32_t set = var->data.descriptor_set;
       uint32_t binding = var->data.binding;
 
-      assert(tex->texture_index == 0);
       unsigned array_index = 0;
       if (deref->deref_type != nir_deref_type_var) {
          assert(deref->deref_type == nir_deref_type_array);
@@ -301,6 +300,8 @@ lower_ycbcr_tex_instr(nir_builder *b, nir_tex_instr *tex, void *_state)
    }
    if (conversion == NULL)
       return false;
+
+   assert(tex->texture_index == 0);
 
    const struct vk_format_ycbcr_info *format_ycbcr_info =
       vk_format_get_ycbcr_info(conversion->format);
