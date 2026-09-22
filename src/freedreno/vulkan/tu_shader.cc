@@ -988,7 +988,6 @@ lower_tex_immutable(struct tu_device *dev,
        tex->op == nir_texop_lod)
       return;
 
-   assert(tex->texture_index == 0);
    unsigned array_index = 0;
    if (deref->deref_type != nir_deref_type_var) {
       assert(deref->deref_type == nir_deref_type_array);
