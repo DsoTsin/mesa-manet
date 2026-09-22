@@ -458,8 +458,10 @@ const struct pan_format GENX(pan_pipe_format)[PIPE_FORMAT_COUNT] = {
    FMT(R32G32B32A32_FLOAT,      RGBA32F,         RGBA, L, VTR_IB),
    FMT(R8_UNORM,                R8_UNORM,        R001, L, VTR_IB),
    FMT(R16_UNORM,               R16_UNORM,       R001, L, VTR_IB),
+   FMT(X6R10_UNORM,             R16_UNORM,       R001, L, VTR_IB),
    FMT(R8G8_UNORM,              RG8_UNORM,       RG01, L, VTR_IB),
    FMT(R16G16_UNORM,            RG16_UNORM,      RG01, L, VTR_IB),
+   FMT(X6R10X6G10_UNORM,        RG16_UNORM,      RG01, L, VTR_IB),
    FMT(R8G8B8_UNORM,            RGB8_UNORM,      RGB1, L, VTR_IB),
    FMT(B8G8R8_UNORM,            RGB8_UNORM,      BGR1, L, VTR_IB),
 

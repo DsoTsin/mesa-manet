@@ -105,6 +105,9 @@ pan_pack_color(const struct pan_blendable_format *blendable_formats,
                uint32_t *packed, const union pipe_color_union *color,
                enum pipe_format format, bool dithered)
 {
+   if (pan_format_is_yuv(format))
+      format = pan_yuv_rt_internal_format(format);
+
    enum mali_color_buffer_internal_format internal =
       blendable_formats[format].internal;
 
