@@ -1983,6 +1983,14 @@ lower_tex(nir_builder *b, nir_tex_instr *tex,
 
    b->cursor = nir_before_instr(&tex->instr);
 
+   /* Remove input attachment offsets. */
+   if (tex->input_attachment_index) {
+      int offset_idx =
+         nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+      if (offset_idx >= 0)
+         nir_tex_instr_remove_src(tex, offset_idx);
+   }
+
    lower_tex_deref(b, tex, nir_tex_src_texture_deref,
                    tex->texture_index, plane, state);
    lower_tex_deref(b, tex, nir_tex_src_sampler_deref,
