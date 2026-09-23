@@ -7,6 +7,7 @@
 
 #include "ir3_compiler.h"
 #include "ir3_nir.h"
+#include <type_traits>
 
 #define debug 0
 
@@ -112,108 +113,100 @@ compute_variant_key(struct ir3_shader *shader, struct ir3_shader_variant *v,
    blob_finish(&blob);
 }
 
+template <typename IO>
 static void
-retrieve_variant(struct blob_reader *blob, struct ir3_shader_variant *v)
+process_variant(IO &io, struct ir3_shader_variant *v)
 {
-   blob_copy_bytes(blob, VARIANT_CACHE_PTR(v), VARIANT_CACHE_SIZE);
+   io.bytes(VARIANT_CACHE_PTR(v), VARIANT_CACHE_SIZE);
 
    /*
     * pointers need special handling:
     */
 
-   v->bin = (uint32_t *)rzalloc_size(v, v->info.size);
-   blob_copy_bytes(blob, v->bin, v->info.size);
+   if constexpr (IO::is_read())
+      v->bin = (uint32_t *)rzalloc_size(v, v->info.size);
+   io.bytes(v->bin, v->info.size);
 
-   if (!v->binning_pass) {
-      blob_copy_bytes(blob, v->const_state, sizeof(*v->const_state));
-   }
+   /* No handling of constant_data, it's already baked into bin at this point. */
+
+   if (!v->binning_pass)
+      io.bytes(v->const_state, sizeof(*v->const_state));
 
    if (!v->compiler->info->props.load_shader_consts_via_preamble) {
-      v->imm_state.size = blob_read_uint32(blob);
-      v->imm_state.count = v->imm_state.size;
+      io.u32(v->imm_state.size);
       uint32_t immeds_sz = v->imm_state.size * sizeof(v->imm_state.values[0]);
-      v->imm_state.values = (uint32_t *)ralloc_size(v, immeds_sz);
-      blob_copy_bytes(blob, v->imm_state.values, immeds_sz);
+
+      if constexpr (IO::is_read()) {
+         v->imm_state.count = v->imm_state.size;
+         v->imm_state.values = (uint32_t *)ralloc_size(v, immeds_sz);
+      }
+
+      io.bytes(v->imm_state.values, immeds_sz);
    }
 }
 
 static void
-store_variant(struct blob *blob, const struct ir3_shader_variant *v)
+ir3_shader_variant_init(struct ir3_shader_variant *v,
+                        struct ir3_compiler *compiler)
 {
-   blob_write_bytes(blob, VARIANT_CACHE_PTR(v), VARIANT_CACHE_SIZE);
-
-   /*
-    * pointers need special handling:
-    */
-
-   blob_write_bytes(blob, v->bin, v->info.size);
-
-   /* No saving constant_data, it's already baked into bin at this point. */
-
-   if (!v->binning_pass) {
-      blob_write_bytes(blob, v->const_state, sizeof(*v->const_state));
-   }
-
-   /* When load_shader_consts_via_preamble, immediates are loaded in the
-    * preamble and hence part of bin.
-    */
-   if (!v->compiler->info->props.load_shader_consts_via_preamble) {
-      blob_write_uint32(blob, v->imm_state.size);
-      uint32_t immeds_sz = v->imm_state.size * sizeof(v->imm_state.values[0]);
-      blob_write_bytes(blob, v->imm_state.values, immeds_sz);
-   }
-}
-
-struct ir3_shader_variant *
-ir3_retrieve_variant(struct blob_reader *blob, struct ir3_compiler *compiler,
-                     void *mem_ctx)
-{
-   struct ir3_shader_variant *v =
-      (struct ir3_shader_variant *)rzalloc_size(mem_ctx, sizeof(*v));
-
    v->id = 0;
    v->compiler = compiler;
    v->binning_pass = false;
    v->nonbinning = NULL;
    v->binning = NULL;
-   blob_copy_bytes(blob, &v->key, sizeof(v->key));
-   v->type = (enum mesa_shader_stage)blob_read_uint32(blob);
-   v->mergedregs = blob_read_uint8(blob);
    v->const_state =
       (struct ir3_const_state *)rzalloc_size(v, sizeof(*v->const_state));
+}
 
-   retrieve_variant(blob, v);
+static void
+ir3_shader_variant_binning_alloc(struct ir3_shader_variant *v)
+{
+   v->binning =
+      (struct ir3_shader_variant *)rzalloc_size(v, sizeof(*v->binning));
+   v->binning->id = 0;
+   v->binning->compiler = v->compiler;
+   v->binning->binning_pass = true;
+   v->binning->nonbinning = v;
+   v->binning->key = v->key;
+   v->binning->type = MESA_SHADER_VERTEX;
+   v->binning->mergedregs = v->mergedregs;
+   v->binning->const_state = v->const_state;
+}
+
+template <typename IO>
+void
+ir3_process_variant(IO &io, struct ir3_shader_variant *v)
+{
+   if constexpr (IO::is_read())
+      ir3_shader_variant_init(v, io.compiler);
+
+   io.bytes(&v->key, sizeof(v->key));
+   io.enum_t(v->type);
+   io.boolean(v->mergedregs);
+   process_variant(io, v);
 
    if (v->type == MESA_SHADER_VERTEX && ir3_has_binning_vs(&v->key)) {
-      v->binning =
-         (struct ir3_shader_variant *)rzalloc_size(v, sizeof(*v->binning));
-      v->binning->id = 0;
-      v->binning->compiler = compiler;
-      v->binning->binning_pass = true;
-      v->binning->nonbinning = v;
-      v->binning->key = v->key;
-      v->binning->type = MESA_SHADER_VERTEX;
-      v->binning->mergedregs = v->mergedregs;
-      v->binning->const_state = v->const_state;
+      if constexpr (IO::is_read())
+         ir3_shader_variant_binning_alloc(v);
 
-      retrieve_variant(blob, v->binning);
+      process_variant(io, v->binning);
    }
-   
-   return v;
 }
 
 void
-ir3_store_variant(struct blob *blob, const struct ir3_shader_variant *v)
+ir3_blob_write::variant(const struct ir3_shader_variant *&v)
 {
-   blob_write_bytes(blob, &v->key, sizeof(v->key));
-   blob_write_uint32(blob, v->type);
-   blob_write_uint8(blob, v->mergedregs);
+   ir3_process_variant(*this, (struct ir3_shader_variant *)v);
+}
 
-   store_variant(blob, v);
+void
+ir3_blob_read::variant(const struct ir3_shader_variant *&v_out)
+{
+   struct ir3_shader_variant *v =
+      (struct ir3_shader_variant *)rzalloc_size(NULL, sizeof(*v));
 
-   if (v->type == MESA_SHADER_VERTEX && ir3_has_binning_vs(&v->key)) {
-      store_variant(blob, v->binning);
-   }
+   ir3_process_variant(*this, v);
+   v_out = v;
 }
 
 bool
@@ -244,11 +237,12 @@ ir3_disk_cache_retrieve(struct ir3_shader *shader,
 
    struct blob_reader blob;
    blob_reader_init(&blob, buffer, size);
+   ir3_blob_read reader{&blob, shader->compiler};
 
-   retrieve_variant(&blob, v);
+   process_variant(reader, v);
 
    if (v->binning)
-      retrieve_variant(&blob, v->binning);
+      process_variant(reader, v->binning);
 
    free(buffer);
 
@@ -274,11 +268,12 @@ ir3_disk_cache_store(struct ir3_shader *shader,
 
    struct blob blob;
    blob_init(&blob);
+   ir3_blob_write writer{&blob};
 
-   store_variant(&blob, v);
+   process_variant(writer, v);
 
    if (v->binning)
-      store_variant(&blob, v->binning);
+      process_variant(writer, v->binning);
 
    disk_cache_put(shader->compiler->disk_cache, cache_key, blob.data, blob.size, NULL);
    blob_finish(&blob);

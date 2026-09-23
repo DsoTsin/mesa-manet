@@ -30,6 +30,10 @@
 #include <stdlib.h>
 
 #ifdef __cplusplus
+#include <type_traits>
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -447,6 +451,7 @@ struct blob_write {
    blob_write(struct blob *b): blob(b) {}
 
    static constexpr bool is_write() { return true; }
+   static constexpr bool is_read() { return not is_write(); }
 
    bool bytes(const void *p, size_t n) { return blob_write_bytes(blob, p, n); }
 
@@ -457,6 +462,13 @@ struct blob_write {
    bool intptr(intptr_t v) { return blob_write_intptr(blob, v); }
    bool str(const char *s) { return blob_write_string(blob, s); }
    bool boolean(bool v)    { return blob_write_uint8(blob, v);  }
+
+   template <typename T>
+   std::enable_if_t<std::is_enum_v<T>, bool>
+   enum_t(T v)
+   {
+      return (sizeof(T) == 8) ? u64(v) : u32(v);
+   }
 };
 
 struct blob_read {
@@ -465,6 +477,7 @@ struct blob_read {
    blob_read(struct blob_reader *r) : reader(r) {}
 
    static constexpr bool is_write() { return false; }
+   static constexpr bool is_read() { return not is_write(); }
 
    void bytes(void *p, size_t n) { blob_copy_bytes(reader, p, n); }
 
@@ -475,6 +488,21 @@ struct blob_read {
    void intptr(intptr_t &v)   { v = blob_read_intptr(reader); }
    void str(const char * &s)  { s = blob_read_string(reader); }
    void boolean(bool &v) { v = static_cast<bool>(blob_read_uint8(reader)); }
+
+   template <typename T>
+   std::enable_if_t<std::is_enum_v<T>>
+   enum_t(T &v)
+   {
+      if constexpr(sizeof(T) == 8) {
+         uint64_t tmp;
+         u64(tmp);
+         v = static_cast<T>(tmp);
+      } else {
+         uint32_t tmp;
+         u32(tmp);
+         v = static_cast<T>(tmp);
+      }
+   }
 };
 
 } /* namespace mesa */
