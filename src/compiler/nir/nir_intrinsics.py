@@ -1038,6 +1038,7 @@ system_value("base_vertex", 1)
 system_value("instance_id", 1)
 system_value("base_instance", 1)
 system_value("draw_id", 1)
+system_value("draw_id_offset_ir3", 1)
 system_value("sample_id", 1)
 system_value("sample_pos", 2)
 # sample_pos_or_center is like sample_pos but does not imply per-sample
