@@ -1168,7 +1168,8 @@ add_gpus([
 
 add_gpus([
         GPUId(chip_id=0xffff43030c00, name="Adreno X1-45"),
-        GPUId(chip_id=0x43030B00, name="FD735")
+        GPUId(chip_id=0x43030B00, name="FD735"),
+        GPUId(chip_id=0xffff43030E01, name="Adreno (TM) 735"),
     ], A6xxGPUInfo(
         CHIP.A7XX,
         [a7xx_base, a7xx_gen2, GPUProps(enable_tp_ubwc_flag_hint = True)],
@@ -1330,6 +1331,7 @@ add_gpus([
 add_gpus([
         GPUId(chip_id=0x43051401, name="FD750"), # KGSL, no speedbin data
         GPUId(chip_id=0xffff43051401, name="FD750"), # Default no-speedbin fallback
+        GPUId(chip_id=0xffff43051701, name="Adreno (TM) 753"),
     ], A6xxGPUInfo(
         CHIP.A7XX,
         [a7xx_base, a7xx_gen3, GPUProps(
