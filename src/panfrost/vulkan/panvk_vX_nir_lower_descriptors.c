@@ -885,6 +885,17 @@ lower_tex(nir_builder *b, nir_tex_instr *tex, const struct lower_desc_ctx *ctx)
 
    b->cursor = nir_before_instr(&tex->instr);
 
+   /* Remove index for input attachments, since after this pass the index is
+    * reinterpreted to mean the HW handle.
+    */
+   if (tex->input_attachment_index) {
+      tex->texture_index = 0;
+      int offset_src =
+         nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+      if (offset_src >= 0)
+         nir_tex_instr_remove_src(tex, offset_src);
+   }
+
    lower_tex_immutable(b, tex, ctx);
 
 #if PAN_ARCH < 9
