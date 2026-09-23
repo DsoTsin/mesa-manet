@@ -35,7 +35,7 @@ ir3_disk_cache_init(struct ir3_compiler *compiler)
 
    const char *renderer = fd_dev_name(compiler->dev_id);
    const struct build_id_note *note =
-      build_id_find_nhdr_for_addr(ir3_disk_cache_init);
+      build_id_find_nhdr_for_addr((const void *)ir3_disk_cache_init);
    unsigned build_id_len = build_id_length(note);
    assert(note && build_id_len == BUILD_ID_EXPECTED_HASH_LENGTH); /* sha1 */
 
@@ -121,7 +121,7 @@ retrieve_variant(struct blob_reader *blob, struct ir3_shader_variant *v)
     * pointers need special handling:
     */
 
-   v->bin = rzalloc_size(v, v->info.size);
+   v->bin = (uint32_t *)rzalloc_size(v, v->info.size);
    blob_copy_bytes(blob, v->bin, v->info.size);
 
    if (!v->binning_pass) {
@@ -132,7 +132,7 @@ retrieve_variant(struct blob_reader *blob, struct ir3_shader_variant *v)
       v->imm_state.size = blob_read_uint32(blob);
       v->imm_state.count = v->imm_state.size;
       uint32_t immeds_sz = v->imm_state.size * sizeof(v->imm_state.values[0]);
-      v->imm_state.values = ralloc_size(v, immeds_sz);
+      v->imm_state.values = (uint32_t *)ralloc_size(v, immeds_sz);
       blob_copy_bytes(blob, v->imm_state.values, immeds_sz);
    }
 }
@@ -168,7 +168,8 @@ struct ir3_shader_variant *
 ir3_retrieve_variant(struct blob_reader *blob, struct ir3_compiler *compiler,
                      void *mem_ctx)
 {
-   struct ir3_shader_variant *v = rzalloc_size(mem_ctx, sizeof(*v));
+   struct ir3_shader_variant *v =
+      (struct ir3_shader_variant *)rzalloc_size(mem_ctx, sizeof(*v));
 
    v->id = 0;
    v->compiler = compiler;
@@ -176,14 +177,16 @@ ir3_retrieve_variant(struct blob_reader *blob, struct ir3_compiler *compiler,
    v->nonbinning = NULL;
    v->binning = NULL;
    blob_copy_bytes(blob, &v->key, sizeof(v->key));
-   v->type = blob_read_uint32(blob);
+   v->type = (enum mesa_shader_stage)blob_read_uint32(blob);
    v->mergedregs = blob_read_uint32(blob);
-   v->const_state = rzalloc_size(v, sizeof(*v->const_state));
+   v->const_state =
+      (struct ir3_const_state *)rzalloc_size(v, sizeof(*v->const_state));
 
    retrieve_variant(blob, v);
 
    if (v->type == MESA_SHADER_VERTEX && ir3_has_binning_vs(&v->key)) {
-      v->binning = rzalloc_size(v, sizeof(*v->binning));
+      v->binning =
+         (struct ir3_shader_variant *)rzalloc_size(v, sizeof(*v->binning));
       v->binning->id = 0;
       v->binning->compiler = compiler;
       v->binning->binning_pass = true;
