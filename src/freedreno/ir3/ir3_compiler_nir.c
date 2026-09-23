@@ -3031,6 +3031,9 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_load_draw_id:
       dst[0] = create_driver_param(ctx, IR3_DP_VS(draw_id));
       break;
+   case nir_intrinsic_load_draw_id_offset_ir3:
+      dst[0] = create_driver_param(ctx, IR3_DP_VS(draw_id_offset));
+      break;
    case nir_intrinsic_load_base_instance:
       dst[0] = create_driver_param(ctx, IR3_DP_VS(instid_base));
       break;

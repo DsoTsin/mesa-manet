@@ -3017,6 +3017,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
          .storage_8bit = physical_device->info->props.storage_8bit,
          .shared_push_consts = !TU_DEBUG(PUSH_CONSTS_PER_STAGE),
          .uche_trap_base = physical_device->uche_trap_base,
+         .lower_draw_id = physical_device->info->chip >= A8XX,
       };
       device->compiler = ir3_compiler_create(
          NULL, &physical_device->dev_id, physical_device->info, &ir3_options);

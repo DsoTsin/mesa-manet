@@ -69,6 +69,7 @@ struct ir3_driver_params_vs {
     * driver param when the hardware does not have native multiview.
     */
    uint32_t view_index;
+   uint32_t draw_id_offset;
    /* user-clip-plane components, up to 8x vec4's: */
    struct {
       uint32_t x;
@@ -76,7 +77,7 @@ struct ir3_driver_params_vs {
       uint32_t z;
       uint32_t w;
    } ucp[8];
-   uint32_t __pad_38_39[2];
+   uint32_t __pad;
 };
 #define IR3_DP_VS(name) dword_offsetof(struct ir3_driver_params_vs, name)
 

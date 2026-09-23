@@ -56,6 +56,9 @@ struct ir3_compiler_options {
    bool dual_color_blend_by_location;
 
    uint64_t uche_trap_base;
+
+   /* If draw_id should be lowered in nir */
+   bool lower_draw_id;
 };
 
 struct ir3_compiler {
