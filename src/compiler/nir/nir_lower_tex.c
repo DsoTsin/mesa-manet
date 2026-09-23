@@ -1340,7 +1340,6 @@ nir_lower_ms_txf_to_fragment_fetch(nir_builder *b, nir_tex_instr *tex)
    b->cursor = nir_before_instr(&tex->instr);
 
    /* Create FMASK fetch. */
-   assert(tex->texture_index == 0);
    nir_tex_instr *fmask_fetch = nir_tex_instr_create(b->shader, tex->num_srcs - 1);
    fmask_fetch->op = nir_texop_fragment_mask_fetch_amd;
    fmask_fetch->coord_components = tex->coord_components;
@@ -1349,6 +1348,11 @@ nir_lower_ms_txf_to_fragment_fetch(nir_builder *b, nir_tex_instr *tex)
    fmask_fetch->texture_non_uniform = tex->texture_non_uniform;
    fmask_fetch->dest_type = nir_type_uint32;
    fmask_fetch->can_speculate = tex->can_speculate;
+   fmask_fetch->input_attachment_depth = tex->input_attachment_depth;
+   fmask_fetch->input_attachment_stencil = tex->input_attachment_stencil;
+   fmask_fetch->input_attachment_index = tex->input_attachment_index;
+   fmask_fetch->texture_index = tex->texture_index;
+   fmask_fetch->texture_array_size = tex->texture_array_size;
    nir_def_init(&fmask_fetch->instr, &fmask_fetch->def, 1, 32);
 
    fmask_fetch->num_srcs = 0;
