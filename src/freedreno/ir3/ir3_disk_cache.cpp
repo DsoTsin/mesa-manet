@@ -178,7 +178,7 @@ ir3_retrieve_variant(struct blob_reader *blob, struct ir3_compiler *compiler,
    v->binning = NULL;
    blob_copy_bytes(blob, &v->key, sizeof(v->key));
    v->type = (enum mesa_shader_stage)blob_read_uint32(blob);
-   v->mergedregs = blob_read_uint32(blob);
+   v->mergedregs = blob_read_uint8(blob);
    v->const_state =
       (struct ir3_const_state *)rzalloc_size(v, sizeof(*v->const_state));
 
@@ -207,7 +207,7 @@ ir3_store_variant(struct blob *blob, const struct ir3_shader_variant *v)
 {
    blob_write_bytes(blob, &v->key, sizeof(v->key));
    blob_write_uint32(blob, v->type);
-   blob_write_uint32(blob, v->mergedregs);
+   blob_write_uint8(blob, v->mergedregs);
 
    store_variant(blob, v);
 
