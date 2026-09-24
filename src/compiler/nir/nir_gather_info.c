@@ -526,6 +526,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
          shader->info.fs.accesses_pixel_local_storage = true;
       break;
    }
+
    case nir_intrinsic_image_deref_load: {
       nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
       nir_variable *var = nir_deref_instr_get_variable(deref);
@@ -539,12 +540,33 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
       break;
    }
 
+   case nir_intrinsic_image_deref_input_attachment_load:
+   case nir_intrinsic_image_deref_depth_input_attachment_load:
+   case nir_intrinsic_image_deref_stencil_input_attachment_load: {
+      nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+      var->data.fb_fetch_output = true;
+      shader->info.fs.uses_fbfetch_output = true;
+      break;
+   }
+
    case nir_intrinsic_bindless_image_load:
    case nir_intrinsic_image_heap_load: {
       enum glsl_sampler_dim dim = nir_intrinsic_image_dim(instr);
       if (dim != GLSL_SAMPLER_DIM_SUBPASS &&
           dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
          break;
+
+      shader->info.fs.uses_fbfetch_output = true;
+      break;
+   }
+
+   case nir_intrinsic_bindless_image_input_attachment_load:
+   case nir_intrinsic_bindless_image_depth_input_attachment_load:
+   case nir_intrinsic_bindless_image_stencil_input_attachment_load:
+   case nir_intrinsic_image_heap_input_attachment_load:
+   case nir_intrinsic_image_heap_depth_input_attachment_load:
+   case nir_intrinsic_image_heap_stencil_input_attachment_load: {
       shader->info.fs.uses_fbfetch_output = true;
       break;
    }
