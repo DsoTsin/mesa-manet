@@ -1,6 +1,7 @@
 /*
  * Copyright © 2024 Collabora Ltd.
  * Copyright © 2024 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -936,7 +937,12 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
 
    }
 
-   if (dyn_gfx_state_dirty(cmdbuf, INPUT_ATTACHMENT_MAP))
+   /* The map may stay unchanged across rendering instances, while the bound
+    * attachments, their formats, or legacy dithering change. All of those
+    * contribute to the tile-load conversion parameters.
+    */
+   if (dyn_gfx_state_dirty(cmdbuf, INPUT_ATTACHMENT_MAP) ||
+       gfx_state_dirty(cmdbuf, RENDER_STATE))
       prepare_iam_sysvals(cmdbuf, dirty_sysvals);
 
    const struct panvk_shader_variant *vs =

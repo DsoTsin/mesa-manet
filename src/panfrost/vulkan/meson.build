@@ -1,4 +1,5 @@
 # Copyright © 2021 Collabora Ltd.
+# Copyright © 2026 Pix Philosophy (HK) Limited
 #
 # Derived from the freedreno driver which is:
 # Copyright © 2017 Intel Corporation
@@ -104,11 +105,15 @@ csf_inc_dir = ['csf']
 csf_files = [
   'csf/panvk_vX_cmd_buffer.c',
   'csf/panvk_vX_cmd_cond_render.c',
+  'csf/panvk_vX_cmd_dgc.c',
   'csf/panvk_vX_cmd_dispatch.c',
   'csf/panvk_vX_cmd_draw.c',
   'csf/panvk_vX_cmd_event.c',
+  'csf/panvk_vX_cmd_xfb.c',
   'csf/panvk_vX_cmd_query.c',
   'csf/panvk_vX_cmd_precomp.c',
+  'csf/panvk_vX_dgc.c',
+  'csf/panvk_vX_dgc_submit.c',
   'csf/panvk_vX_event.c',
   'csf/panvk_vX_exception_handler.c',
   'csf/panvk_vX_gpu_queue.c',
@@ -217,6 +222,7 @@ libvulkan_panfrost = shared_library(
     libpanfrost_decode,
     libpanfrost_lib,
     libpanfrost_compiler,
+    libpoly_nir,
   ],
   dependencies : [
     dep_dl,

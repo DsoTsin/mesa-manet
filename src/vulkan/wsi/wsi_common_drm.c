@@ -1,5 +1,6 @@
 /*
  * Copyright © 2017 Intel Corporation
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -371,6 +372,12 @@ wsi_drm_init_swapchain_implicit_sync(struct wsi_swapchain *chain)
     * window system protocol.
     */
    if (chain->image_info.explicit_sync)
+      return VK_SUCCESS;
+
+   /* Only dma-buf backed images can carry implicit fences.  CPU images
+    * (software presentation on a device that still exports memory fds,
+    * e.g. kbase's DRI3-less X11 fallback) have no dma-buf to attach to. */
+   if (chain->image_info.image_type != WSI_IMAGE_TYPE_DRM)
       return VK_SUCCESS;
 
    VkResult result =

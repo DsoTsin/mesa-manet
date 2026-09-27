@@ -905,6 +905,15 @@ check_unrolling_restrictions(nir_shader *shader, nir_loop *loop)
       return false;
 
    nir_loop_info *li = loop->info;
+
+   /* An array length is only a guess: partial unrolling retains the runtime
+    * exits and may increase register pressure without removing the loop.
+    * Keep this decision separate from unrolling a proven iteration bound.
+    */
+   if (shader->options->skip_partial_unroll && li->guessed_trip_count &&
+       !li->limiting_terminator)
+      return false;
+
    unsigned max_iter = shader->options->max_unroll_iterations;
    /* Unroll much more aggressively if it can hide load latency. */
    if (shader->options->max_unroll_iterations_aggressive && can_pipeline_loads(loop))

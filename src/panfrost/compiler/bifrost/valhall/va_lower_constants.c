@@ -250,12 +250,65 @@ va_resolve_swizzles(bi_context *ctx, bi_instr *I, unsigned s)
    return value;
 }
 
+/* A split 64-bit source is encoded with one aligned FAU slot. Looking up its
+ * words independently can put them in different slots, forcing register moves
+ * even when both words are constants. Keep the pair together, including words
+ * that could otherwise use the immediate LUT.
+ */
+static bool
+va_lower_constant_pair(bi_context *ctx, bi_instr *I, unsigned s,
+                       struct hash_table_u64 *counts, uint32_t min_fau_count)
+{
+   if (!ctx->inputs->fau.promote_immediates || s >= 4 || s + 1 >= I->nr_srcs ||
+       va_src_info(I->op, s).size != VA_SIZE_64 ||
+       bi_count_read_registers(I, s) != 1)
+      return false;
+
+   uint32_t lo = I->src[s].value, hi = I->src[s + 1].value;
+   if (!bi_is_equiv(I->src[s], bi_imm_u32(lo)) ||
+       !bi_is_equiv(I->src[s + 1], bi_imm_u32(hi)))
+      return false;
+
+   struct pan_fau_layout *fau = ctx->info.fau;
+   unsigned idx;
+   for (idx = ALIGN_POT(fau->reserved, 2); idx + 1 < fau->count; idx += 2) {
+      if (BITSET_TEST(fau->is_const, idx) &&
+          BITSET_TEST(fau->is_const, idx + 1) &&
+          fau->words[idx].constant == lo &&
+          fau->words[idx + 1].constant == hi)
+         break;
+   }
+
+   if (idx + 1 >= fau->count) {
+      uint32_t lo_count = (uintptr_t)_mesa_hash_table_u64_search(counts, lo);
+      uint32_t hi_count = (uintptr_t)_mesa_hash_table_u64_search(counts, hi);
+      if (MAX2(lo_count, hi_count) < min_fau_count ||
+          pan_fau_available(fau) < 2 + (fau->count & 1))
+         return false;
+
+      if (fau->count & 1)
+         pan_fau_emit_const(fau, 0);
+
+      idx = pan_fau_emit_const(fau, lo);
+      pan_fau_emit_const(fau, hi);
+   }
+
+   I->src[s] = bi_fau((enum bir_fau)(BIR_FAU_UNIFORM | (idx >> 1)), false);
+   I->src[s + 1] = bi_fau((enum bir_fau)(BIR_FAU_UNIFORM | (idx >> 1)), true);
+   return true;
+}
+
 void
 va_lower_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts, uint32_t min_fau_count)
 {
    bi_builder b = bi_init_builder(ctx, bi_before_instr(I));
 
    bi_foreach_src(I, s) {
+      if (va_lower_constant_pair(ctx, I, s, counts, min_fau_count)) {
+         ++s;
+         continue;
+      }
+
       if (I->src[s].type == BI_INDEX_CONSTANT) {
          /* abs(#c) is pointless, but -#c occurs in transcendental sequences */
          assert(!I->src[s].abs && "redundant .abs modifier");

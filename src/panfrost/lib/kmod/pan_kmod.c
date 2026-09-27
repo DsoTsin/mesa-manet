@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <errno.h>
 #include <string.h>
 #include <xf86drm.h>
 
@@ -12,21 +13,38 @@
 #include "pan_kmod.h"
 #include "pan_kmod_backend.h"
 
+#if defined(HAVE_PAN_KMOD_PANFROST)
 extern const struct pan_kmod_ops panfrost_kmod_ops;
+#endif
+#if defined(HAVE_PAN_KMOD_PANTHOR)
 extern const struct pan_kmod_ops panthor_kmod_ops;
+#endif
+#if defined(HAVE_PAN_KMOD_KBASE)
+extern const struct pan_kmod_ops kbase_kmod_ops;
+#endif
 
 static const struct {
    const char *name;
    const struct pan_kmod_ops *ops;
 } drivers[] = {
+#if defined(HAVE_PAN_KMOD_PANFROST)
    {
       "panfrost",
       &panfrost_kmod_ops,
    },
+#endif
+#if defined(HAVE_PAN_KMOD_PANTHOR)
    {
       "panthor",
       &panthor_kmod_ops,
    },
+#endif
+#if defined(HAVE_PAN_KMOD_KBASE)
+   {
+      "kbase",
+      &kbase_kmod_ops,
+   },
+#endif
 };
 
 static void *
@@ -48,17 +66,48 @@ static const struct pan_kmod_allocator default_allocator = {
 };
 
 struct pan_kmod_dev *
+pan_kmod_dev_create_with_driver(int fd, uint32_t flags,
+                                const char *driver_name,
+                                const struct pan_kmod_driver *driver,
+                                const struct pan_kmod_allocator *allocator)
+{
+   if (!allocator)
+      allocator = &default_allocator;
+
+   if (!driver_name || !driver_name[0]) {
+      mesa_loge("invalid kernel driver name");
+      errno = EINVAL;
+      return NULL;
+   }
+
+   const struct pan_kmod_driver fallback_driver = {
+      .version = {
+         .major = 0,
+         .minor = 0,
+      },
+   };
+
+   if (!driver)
+      driver = &fallback_driver;
+
+   for (unsigned i = 0; i < ARRAY_SIZE(drivers); i++) {
+      if (!strcmp(drivers[i].name, driver_name))
+         return drivers[i].ops->dev_create(fd, flags, driver, allocator);
+   }
+
+   mesa_loge("kernel driver '%s' is not supported by this build", driver_name);
+   errno = ENODEV;
+   return NULL;
+}
+
+struct pan_kmod_dev *
 pan_kmod_dev_create(int fd, uint32_t flags,
                     const struct pan_kmod_allocator *allocator)
 {
    drmVersionPtr version = drmGetVersion(fd);
-   struct pan_kmod_dev *dev = NULL;
 
    if (!version)
       return NULL;
-
-   if (!allocator)
-      allocator = &default_allocator;
 
    const char *drv_name = version->name;
    const struct pan_kmod_driver drv_info = {
@@ -68,14 +117,8 @@ pan_kmod_dev_create(int fd, uint32_t flags,
       },
    };
 
-   for (unsigned i = 0; i < ARRAY_SIZE(drivers); i++) {
-      if (!strcmp(drivers[i].name, drv_name)) {
-         const struct pan_kmod_ops *ops = drivers[i].ops;
-
-         dev = ops->dev_create(fd, flags, &drv_info, allocator);
-         break;
-      }
-   }
+   struct pan_kmod_dev *dev =
+      pan_kmod_dev_create_with_driver(fd, flags, drv_name, &drv_info, allocator);
 
    drmFreeVersion(version);
    return dev;
@@ -155,6 +198,29 @@ pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
 
    simple_mtx_lock(&dev->handle_to_bo.lock);
 
+   if (dev->ops->bo_import_fd) {
+      size_t size = lseek(fd, 0, SEEK_END);
+      if (size == 0 || size == (size_t)-1) {
+         mesa_loge("invalid dmabuf size");
+         goto err_unlock;
+      }
+
+      bo = dev->ops->bo_import_fd(dev, fd, size);
+      if (!bo)
+         goto err_unlock;
+
+      slot = util_sparse_array_get(&dev->handle_to_bo.array, bo->handle);
+      if (!slot) {
+         bo->dev->ops->bo_free(bo);
+         bo = NULL;
+         goto err_unlock;
+      }
+
+      assert(*slot == NULL);
+      *slot = bo;
+      goto out_unlock;
+   }
+
    uint32_t handle;
    int ret = drmPrimeFDToHandle(dev->fd, fd, &handle);
    if (ret)
@@ -184,6 +250,7 @@ pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
 
    assert(p_atomic_read(&bo->refcnt) > 0);
 
+out_unlock:
    simple_mtx_unlock(&dev->handle_to_bo.lock);
 
    return bo;
@@ -291,6 +358,26 @@ pan_kmod_queue_bo_map_sync(struct pan_kmod_bo *bo, uint64_t bo_offset,
    uint64_t granularity = util_has_cache_ops() ? util_cache_granularity() : 64;
    uint64_t start = bo_offset & ~(granularity - 1);
    uint64_t end = ALIGN_POT(bo_offset + range, granularity);
+
+   /* A command buffer often dirties several neighboring slices of the same
+    * mapped BO before the next submit.  Coalesce those slices here so a
+    * kernel-backed cache-sync implementation (notably kbase MEM_SYNC) does
+    * not issue one ioctl per descriptor or upload. */
+   util_dynarray_foreach(&dev->pending_bo_syncs.array,
+                         struct pan_kmod_deferred_bo_sync, sync) {
+      uint64_t sync_end = sync->start + sync->size;
+
+      if (sync->bo == bo && sync->type == type &&
+          start <= sync_end && sync->start <= end) {
+         uint64_t merged_start = MIN2(start, sync->start);
+         uint64_t merged_end = MAX2(end, sync_end);
+
+         sync->start = merged_start;
+         sync->size = merged_end - merged_start;
+         simple_mtx_unlock(&dev->pending_bo_syncs.lock);
+         return;
+      }
+   }
 
    struct pan_kmod_deferred_bo_sync new_sync = {
       .bo = bo,

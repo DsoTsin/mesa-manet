@@ -231,6 +231,44 @@ mem_vectorize_cb(unsigned align_mul, unsigned align_offset, unsigned bit_size,
    return bytes <= combined_align;
 }
 
+static unsigned
+bi_cf_list_instr_count(struct exec_list *list)
+{
+   unsigned count = 0;
+
+   foreach_list_typed(nir_cf_node, node, node, list) {
+      if (node->type != nir_cf_node_block)
+         return UINT_MAX / 2; /* nested control flow is never flattened */
+
+      nir_foreach_instr(instr, nir_cf_node_as_block(node))
+         count++;
+   }
+
+   return count;
+}
+
+/* Branches on a uniform condition run one side only, so Arm's compiler keeps
+ * them (ToneMapPS branches on FAU values). Flatten only divergent ifs and
+ * uniform ones around a few instructions, where the branch costs more.
+ */
+static void
+bi_keep_uniform_branches(nir_shader *nir)
+{
+   nir_divergence_analysis(nir);
+
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_if *nif = nir_block_get_following_if(block);
+
+         if (nif && nif->control == nir_selection_control_none &&
+             !nir_src_is_divergent(&nif->condition) &&
+             bi_cf_list_instr_count(&nif->then_list) +
+                   bi_cf_list_instr_count(&nif->else_list) > 16)
+            nif->control = nir_selection_control_dont_flatten;
+      }
+   }
+}
+
 static void
 bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
 {
@@ -267,7 +305,9 @@ bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
       nir_opt_peephole_select_options peephole_select_options = {
          .limit = 64,
          .expensive_alu_ok = true,
+         .discard_ok = pan_arch(gpu_id) >= 9,
       };
+      bi_keep_uniform_branches(nir);
       NIR_PASS(progress, nir, nir_opt_peephole_select,
                &peephole_select_options);
       NIR_PASS(progress, nir, nir_opt_idiv_const, 8);
@@ -306,6 +346,13 @@ bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
    NIR_PASS(_, nir, nir_lower_undef_to_zero, NULL);
 
    NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
+
+   /* Expose conditional DISCARD early, before shading pixels that cannot
+    * contribute. The NIR pass preserves helper and side-effect ordering;
+    * backend helper analysis still determines when demoted lanes can exit.
+    */
+   if (pan_arch(gpu_id) >= 9 && nir->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, nir_opt_move_discards_to_top);
 }
 
 static void
@@ -920,6 +967,14 @@ bifrost_postprocess_nir(nir_shader *nir,
    /* Only allow vectorization of SSBOs when no robustness2 is configured */
    if (!(inputs->robust_modes & nir_var_mem_ssbo))
       vectorize_opts.modes |= nir_var_mem_ssbo;
+
+   /* nir_opt_load_store_vectorize only combines accesses whose resource and
+    * offset base are the same SSA value, while descriptor and explicit IO
+    * lowering emit that address math once per access: fold and CSE it first.
+    */
+   NIR_PASS(_, nir, nir_opt_copy_prop);
+   NIR_PASS(_, nir, nir_opt_constant_folding);
+   NIR_PASS(_, nir, nir_opt_cse);
 
    NIR_PASS(_, nir, nir_opt_load_store_vectorize, &vectorize_opts);
 

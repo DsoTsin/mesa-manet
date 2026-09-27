@@ -36,6 +36,8 @@ struct panvk_shader_desc_state {
    struct {
       uint64_t dev_addr;
       uint32_t size;
+      /* CPU view, for resolving promoted UBO words (cmd_emit_fau_ubo_copies) */
+      const void *host;
    } driver_set;
    uint64_t res_table;
 #endif

@@ -57,6 +57,11 @@ struct pan_compile_inputs {
       uint32_t reserved;
       /* Mask of UBOs that may be moved to push constants */
       uint32_t pushable_ubos;
+      /* UBOs are addressed by Valhall resource handles (Vulkan): every UBO
+       * with a constant handle is pushable, and relocations record the
+       * handle's table and index (pan_ubo_reloc_key()) instead of a UBO
+       * number. pushable_ubos only needs to be non-zero. */
+      bool push_ubo_handles;
       /* Whether the backend may promote immediates into the FAU */
       bool promote_immediates;
    } fau;
@@ -624,6 +629,29 @@ static inline unsigned
 pan_res_handle_get_index(unsigned handle)
 {
    return handle & BITFIELD_MASK(24);
+}
+
+/* UBO relocation keys used with pan_compile_inputs::fau.push_ubo_handles:
+ * the resource table in the top 6 bits and the index in the low 10 bits. */
+#define PAN_UBO_RELOC_INDEX_BITS 10
+
+static inline unsigned
+pan_ubo_reloc_key(unsigned table, unsigned index)
+{
+   assert(table < 64 && index < (1u << PAN_UBO_RELOC_INDEX_BITS));
+   return (table << PAN_UBO_RELOC_INDEX_BITS) | index;
+}
+
+static inline unsigned
+pan_ubo_reloc_table(unsigned key)
+{
+   return key >> PAN_UBO_RELOC_INDEX_BITS;
+}
+
+static inline unsigned
+pan_ubo_reloc_index(unsigned key)
+{
+   return key & BITFIELD_MASK(PAN_UBO_RELOC_INDEX_BITS);
 }
 
 /*

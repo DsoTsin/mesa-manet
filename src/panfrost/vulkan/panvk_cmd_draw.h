@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -38,6 +39,7 @@
 #endif
 
 #define MAX_FRAMEBUFFER_LAYERS 256
+#define PANVK_MAX_XFB_BUFFERS 4
 
 struct panvk_cmd_buffer;
 
@@ -136,12 +138,16 @@ struct panvk_rendering_state {
 enum panvk_cmd_graphics_dirty_state {
    PANVK_CMD_GRAPHICS_DIRTY_BASE_INSTANCE,
    PANVK_CMD_GRAPHICS_DIRTY_VS,
+   PANVK_CMD_GRAPHICS_DIRTY_TCS,
+   PANVK_CMD_GRAPHICS_DIRTY_TES,
    PANVK_CMD_GRAPHICS_DIRTY_FS,
    PANVK_CMD_GRAPHICS_DIRTY_VB,
    PANVK_CMD_GRAPHICS_DIRTY_OQ,
    PANVK_CMD_GRAPHICS_DIRTY_DESC_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_RENDER_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_VS_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_TCS_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_TES_PUSH_UNIFORMS,
    PANVK_CMD_GRAPHICS_DIRTY_FS_PUSH_UNIFORMS,
    PANVK_CMD_GRAPHICS_DIRTY_IDVS,
    PANVK_CMD_GRAPHICS_DIRTY_STATE_COUNT,
@@ -161,6 +167,17 @@ struct panvk_cmd_graphics_state {
 #endif
    struct panvk_graphics_sysvals sysvals;
 
+   struct {
+      struct {
+         uint64_t address;
+         uint64_t size;
+      } buffers[PANVK_MAX_XFB_BUFFERS];
+      struct pan_ptr offsets;
+      struct panvk_shader_desc_state desc;
+      uint64_t push_uniforms;
+      bool enabled;
+   } xfb;
+
 #if PAN_ARCH < 9
    struct panvk_shader_link link;
 #endif
@@ -171,6 +188,7 @@ struct panvk_cmd_graphics_state {
       uint64_t blend_descs[MAX_RTS];
       uint64_t push_uniforms;
       bool required;
+      bool dgc_execution_set;
 #if PAN_ARCH < 9
       uint64_t rsd;
 #endif
@@ -199,6 +217,23 @@ struct panvk_cmd_graphics_state {
       uint32_t desc_repeat_count;
 #endif
    } vs;
+
+   struct {
+      struct {
+         const struct panvk_shader *shader;
+         struct panvk_shader_desc_state desc;
+         uint64_t push_uniforms;
+      } tcs;
+
+      struct {
+         const struct panvk_shader *shader;
+         struct panvk_shader_desc_state desc;
+         uint64_t push_uniforms;
+      } tes;
+
+      /* VkDrawIndexedIndirectCommand emitted by the tessellator. */
+      uint64_t out_draws;
+   } tess;
 
    struct {
       struct panvk_attrib_buf bufs[MAX_VBS];
@@ -321,6 +356,13 @@ fs_required(const struct panvk_cmd_graphics_state *state,
    if (rs->rasterizer_discard_enable || !fs_info)
       return false;
 
+   /* Execution-set updates may replace a shader without side effects with
+    * one that has them after command recording. Keep FS enabled whenever
+    * the set contains the stage; the selected shader decides its work.
+    */
+   if (state->fs.dgc_execution_set)
+      return true;
+
    /* If we generally have side effects */
    if (fs_info->fs.sidefx)
       return true;
@@ -440,6 +482,8 @@ struct panvk_draw_info {
       uint64_t count_buffer_dev_addr;
       uint32_t draw_count;
       uint32_t stride;
+      /* CPU-unrolled tess indirect record; count activation remains GPU-side. */
+      uint32_t record_index;
    } indirect;
 
    enum mesa_prim prim;

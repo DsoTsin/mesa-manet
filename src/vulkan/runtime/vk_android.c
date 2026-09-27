@@ -204,6 +204,7 @@ vk_gralloc_to_drm_explicit_layout(
       out_layouts[2] = tmp;
    }
 
+   mesa_logi("%s @ %d: VK_SUCCESS, info.modifier=0x%lx", __func__, __LINE__, info.modifier);
    return VK_SUCCESS;
 }
 
@@ -1202,6 +1203,8 @@ vk_common_GetAndroidHardwareBufferPropertiesANDROID(
       format_prop->suggestedYcbcrRange    = format_prop2->suggestedYcbcrRange;
       format_prop->suggestedXChromaOffset = format_prop2->suggestedXChromaOffset;
       format_prop->suggestedYChromaOffset = format_prop2->suggestedYChromaOffset;
+      mesa_logi("%s @ %d: format=%d, externalFormat=%lu, formatFeatures=%d",
+         __func__, __LINE__, format_prop->format, format_prop->externalFormat, format_prop->formatFeatures);
    }
 
    if (format_resolve) {
@@ -1224,14 +1227,30 @@ vk_common_GetAndroidHardwareBufferPropertiesANDROID(
 
    const native_handle_t *handle = AHardwareBuffer_getNativeHandle(buffer);
    assert(handle && handle->numFds > 0);
-   pProperties->allocationSize = lseek(handle->data[0], 0, SEEK_END);
 
    VkMemoryFdPropertiesKHR fd_props = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
    };
-   result = device->dispatch_table.GetMemoryFdPropertiesKHR(
-      device_h, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, handle->data[0],
-      &fd_props);
+
+   result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   for (int i = 0; i < handle->numFds; i++) {
+      mesa_logi("  candidate_fd=%d (%d of %d)", handle->data[i], i, handle->numFds);
+      int candidate_fd = handle->data[i];
+      if (candidate_fd < 0) continue;
+      int res = lseek(candidate_fd, 0, SEEK_END);
+      if (res < 0) continue;
+      pProperties->allocationSize = res;
+      result = device->dispatch_table.GetMemoryFdPropertiesKHR(
+         device_h, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, candidate_fd,
+         &fd_props);
+      if (result == VK_SUCCESS)
+         break;
+   }
+
+   mesa_logi("result=%d, fd_props.memoryTypeBits=%u", result, fd_props.memoryTypeBits);
+   // result = device->dispatch_table.GetMemoryFdPropertiesKHR(
+   //    device_h, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, handle->data[0],
+   //    &fd_props);
    if (result != VK_SUCCESS)
       return result;
 

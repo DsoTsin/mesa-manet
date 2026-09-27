@@ -1,5 +1,6 @@
 /*
  * Copyright © 2021 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Derived from tu_device.c which is:
  * Copyright © 2016 Red Hat.
@@ -22,6 +23,7 @@
 #include "panvk_buffer.h"
 #include "panvk_cmd_draw.h"
 #include "panvk_descriptor_set_layout.h"
+#include "panvk_dgc.h"
 #include "panvk_physical_device.h"
 #include "panvk_wsi.h"
 
@@ -155,6 +157,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_depth_clip_enable = true,
       .EXT_depth_clip_control = true,
       .EXT_device_address_binding_report = true,
+      .EXT_device_generated_commands = PAN_ARCH == 10,
       .EXT_device_memory_report = true,
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
       .EXT_display_control = true,
@@ -222,6 +225,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_swapchain_maintenance1 = true,
 #endif
       .EXT_texel_buffer_alignment = true,
+      .EXT_transform_feedback = PAN_ARCH >= 10,
       .EXT_astc_decode_mode = PAN_ARCH >= 7,
       .EXT_texture_compression_astc_hdr = true,
       .EXT_tooling_info = true,
@@ -297,16 +301,23 @@ panvk_per_arch(get_physical_device_features)(
    const struct panvk_instance *instance,
    const struct panvk_physical_device *device, struct vk_features *features)
 {
-   bool has_sparse = PAN_ARCH >= 10;
+   /* The kbase backend does not have a sparse bind queue implementation yet.
+    * Do not advertise sparse support there, otherwise CTS will exercise sparse
+    * binding paths that can only fail at submit time. */
+   bool has_sparse = PAN_ARCH >= 10 && !device->kbase_node_path[0];
 
    *features = (struct vk_features){
+      /* VK_EXT_device_generated_commands */
+      .deviceGeneratedCommands = PAN_ARCH == 10,
+      .dynamicGeneratedPipelineLayout = PAN_ARCH == 10,
+
       /* Vulkan 1.0 */
       .robustBufferAccess = true,
       .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
       .geometryShader = false,
-      .tessellationShader = false,
+      .tessellationShader = true,
       .sampleRateShading = true,
       .dualSrcBlend = true,
       .logicOp = true,
@@ -314,7 +325,14 @@ panvk_per_arch(get_physical_device_features)(
       .drawIndirectFirstInstance = true,
       .depthClamp = true,
       .depthBiasClamp = true,
-      .fillModeNonSolid = false,
+      /*
+       * Valhall can rasterize point and line primitives.  Zink uses this
+       * feature as its desktop-GL capability gate; keep the feature exposed
+       * on the kbase path so applications which only use filled polygons do
+       * not get rejected during device selection.  Polygon-mode lowering is
+       * handled separately from the native point/line topology path.
+       */
+      .fillModeNonSolid = true,
       .depthBounds = false,
       .wideLines = true,
       .largePoints = true,
@@ -581,6 +599,10 @@ panvk_per_arch(get_physical_device_features)(
       .conditionalRendering = PAN_ARCH >= 10,
       .inheritedConditionalRendering = PAN_ARCH >= 10,
 
+      /* VK_EXT_transform_feedback */
+      .transformFeedback = PAN_ARCH >= 10,
+      .geometryStreams = false,
+
       /* VK_EXT_custom_border_color */
       .customBorderColors = true,
 
@@ -818,6 +840,7 @@ panvk_per_arch(get_physical_device_properties)(
    os_get_page_size(&os_page_size);
 
    const bool has_disk_cache = device->vk.disk_cache != NULL;
+   const bool has_sparse = PAN_ARCH >= 10 && !device->kbase_node_path[0];
 
    /* Ensure that the max threads count per workgroup is valid for Bifrost */
    assert(PAN_ARCH > 8 || device->kmod.dev->props.max_threads_per_wg <= 1024);
@@ -882,7 +905,8 @@ panvk_per_arch(get_physical_device_properties)(
       .bufferImageGranularity = 64,
       /* The entire user-allocatable VA range. */
       .sparseAddressSpaceSize =
-         pan_kmod_dev_query_user_va_range(device->kmod.dev).size,
+         has_sparse ? pan_kmod_dev_query_user_va_range(device->kmod.dev).size
+                    : 0,
       .maxBoundDescriptorSets = MAX_SETS,
       .maxPerStageDescriptorSamplers = MAX_PER_STAGE_SAMPLERS,
       .maxPerStageDescriptorUniformBuffers = MAX_PER_STAGE_UNIFORM_BUFFERS,
@@ -912,15 +936,15 @@ panvk_per_arch(get_physical_device_properties)(
       .maxVertexInputBindingStride = MESA_VK_MAX_VERTEX_BINDING_STRIDE,
       /* 32 vec4 varyings. */
       .maxVertexOutputComponents = 128,
-      /* Tesselation shaders not supported. */
-      .maxTessellationGenerationLevel = 0,
-      .maxTessellationPatchSize = 0,
-      .maxTessellationControlPerVertexInputComponents = 0,
-      .maxTessellationControlPerVertexOutputComponents = 0,
-      .maxTessellationControlPerPatchOutputComponents = 0,
-      .maxTessellationControlTotalOutputComponents = 0,
-      .maxTessellationEvaluationInputComponents = 0,
-      .maxTessellationEvaluationOutputComponents = 0,
+      /* Software tessellator uses the Vulkan/libpoly tessellation limits. */
+      .maxTessellationGenerationLevel = 64,
+      .maxTessellationPatchSize = 32,
+      .maxTessellationControlPerVertexInputComponents = 128,
+      .maxTessellationControlPerVertexOutputComponents = 128,
+      .maxTessellationControlPerPatchOutputComponents = 120,
+      .maxTessellationControlTotalOutputComponents = 4216,
+      .maxTessellationEvaluationInputComponents = 128,
+      .maxTessellationEvaluationOutputComponents = 128,
       /* Geometry shaders not supported. */
       .maxGeometryShaderInvocations = 0,
       .maxGeometryInputComponents = 0,
@@ -1020,7 +1044,7 @@ panvk_per_arch(get_physical_device_properties)(
       /* Vulkan 1.0 sparse properties */
       .sparseResidencyNonResidentStrict = false,
       .sparseResidencyAlignedMipSize = false,
-      .sparseResidencyStandard2DBlockShape = true,
+      .sparseResidencyStandard2DBlockShape = has_sparse,
       .sparseResidencyStandard2DMultisampleBlockShape = false,
       .sparseResidencyStandard3DBlockShape = false,
 
@@ -1289,6 +1313,34 @@ panvk_per_arch(get_physical_device_properties)(
       .provokingVertexModePerPipeline = false,
       .transformFeedbackPreservesTriangleFanProvokingVertex = false,
 
+      /* VK_EXT_transform_feedback */
+      .maxTransformFeedbackStreams = 1,
+      .maxTransformFeedbackBuffers = PANVK_MAX_XFB_BUFFERS,
+      .maxTransformFeedbackBufferSize = UINT32_MAX,
+      .maxTransformFeedbackStreamDataSize = 2048,
+      .maxTransformFeedbackBufferDataSize = 512,
+      .maxTransformFeedbackBufferDataStride = 2048,
+      .transformFeedbackQueries = false,
+      .transformFeedbackStreamsLinesTriangles = false,
+      .transformFeedbackRasterizationStreamSelect = false,
+      .transformFeedbackDraw = false,
+
+      /* VK_EXT_device_generated_commands */
+      .maxIndirectPipelineCount = 4096,
+      .maxIndirectShaderObjectCount = 0,
+      .maxIndirectSequenceCount = 1u << 20,
+      .maxIndirectCommandsTokenCount = PANLIB_DGC_MAX_TOKENS,
+      .maxIndirectCommandsTokenOffset = 2047,
+      .maxIndirectCommandsIndirectStride = 2048,
+      .supportedIndirectCommandsInputModes =
+         VK_INDIRECT_COMMANDS_INPUT_MODE_VULKAN_INDEX_BUFFER_EXT |
+         VK_INDIRECT_COMMANDS_INPUT_MODE_DXGI_INDEX_BUFFER_EXT,
+      .supportedIndirectCommandsShaderStages = PANVK_DGC_SHADER_STAGES,
+      .supportedIndirectCommandsShaderStagesPipelineBinding = PANVK_DGC_SHADER_STAGES,
+      .supportedIndirectCommandsShaderStagesShaderBinding = 0,
+      .deviceGeneratedCommandsTransformFeedback = false,
+      .deviceGeneratedCommandsMultiDrawIndirectCount = false,
+
       /* VK_EXT_shader_tile_image */
       .shaderTileImageCoherentReadAccelerated = PAN_ARCH >= 9,
       .shaderTileImageReadSampleFromPixelRateInvocation = PAN_ARCH >= 9,
@@ -1337,7 +1389,8 @@ panvk_per_arch(get_physical_device_properties)(
    STATIC_ASSERT(sizeof(instance->driver_build_sha) >= VK_UUID_SIZE);
    memcpy(properties->driverUUID, instance->driver_build_sha, VK_UUID_SIZE);
 
-   snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE, "panvk");
+   snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE,
+            "Manet - Mix Studio/Pix Philosophy (HK) Lmited");
    snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
 
@@ -1405,5 +1458,12 @@ panvk_per_arch(get_physical_device_properties)(
    if (PANVK_DEBUG(STARTUP)) {
       mesa_logi("%s (%s) %s", properties->driverName, properties->deviceName,
                 properties->driverInfo);
+      mesa_logi("panvk: gpu_id=0x%" PRIx64 " variant=0x%x "
+                "texture_features0=0x%08x afbc=%u afrc=%u",
+                device->kmod.dev->props.gpu_id,
+                device->kmod.dev->props.gpu_variant,
+                device->kmod.dev->props.texture_features[0],
+                pan_query_afbc(&device->kmod.dev->props),
+                pan_query_afrc(&device->kmod.dev->props));
    }
 }

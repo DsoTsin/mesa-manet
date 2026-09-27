@@ -1,6 +1,7 @@
 /*
  * Copyright © 2024 Collabora Ltd.
  * Copyright © 2024 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Derived from tu_cmd_buffer.c which is:
  * Copyright © 2016 Red Hat.
@@ -16,6 +17,7 @@
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_cmd_desc_state.h"
+#include "panvk_cmd_dgc.h"
 #include "panvk_cmd_meta.h"
 #include "panvk_cmd_push_constant.h"
 #include "panvk_device.h"
@@ -131,6 +133,7 @@ prepare_driver_set(struct panvk_cmd_buffer *cmdbuf)
 
    cs_desc_state->driver_set.dev_addr = driver_set.gpu;
    cs_desc_state->driver_set.size = desc_count * PANVK_DESCRIPTOR_SIZE;
+   cs_desc_state->driver_set.host = driver_set.cpu;
    compute_state_set_dirty(cmdbuf, DESC_STATE);
    return VK_SUCCESS;
 }
@@ -215,6 +218,9 @@ panvk_per_arch(cmd_dispatch_shader)(
 
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_ENTER);
    cs_update_compute_ctx(b) {
       if (compute_state_dirty(cmdbuf, CS) ||
           compute_state_dirty(cmdbuf, DESC_STATE))
@@ -296,8 +302,15 @@ panvk_per_arch(cmd_dispatch_shader)(
       }
    }
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_BEFORE_ITER);
    cs_next_iter_sb(cmdbuf, PANVK_SUBQUEUE_COMPUTE,
                    cs_scratch_reg_tuple(b, 0, 2));
+
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_BEFORE_RUN);
 
    panvk_cond_render(cmdbuf, b)
    {
@@ -325,7 +338,14 @@ panvk_per_arch(cmd_dispatch_shader)(
       }
    }
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_AFTER_RUN);
    panvk_per_arch(cmd_signal_barrier)(cmdbuf, info->barrier);
+
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_AFTER_SIGNAL);
 
    clear_dirty_after_dispatch(cmdbuf);
 }
@@ -381,6 +401,22 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
       return;
    cmdbuf->state.compute.push_uniforms = push_uniforms.gpu;
 
+   if (panvk_per_arch(shader_has_fau_ubo_words)(cs)) {
+      struct cs_builder *cb =
+         panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+      struct panvk_fau_ubo_words words = {0};
+
+      panvk_per_arch(resolve_fau_ubo_words)(cs, desc_state, cs_desc_state,
+                                            &words);
+      util_dynarray_clear(&cmdbuf->fau_copies.vs);
+      panvk_per_arch(get_fau_ubo_copies)(cs, &words, push_uniforms, 1,
+                                         &cmdbuf->fau_copies.vs);
+      panvk_per_arch(cs_emit_fau_copies)(cb, &cmdbuf->fau_copies.vs);
+      /* The shader reads the FAU buffer once the stores landed. */
+      cs_flush_stores(cb);
+      compute_state_set_dirty(cmdbuf, PUSH_UNIFORMS);
+   }
+
    if (compute_state_dirty(cmdbuf, CS) ||
        compute_state_dirty(cmdbuf, DESC_STATE)) {
       result = panvk_per_arch(cmd_prepare_shader_res_table)(
@@ -403,6 +439,42 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
    panvk_per_arch(cmd_dispatch_shader)(cmdbuf, cs, cs_desc_state,
                                        cmdbuf->state.compute.push_uniforms,
                                        tsd, info);
+}
+
+VkResult
+panvk_per_arch(cmd_prepare_dgc_dispatch)(
+   struct panvk_cmd_buffer *cmdbuf, struct panlib_dgc_execute *params)
+{
+   const struct panvk_shader *shader = cmdbuf->state.compute.shader;
+   struct panvk_descriptor_state *desc_state = &cmdbuf->state.compute.desc_state;
+   struct panvk_shader_desc_state *desc = &cmdbuf->state.compute.cs.desc;
+
+   VkResult result = panvk_per_arch(cmd_prepare_push_descs)(
+      cmdbuf, desc_state, shader->desc_info.used_set_mask);
+   if (result != VK_SUCCESS)
+      return result;
+   const struct panvk_dispatch_info dispatch = {0};
+   panvk_per_arch(cmd_prepare_dispatch_sysvals)(cmdbuf, &dispatch);
+   result = prepare_driver_set(cmdbuf);
+   if (result != VK_SUCCESS)
+      return result;
+   result = panvk_per_arch(cmd_prepare_shader_res_table)(
+      cmdbuf, desc_state, &shader->desc_info, desc, 1);
+   if (result != VK_SUCCESS)
+      return result;
+
+   struct pan_ptr sysvals = panvk_cmd_upload_dev_mem(
+      cmdbuf, desc, &cmdbuf->state.compute.sysvals,
+      sizeof(cmdbuf->state.compute.sysvals), 8);
+   if (!sysvals.gpu)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   params->sysvals[PANLIB_DGC_CS] = sysvals.gpu;
+   params->num_workgroups_sysval = sysval_offset(compute, num_work_groups.x);
+   params->local_group_size_sysval = sysval_offset(compute, local_group_size.x);
+   params->driver_set[PANLIB_DGC_CS] = desc->driver_set.dev_addr;
+   params->driver_set_size[PANLIB_DGC_CS] = desc->driver_set.size;
+   params->resource_table[PANLIB_DGC_CS] = desc->res_table;
+   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL

@@ -1324,6 +1324,15 @@ typedef struct {
 
    /* Beginning of stack allocation used for parallel copy lowering */
    bool has_spill_pcopy_reserved;
+
+   /* Registers the SSA spiller leaves free for LCRA */
+   unsigned spill_headroom;
+
+   /* LCRA had to spill on its own after the SSA spiller */
+   bool lcra_spilled;
+
+   /* TLS accesses, each weighted by bi_loop_weight() of its block */
+   uint64_t spill_weight;
    unsigned spill_pcopy_base;
 
    /* Stats for shader-db */
@@ -2018,6 +2027,21 @@ bool bi_lower_divergent_indirects(nir_shader *shader, unsigned lanes);
 
 void bi_find_loop_blocks(const bi_context *ctx, bi_block *header,
                          BITSET_WORD *out);
+uint8_t *bi_loop_depths(bi_context *ctx);
+
+/* A block in a loop counts as running 16 times per level of nesting */
+static inline uint32_t
+bi_loop_weight(unsigned depth)
+{
+   return 1u << (4 * MIN2(depth, 6));
+}
+
+/* LCRA colours first-fit and needs pair-aligned windows for vector writes,
+ * so a program whose SSA demand equals the register file may not colour and
+ * then spills by reloading before every use. A second compile spills this
+ * far below the file instead (bi_compile_variant).
+ */
+#define BI_SPILL_LCRA_HEADROOM 8
 
 #ifdef __cplusplus
 } /* extern C */

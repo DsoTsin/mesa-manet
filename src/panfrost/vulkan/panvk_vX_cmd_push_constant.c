@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -105,6 +106,14 @@ panvk_per_arch(CmdPushConstants2KHR)(
    if (pPushConstantsInfo->stageFlags & VK_SHADER_STAGE_VERTEX_BIT)
       gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
 
+   if (pPushConstantsInfo->stageFlags &
+       VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT)
+      gfx_state_set_dirty(cmdbuf, TCS_PUSH_UNIFORMS);
+
+   if (pPushConstantsInfo->stageFlags &
+       VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
+      gfx_state_set_dirty(cmdbuf, TES_PUSH_UNIFORMS);
+
    if (pPushConstantsInfo->stageFlags & VK_SHADER_STAGE_FRAGMENT_BIT)
       gfx_state_set_dirty(cmdbuf, FS_PUSH_UNIFORMS);
 
@@ -115,4 +124,15 @@ panvk_per_arch(CmdPushConstants2KHR)(
       (uint8_t *)cmdbuf->state.push_constants.data + pPushConstantsInfo->offset;
 
    memcpy(data, pPushConstantsInfo->pValues, pPushConstantsInfo->size);
+   const VkShaderStageFlags dgc_stages[] = {
+      VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+      VK_SHADER_STAGE_COMPUTE_BIT,
+   };
+   for (unsigned s = 0; s < ARRAY_SIZE(dgc_stages); s++) {
+      if (pPushConstantsInfo->stageFlags & dgc_stages[s]) {
+         uint8_t *stage_data = (uint8_t *)cmdbuf->state.push_constants.dgc_stage_data[s];
+         memcpy(stage_data + pPushConstantsInfo->offset,
+                pPushConstantsInfo->pValues, pPushConstantsInfo->size);
+      }
+   }
 }

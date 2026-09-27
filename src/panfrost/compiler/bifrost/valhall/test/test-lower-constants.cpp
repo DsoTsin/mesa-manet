@@ -9,6 +9,138 @@
 
 #include <gtest/gtest.h>
 
+class LowerConstantPair : public testing::Test {
+ protected:
+   void SetUp() override
+   {
+      mem_ctx = ralloc_context(NULL);
+      b = bit_builder(mem_ctx, 10);
+      inputs.fau.promote_immediates = true;
+      b->shader->inputs = &inputs;
+      fau.max = PAN_MAX_PUSH;
+      b->shader->info.fau = &fau;
+      counts = _mesa_hash_table_u64_create(mem_ctx);
+      _mesa_hash_table_u64_insert(counts, 0x12345678, (void *)(uintptr_t)10);
+   }
+
+   void TearDown() override { ralloc_free(mem_ctx); }
+
+   bi_instr *texture(uint32_t hi = 0)
+   {
+      return bi_tex_single_to(
+         b, bi_temp(b->shader), bi_register(0), bi_imm_u32(0x12345678),
+         bi_imm_u32(hi), false, BI_DIMENSION_2D, BI_REGISTER_FORMAT_F32,
+         false, true, BI_VA_LOD_MODE_ZERO_LOD, false, BI_WRITE_MASK_RGBA, 2);
+   }
+
+   void lower(bi_instr *I)
+   {
+      va_lower_constants(b->shader, I, counts, 1);
+      bi_builder before = bi_init_builder(b->shader, bi_before_instr(I));
+      va_repair_fau(&before, I);
+      EXPECT_TRUE(va_validate_fau(I));
+   }
+
+   void expect_pair(bi_instr *I, unsigned word, uint32_t hi = 0)
+   {
+      EXPECT_TRUE(bi_is_equiv(
+         I->src[1], bi_fau((enum bir_fau)(BIR_FAU_UNIFORM | (word >> 1)), false)));
+      EXPECT_TRUE(bi_is_equiv(
+         I->src[2], bi_fau((enum bir_fau)(BIR_FAU_UNIFORM | (word >> 1)), true)));
+      EXPECT_EQ(fau.words[word].constant, 0x12345678u);
+      EXPECT_EQ(fau.words[word + 1].constant, hi);
+   }
+
+   void *mem_ctx;
+   bi_builder *b;
+   pan_compile_inputs inputs = {};
+   pan_fau_layout fau = {};
+   hash_table_u64 *counts;
+};
+
+TEST_F(LowerConstantPair, KeepZeroHighWordAndReuseWholePair)
+{
+   bi_instr *first = texture();
+   lower(first);
+   expect_pair(first, 0);
+   bi_instr *second = texture();
+   lower(second);
+   expect_pair(second, 0);
+   EXPECT_EQ(fau.count, 2u);
+}
+
+TEST_F(LowerConstantPair, DistinctOffsetsShareNoHalfSlot)
+{
+   bi_instr *first = texture(0x123);
+   lower(first);
+   bi_instr *second = texture(0x456);
+   lower(second);
+   expect_pair(first, 0, 0x123);
+   expect_pair(second, 2, 0x456);
+   EXPECT_EQ(fau.count, 4u);
+}
+
+TEST_F(LowerConstantPair, AlignAfterReservedWords)
+{
+   fau.reserved = fau.count = 3;
+   fau.words[2].constant = 0xfeed;
+   bi_instr *I = texture();
+   lower(I);
+   expect_pair(I, 4);
+   EXPECT_EQ(fau.words[2].constant, 0xfeedu);
+   EXPECT_EQ(fau.count, 6u);
+}
+
+TEST_F(LowerConstantPair, DoNotInterpretUboRelocationsAsConstants)
+{
+   fau.count = 2;
+   fau.words[0].constant = 0x12345678;
+   fau.words[1].constant = 0;
+   bi_instr *I = texture();
+   lower(I);
+   expect_pair(I, 2);
+   EXPECT_EQ(fau.count, 4u);
+}
+
+TEST_F(LowerConstantPair, FullFauUsesExistingPair)
+{
+   pan_fau_emit_const(&fau, 0x12345678);
+   pan_fau_emit_const(&fau, 0);
+   fau.count = fau.max;
+   bi_instr *I = texture();
+   lower(I);
+   expect_pair(I, 0);
+   EXPECT_EQ(fau.count, fau.max);
+}
+
+TEST_F(LowerConstantPair, NoRoomFallsBackWithoutOverflow)
+{
+   fau.reserved = fau.count = fau.max - 1;
+   bi_instr *I = texture();
+   lower(I);
+   EXPECT_LE(fau.count, fau.max);
+   EXPECT_FALSE(bi_is_word_equiv(I->src[2], bi_fau(BIR_FAU_UNIFORM, true)));
+}
+
+TEST_F(LowerConstantPair, DisabledPromotionAllocatesNothing)
+{
+   inputs.fau.promote_immediates = false;
+   bi_instr *I = texture();
+   /* Match the disabled-promotion threshold supplied by the compiler. */
+   va_lower_constants(b->shader, I, counts, UINT32_MAX);
+   EXPECT_EQ(fau.count, 0u);
+   EXPECT_EQ(I->src[1].type, BI_INDEX_NORMAL);
+}
+
+TEST_F(LowerConstantPair, DynamicHighWordIsNotPromotedAsAConstant)
+{
+   bi_instr *I = texture();
+   I->src[2] = bi_register(5);
+   lower(I);
+   EXPECT_TRUE(bi_is_equiv(I->src[2], bi_register(5)));
+   EXPECT_EQ(fau.count, 1u);
+}
+
 static inline void
 add_imm(bi_context *ctx)
 {

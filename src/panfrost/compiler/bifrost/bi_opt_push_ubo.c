@@ -1,21 +1,42 @@
 /*
  * Copyright (C) 2021 Collabora, Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
 #include "bi_builder.h"
 #include "compiler.h"
+#include "util/u_dynarray.h"
 
 /* This optimization pass, intended to run once after code emission but before
  * copy propagation, analyzes direct word-aligned UBO reads and promotes a
  * subset to moves from FAU. It is the sole populator of the UBO push data
- * structure returned back to the command stream. */
+ * structure returned back to the command stream.
+ *
+ * UBOs are identified by a key: the UBO number for the Gallium driver, or the
+ * resource table and index of a Valhall resource handle when the driver sets
+ * inputs->fau.push_ubo_handles (see pan_ubo_reloc_key()). */
+
+#define BI_UBO_KEY_INVALID UINT32_MAX
 
 static bool
 bi_is_ubo(bi_instr *ins)
 {
    return (bi_get_opcode_props(ins)->message == BIFROST_MESSAGE_LOAD) &&
           (ins->seg == BI_SEG_UBO);
+}
+
+static uint32_t
+bi_ubo_key(bi_context *ctx, uint32_t handle)
+{
+   if (!ctx->inputs->fau.push_ubo_handles)
+      return pan_res_handle_get_index(handle);
+
+   unsigned index = pan_res_handle_get_index(handle);
+   if (index >= (1u << PAN_UBO_RELOC_INDEX_BITS))
+      return BI_UBO_KEY_INVALID;
+
+   return pan_ubo_reloc_key(pan_res_handle_get_table(handle), index);
 }
 
 static bool
@@ -25,11 +46,14 @@ bi_is_pushable_ubo(bi_context *ctx, bi_instr *ins)
          (ins->src[1].type == BI_INDEX_CONSTANT)))
       return false;
 
-   unsigned ubo = pan_res_handle_get_index(ins->src[1].value);
+   uint32_t ubo = bi_ubo_key(ctx, ins->src[1].value);
    unsigned offset = ins->src[0].value;
 
-   return ctx->inputs->fau.pushable_ubos & BITFIELD_BIT(ubo) &&
-          (offset & 0x3) == 0;
+   if ((offset & 0x3) != 0 || ubo == BI_UBO_KEY_INVALID)
+      return false;
+
+   return ctx->inputs->fau.push_ubo_handles ||
+          (ctx->inputs->fau.pushable_ubos & BITFIELD_BIT(ubo));
 }
 
 /* Represents use data for a single UBO */
@@ -39,37 +63,74 @@ bi_is_pushable_ubo(bi_context *ctx, bi_instr *ins)
 struct bi_ubo_block {
    BITSET_DECLARE(pushed, MAX_UBO_WORDS);
    uint8_t range[MAX_UBO_WORDS];
+   /* Reads of each word, weighted by loop depth */
+   uint32_t weight[MAX_UBO_WORDS];
 };
+
+/* Resource handles don't give a small dense UBO numbering, so blocks are
+ * allocated per distinct key, up to this many UBOs per shader. */
+#define BI_MAX_PUSH_HANDLE_UBOS 32
 
 struct bi_ubo_analysis {
    /* Per block analysis */
    unsigned nr_blocks;
    struct bi_ubo_block *blocks;
+   /* Key of each block (identity for the Gallium numbering) */
+   uint32_t *keys;
 };
+
+/* Block of a key, or -1 (the handle numbering only creates blocks up to
+ * BI_MAX_PUSH_HANDLE_UBOS keys). */
+static int
+bi_ubo_block_index(bi_context *ctx, struct bi_ubo_analysis *res, uint32_t key,
+                   bool create)
+{
+   if (!ctx->inputs->fau.push_ubo_handles)
+      return key < res->nr_blocks ? (int)key : -1;
+
+   for (unsigned i = 0; i < res->nr_blocks; ++i) {
+      if (res->keys[i] == key)
+         return i;
+   }
+
+   if (!create || res->nr_blocks == BI_MAX_PUSH_HANDLE_UBOS)
+      return -1;
+
+   res->keys[res->nr_blocks] = key;
+   return res->nr_blocks++;
+}
 
 static struct bi_ubo_analysis
 bi_analyze_ranges(bi_context *ctx)
 {
+   const bool handles = ctx->inputs->fau.push_ubo_handles;
+   const unsigned max_blocks =
+      handles ? BI_MAX_PUSH_HANDLE_UBOS : ctx->nir->info.num_ubos + 1;
    struct bi_ubo_analysis res = {
-      .nr_blocks = ctx->nir->info.num_ubos + 1,
+      .nr_blocks = handles ? 0 : max_blocks,
    };
 
-   res.blocks = calloc(res.nr_blocks, sizeof(struct bi_ubo_block));
+   res.blocks = calloc(max_blocks, sizeof(struct bi_ubo_block));
+   res.keys = calloc(max_blocks, sizeof(uint32_t));
+   for (unsigned i = 0; !handles && i < max_blocks; ++i)
+      res.keys[i] = i;
 
-   bi_foreach_instr_global(ctx, ins) {
+   uint8_t *depth = bi_loop_depths(ctx);
+
+   bi_foreach_block(ctx, blk)
+   bi_foreach_instr_in_block(blk, ins) {
       if (!bi_is_pushable_ubo(ctx, ins))
          continue;
 
-      unsigned ubo = pan_res_handle_get_index(ins->src[1].value);
+      uint32_t ubo = bi_ubo_key(ctx, ins->src[1].value);
       unsigned word = ins->src[0].value / 4;
       unsigned channels = bi_get_opcode_props(ins)->sr_count;
 
-      assert(ubo < res.nr_blocks);
       assert(channels > 0 && channels <= 4);
 
       /* Blend constants are handled by bi_pick_blend_constants, don't push
        * them a second time. */
-      if (ctx->stage == MESA_SHADER_FRAGMENT) {
+      if (ctx->stage == MESA_SHADER_FRAGMENT && !handles) {
          /* PAN_UBO_SYSVALS from the gallium driver */
          unsigned sysval_ubo = 1;
          if(ubo == sysval_ubo && word == 0)
@@ -79,12 +140,18 @@ bi_analyze_ranges(bi_context *ctx)
       if (word >= MAX_UBO_WORDS)
          continue;
 
+      int block = bi_ubo_block_index(ctx, &res, ubo, true);
+      if (block < 0)
+         continue;
+
       /* Must use max if the same base is read with different channel
        * counts, which is possible with nir_opt_shrink_vectors */
-      uint8_t *range = res.blocks[ubo].range;
+      uint8_t *range = res.blocks[block].range;
       range[word] = MAX2(range[word], channels);
+      res.blocks[block].weight[word] += bi_loop_weight(depth[blk->index]);
    }
 
+   free(depth);
    return res;
 }
 
@@ -117,33 +184,67 @@ bi_pick_blend_constants(bi_context *ctx, struct bi_ubo_analysis *analysis)
  * number of uses and perhaps the control flow to estimate benefit. This is not
  * sophisticated. Select from the last UBO first to prioritize sysvals. */
 
+struct bi_ubo_candidate {
+   unsigned block, word, range;
+   uint32_t weight;
+};
+
+/* Most weight per pushed word first, then the analysis order */
+static int
+bi_cmp_ubo_candidate(const void *a_, const void *b_)
+{
+   const struct bi_ubo_candidate *a = a_, *b = b_;
+   uint64_t wa = (uint64_t)a->weight * b->range;
+   uint64_t wb = (uint64_t)b->weight * a->range;
+
+   if (wa != wb)
+      return wa > wb ? -1 : 1;
+   if (a->block != b->block)
+      return a->block > b->block ? -1 : 1;
+   return a->word < b->word ? -1 : 1;
+}
+
 static void
 bi_pick_ubo(struct pan_fau_layout *fau, struct bi_ubo_analysis *analysis)
 {
-   for (signed ubo = analysis->nr_blocks - 1; ubo >= 0; --ubo) {
+   struct util_dynarray candidates;
+   util_dynarray_init(&candidates, NULL);
+
+   for (unsigned ubo = 0; ubo < analysis->nr_blocks; ++ubo) {
       struct bi_ubo_block *block = &analysis->blocks[ubo];
 
       for (unsigned r = 0; r < MAX_UBO_WORDS; ++r) {
-         unsigned range = block->range[r];
-
          /* Don't push something we don't access */
-         if (range == 0)
+         if (block->range[r] == 0)
             continue;
 
-         /* Don't push more than possible */
-         if (pan_fau_available(fau) < range)
-            return;
-
-         for (unsigned offs = 0; offs < range; ++offs)
-            pan_fau_emit_reloc(fau, (struct pan_ubo_relocation) {
-               .ubo = ubo,
-               .offset = (r + offs) * 4,
-            });
-
-         /* Mark it as pushed so we can rewrite */
-         BITSET_SET(block->pushed, r);
+         util_dynarray_append_typed(&candidates, struct bi_ubo_candidate,
+                                    ((struct bi_ubo_candidate){
+                                       ubo, r, block->range[r],
+                                       block->weight[r]}));
       }
    }
+
+   qsort(util_dynarray_begin(&candidates),
+         util_dynarray_num_elements(&candidates, struct bi_ubo_candidate),
+         sizeof(struct bi_ubo_candidate), bi_cmp_ubo_candidate);
+
+   util_dynarray_foreach(&candidates, struct bi_ubo_candidate, c) {
+      /* Don't push more than possible, but keep filling with smaller ranges */
+      if (pan_fau_available(fau) < c->range)
+         continue;
+
+      for (unsigned offs = 0; offs < c->range; ++offs)
+         pan_fau_emit_reloc(fau, (struct pan_ubo_relocation) {
+            .ubo = analysis->keys[c->block],
+            .offset = (c->word + offs) * 4,
+         });
+
+      /* Mark it as pushed so we can rewrite */
+      BITSET_SET(analysis->blocks[c->block].pushed, c->word);
+   }
+
+   util_dynarray_fini(&candidates);
 }
 
 void
@@ -151,9 +252,10 @@ bi_opt_push_ubo(bi_context *ctx)
 {
    struct bi_ubo_analysis analysis = bi_analyze_ranges(ctx);
    struct pan_fau_layout *fau = ctx->info.fau;
+   const bool handles = ctx->inputs->fau.push_ubo_handles;
 
    /* We first pick the blend constants, those cannot be reordered */
-   if (ctx->stage == MESA_SHADER_FRAGMENT)
+   if (ctx->stage == MESA_SHADER_FRAGMENT && !handles)
       bi_pick_blend_constants(ctx, &analysis);
 
    ctx->ubo_reloc.start = fau->count;
@@ -165,24 +267,29 @@ bi_opt_push_ubo(bi_context *ctx)
       if (!bi_is_ubo(ins))
          continue;
 
-      unsigned ubo = pan_res_handle_get_index(ins->src[1].value);
-      unsigned offset = ins->src[0].value;
-
       if (!bi_is_pushable_ubo(ctx, ins)) {
          /* The load can't be pushed, so this UBO needs to be
           * uploaded conventionally */
-         if (ins->src[1].type == BI_INDEX_CONSTANT)
-            ctx->ubo_mask |= BITSET_BIT(ubo);
-         else
-            ctx->ubo_mask = ~0;
+         if (!handles) {
+            if (ins->src[1].type == BI_INDEX_CONSTANT)
+               ctx->ubo_mask |=
+                  BITSET_BIT(pan_res_handle_get_index(ins->src[1].value));
+            else
+               ctx->ubo_mask = ~0;
+         }
 
          continue;
       }
 
+      uint32_t ubo = bi_ubo_key(ctx, ins->src[1].value);
+      unsigned offset = ins->src[0].value;
+
       /* Check if we decided to push this */
-      assert(ubo < analysis.nr_blocks);
-      if (!BITSET_TEST(analysis.blocks[ubo].pushed, offset / 4)) {
-         ctx->ubo_mask |= BITSET_BIT(ubo);
+      int block = bi_ubo_block_index(ctx, &analysis, ubo, false);
+      if (block < 0 || offset / 4 >= MAX_UBO_WORDS ||
+          !BITSET_TEST(analysis.blocks[block].pushed, offset / 4)) {
+         if (!handles)
+            ctx->ubo_mask |= BITSET_BIT(ubo);
          continue;
       }
 
@@ -207,6 +314,7 @@ bi_opt_push_ubo(bi_context *ctx)
    }
 
    free(analysis.blocks);
+   free(analysis.keys);
 }
 
 typedef struct {

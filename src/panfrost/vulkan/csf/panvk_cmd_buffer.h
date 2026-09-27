@@ -1,6 +1,7 @@
 /*
  * Copyright © 2024 Collabora Ltd.
  * Copyright © 2025 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -25,6 +26,7 @@
 #include "vk_synchronization.h"
 
 #include "util/list.h"
+#include "util/u_dynarray.h"
 #include "util/perf/u_trace.h"
 
 struct panvk_sync_scope {
@@ -56,6 +58,34 @@ struct panvk_cs_sync64 {
    uint64_t seqno;
    uint32_t error;
    uint32_t pad;
+};
+
+enum panvk_kbase_progress_marker {
+   PANVK_KBASE_PROGRESS_CMDBUF_START = 0x001,
+
+   PANVK_KBASE_PROGRESS_VT_BEFORE_RUN_IDVS = 0b10,
+   PANVK_KBASE_PROGRESS_VT_AFTER_RUN_IDVS = 0b100,
+   PANVK_KBASE_PROGRESS_VT_BEFORE_FINISH_TILING = 0b1000,
+   PANVK_KBASE_PROGRESS_VT_AFTER_FINISH_TILING = 0b10000,
+   PANVK_KBASE_PROGRESS_VT_AFTER_VT_END = 0b100000,
+   PANVK_KBASE_PROGRESS_VT_AFTER_SYNC_SIGNAL = 0b1000000,
+
+   PANVK_KBASE_PROGRESS_FRAG_ENTER = 1<<1,
+   PANVK_KBASE_PROGRESS_FRAG_BEFORE_TILING_WAIT = 1<<2,
+   PANVK_KBASE_PROGRESS_FRAG_AFTER_TILING_WAIT = 1<<3,
+   PANVK_KBASE_PROGRESS_FRAG_BEFORE_RUN = 1<<4,
+   PANVK_KBASE_PROGRESS_FRAG_AFTER_RUN = 1<<5,
+   PANVK_KBASE_PROGRESS_FRAG_AFTER_FINISH = 1<<6,
+
+   PANVK_KBASE_PROGRESS_COMPUTE_ENTER = 1<<1,
+   PANVK_KBASE_PROGRESS_COMPUTE_BEFORE_ITER = 1<<2,
+   PANVK_KBASE_PROGRESS_COMPUTE_BEFORE_RUN = 1<<3,
+   PANVK_KBASE_PROGRESS_COMPUTE_AFTER_RUN = 1<<4,
+   PANVK_KBASE_PROGRESS_COMPUTE_AFTER_SIGNAL = 1<<5,
+
+   PANVK_KBASE_PROGRESS_FINISH_BEFORE_WAIT = 1<<28,
+   PANVK_KBASE_PROGRESS_FINISH_AFTER_WAIT = 1<<29,
+   PANVK_KBASE_PROGRESS_CMDBUF_DONE = 1<<30,
 };
 
 struct panvk_cs_desc_ringbuf {
@@ -197,7 +227,14 @@ struct panvk_cs_subqueue_context {
       struct {
          uint64_t cs;
       } tracebuf;
+      uint64_t kbase_progress_addr;
    } debug;
+   struct {
+      uint64_t program_table;
+      uint64_t sequence;
+      uint64_t next;
+      uint64_t current;
+   } dgc;
    /* Non-zero when draws should execute, zero when they should be
     * skipped. Written by the primary before cs_call, read by inherited
     * secondaries at each draw/dispatch.
@@ -547,13 +584,48 @@ struct panvk_cond_render_state {
    enum mali_cs_condition exec_cond;
 };
 
+/* Source addresses of the promoted UBO words (pan_fau_foreach_reloc) that a
+ * stage's current FAU buffer was filled from, indexed by FAU word (0: the
+ * word reads as zero). shader is NULL when the buffer has to be rebuilt:
+ * nothing was copied yet, or a dependency recorded since the copy may have
+ * made new buffer contents visible. */
+struct panvk_fau_ubo_words {
+   const struct panvk_shader_variant *shader;
+   uint64_t src[PAN_MAX_PUSH];
+};
+
+/* A run of promoted UBO words, contiguous in memory and in a FAU buffer. */
+struct panvk_fau_copy {
+   uint64_t src;
+   uint64_t dst;
+   uint32_t count;
+};
+
 struct panvk_cmd_buffer {
    struct vk_command_buffer vk;
    VkCommandBufferUsageFlags flags;
+   enum mali_cs_sync_scope sync_scope;
    struct panvk_pool cs_pool;
    struct panvk_pool desc_pool;
    struct panvk_pool tls_pool;
+
+   struct {
+      struct panvk_priv_bo *bo;
+      struct pan_ptr header;
+   } poly_heap;
+
    struct list_head push_sets;
+   struct list_head dgc_records;
+
+   /* Promoted UBO word copies (struct panvk_fau_copy). vs is scratch space
+    * for the vertex or compute shader being prepared; fs holds the copies of
+    * the fragment shaders of the current render pass, which the fragment
+    * subqueue runs before the fragment job (cmd_flush_fs_fau_copies), while
+    * the vertex/tiler work of the pass runs unless fs_after_tiling. */
+   struct {
+      struct util_dynarray vs, fs;
+      bool fs_after_tiling;
+   } fau_copies;
 
    struct {
       struct u_trace uts[PANVK_SUBQUEUE_COUNT];
@@ -566,8 +638,16 @@ struct panvk_cmd_buffer {
       struct panvk_cs_state cs[PANVK_SUBQUEUE_COUNT];
       struct panvk_tls_state tls;
       bool contains_timestamp_queries;
+      /* CPU-side estimate used by the kbase queue to choose a conservative
+       * tiler-heap renewal cadence. */
+      uint64_t tiler_work_estimate;
 
       struct panvk_cond_render_state cond_render;
+
+      /* Promoted UBO words of the current VS and FS FAU buffers. */
+      struct {
+         struct panvk_fau_ubo_words vs, fs;
+      } fau_ubo;
    } state;
 };
 
@@ -923,6 +1003,25 @@ void panvk_per_arch(cmd_dispatch_shader)(
    uint64_t push_uniforms, uint64_t tsd,
    const struct panvk_dispatch_info *info);
 
+bool panvk_per_arch(shader_has_fau_ubo_words)(
+   const struct panvk_shader_variant *shader);
+
+bool panvk_per_arch(resolve_fau_ubo_words)(
+   const struct panvk_shader_variant *shader,
+   const struct panvk_descriptor_state *desc_state,
+   const struct panvk_shader_desc_state *shader_desc,
+   struct panvk_fau_ubo_words *words);
+
+void panvk_per_arch(get_fau_ubo_copies)(
+   const struct panvk_shader_variant *shader,
+   const struct panvk_fau_ubo_words *words, struct pan_ptr fau,
+   uint32_t repeat_count, struct util_dynarray *copies);
+
+void panvk_per_arch(cs_emit_fau_copies)(struct cs_builder *b,
+                                        const struct util_dynarray *copies);
+
+void panvk_per_arch(cmd_flush_fs_fau_copies)(struct panvk_cmd_buffer *cmdbuf);
+
 static VkPipelineStageFlags2
 panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)
 {
@@ -943,6 +1042,8 @@ panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)
              VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
    case PANVK_SUBQUEUE_COMPUTE:
       return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+             VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT |
              VK_PIPELINE_STAGE_2_COPY_BIT |
              VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR |
              VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
@@ -1000,6 +1101,10 @@ vk_stages_to_subqueue_mask(VkPipelineStageFlags2 vk_stages,
 
 void panvk_per_arch(emit_barrier)(struct panvk_cmd_buffer *cmdbuf,
                                   struct panvk_cs_deps deps);
+
+void panvk_per_arch(kbase_mark_progress)(
+   struct panvk_cmd_buffer *cmdbuf, enum panvk_subqueue_id subqueue,
+   enum panvk_kbase_progress_marker marker);
 
 #if PAN_ARCH >= 14
 static inline void

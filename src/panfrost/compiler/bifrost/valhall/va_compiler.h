@@ -60,7 +60,11 @@ static inline unsigned
 va_select_fau_page(const bi_instr *I)
 {
    bi_foreach_src(I, s) {
-      if (I->src[s].type == BI_INDEX_FAU)
+      /* LUT immediates are available on every page. Only uniforms and
+       * special FAU values constrain the instruction's page selection.
+       */
+      if (I->src[s].type == BI_INDEX_FAU &&
+          !(I->src[s].value & BIR_FAU_IMMEDIATE))
          return va_fau_page((enum bir_fau)I->src[s].value);
    }
 

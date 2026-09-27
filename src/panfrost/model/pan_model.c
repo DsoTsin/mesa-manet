@@ -90,6 +90,10 @@ const struct pan_model pan_model_list[] = {
                                               MODEL_RATES_X(2, 4, 8,  32,  32, 8)),
    VALHALL_MODEL(PAN_PROD_ID(9, 2, 4), 0, "G68",    "G78", MODEL_ANISO(ALL),  MODEL_TB_SIZES(16384,  8192),
                                               MODEL_RATES_X(2, 4, 8,  32,  32, 8)),
+   /* Mali-G710 (Odin, e.g. Google Tensor G2 / Pixel 7, GPU_ID 0xa862xxxx).
+    * It shares the G710 family rates used by the G610 product below. */
+   VALHALL_MODEL(PAN_PROD_ID(10, 8, 2), 0, "G710",   "G710", MODEL_ANISO(ALL),  MODEL_TB_SIZES(32768, 16384),
+                                              MODEL_RATES_X(4, 8, 16,  64,  64, 16)),
    VALHALL_MODEL(PAN_PROD_ID(10, 8, 7), 0, "G610",   "G710", MODEL_ANISO(ALL),  MODEL_TB_SIZES(32768, 16384),
                                               MODEL_RATES_X(4, 8, 16,  64,  64, 16)),
    /* var/cvt/sfu rates might not be correct (we haven't found any detailed documentation) */
@@ -155,4 +159,62 @@ pan_get_model(uint64_t gpu_id, uint32_t gpu_variant)
    }
 
    return NULL;
+}
+
+/* Conservative per-arch defaults for GPUs that are not in the model table.
+ * Tilebuffer sizes are the smallest of any model of the same architecture,
+ * which is always safe (larger-than-real sizes would corrupt rendering);
+ * rates are left at 0 ("can't be determined") and anisotropic filtering is
+ * disabled. */
+static const struct pan_model pan_model_unknown_midgard = {
+   .name = "Mali (unknown Midgard)",
+   .min_rev_anisotropic = ~0,
+   .tilebuffer = { .color_size = 4096, .z_size = 4096 },
+   .quirks = { .max_4x_msaa = true },
+};
+
+static const struct pan_model pan_model_unknown_bifrost = {
+   .name = "Mali (unknown Bifrost)",
+   .min_rev_anisotropic = ~0,
+   .tilebuffer = { .color_size = 4096, .z_size = 4096 },
+};
+
+static const struct pan_model pan_model_unknown_valhall = {
+   .name = "Mali (unknown Valhall)",
+   .min_rev_anisotropic = ~0,
+   .tilebuffer = { .color_size = 16384, .z_size = 8192 },
+};
+
+static const struct pan_model pan_model_unknown_fifthgen = {
+   .name = "Mali (unknown 5th gen)",
+   .min_rev_anisotropic = ~0,
+   .tilebuffer = { .color_size = 65536, .z_size = 32768 },
+};
+
+/*
+ * Return a conservative fallback model for a GPU that pan_get_model() does
+ * not know about, so that drivers can still expose the device instead of
+ * refusing to probe.  Returns NULL if not even the architecture is usable.
+ */
+const struct pan_model *
+pan_get_fallback_model(uint64_t gpu_id)
+{
+   switch (pan_arch(gpu_id)) {
+   case 4:
+   case 5:
+      return &pan_model_unknown_midgard;
+   case 6:
+   case 7:
+      return &pan_model_unknown_bifrost;
+   case 9:
+   case 10:
+   case 11:
+      return &pan_model_unknown_valhall;
+   case 12:
+   case 13:
+   case 14:
+      return &pan_model_unknown_fifthgen;
+   default:
+      return NULL;
+   }
 }

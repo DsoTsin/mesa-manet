@@ -205,6 +205,16 @@ algebraic_late += [
     (('fpow', 'a@16', 'b@16'), ('fexp2', ('fmul', ('flog2', a), b)))
 ]
 
+# Arm's compiler multiplies out pow with a small integral exponent
+# (x^5 = (x*x)^2 * x) instead of the FLOGD/FEXP sequence; the product is at
+# least as accurate as exp2(n * log2(x)), which is what pow must match.
+algebraic_late += [
+    (('fpow', 'a@32', 2.0), ('fmul', a, a)),
+    (('fpow', 'a@32', 3.0), ('fmul', ('fmul', a, a), a)),
+    (('fpow', 'a@32', 4.0), ('fmul', ('fmul', a, a), ('fmul', a, a))),
+    (('fpow', 'a@32', 5.0), ('fmul', ('fmul', ('fmul', a, a), ('fmul', a, a)), a)),
+]
+
 # Bifrost LDEXP.v2f16 takes i16 exponent, while nir_op_ldexp takes i32. Lower
 # to nir_op_ldexp16_pan.
 #

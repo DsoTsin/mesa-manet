@@ -1497,7 +1497,7 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       break;
 
    case nir_intrinsic_load_attr_pan:
-      assert(stage == MESA_SHADER_VERTEX);
+      assert(stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_COMPUTE);
       bi_emit_load_attr(b, instr);
       break;
 
@@ -2553,6 +2553,99 @@ bi_nir_is_replicated(nir_alu_src *src)
    return true;
 }
 
+/* Folds a constant shift of one source into a 32-bit bitwise op, as Arm's
+ * compiler does (x ^ (x >> 16) is one RSHIFT_XOR). Shifts and bitwise ops both
+ * run on the SFU, so the unfused pair costs two instructions there; the shift
+ * itself is left for DCE.
+ */
+static bool
+bi_emit_shifted_logic(bi_builder *b, nir_alu_instr *instr, bi_index dst)
+{
+   if (instr->def.bit_size != 32 || instr->def.num_components != 1)
+      return false;
+
+   for (unsigned s = 0; s < 2; ++s) {
+      nir_alu_instr *shift = nir_def_as_alu_or_null(instr->src[s].src.ssa);
+
+      if (!shift || shift->def.num_components != 1 ||
+          shift->def.bit_size != 32 || !list_is_singular(&shift->def.uses))
+         continue;
+
+      switch (shift->op) {
+      case nir_op_ishl:
+      case nir_op_ushr:
+      case nir_op_ishr:
+      case nir_op_extract_u8:
+      case nir_op_extract_u16:
+         break;
+      default:
+         continue;
+      }
+
+      if (!nir_src_is_const(shift->src[1].src))
+         continue;
+
+      unsigned n = nir_src_comp_as_uint(shift->src[1].src,
+                                        shift->src[1].swizzle[0]);
+      unsigned amount;
+      bool right = true, arithmetic = false;
+
+      switch (shift->op) {
+      case nir_op_ishl:
+         amount = n & 31;
+         right = false;
+         break;
+      case nir_op_ushr:
+      case nir_op_ishr:
+         amount = n & 31;
+         arithmetic = shift->op == nir_op_ishr;
+         break;
+      case nir_op_extract_u8:
+      case nir_op_extract_u16: {
+         /* The top part is a right shift */
+         unsigned bits = shift->op == nir_op_extract_u8 ? 8 : 16;
+         if ((n + 1) * bits != 32)
+            continue;
+         amount = 32 - bits;
+         break;
+      }
+      default:
+         continue;
+      }
+
+      bi_index a = bi_alu_src_index(b, shift->src[0], 1);
+      bi_index other = bi_alu_src_index(b, instr->src[1 - s], 1);
+      bi_index sh = bi_imm_u8(amount);
+
+      switch (instr->op) {
+      case nir_op_iand:
+         if (right)
+            bi_rshift_and_to(b, 32, dst, a, other, sh, arithmetic);
+         else
+            bi_lshift_and_to(b, 32, dst, a, other, sh);
+         break;
+      case nir_op_ior:
+         if (right)
+            bi_rshift_or_to(b, 32, dst, a, other, sh, arithmetic);
+         else
+            bi_lshift_or_to(b, 32, dst, a, other, sh);
+         break;
+      case nir_op_ixor:
+         if (right)
+            bi_rshift_xor_to(b, 32, dst, a, other, sh, arithmetic);
+         else
+            bi_lshift_xor_to(b, 32, dst, a, other, sh);
+         break;
+      default:
+         UNREACHABLE("not a bitwise op");
+      }
+
+      return true;
+   }
+
+   return false;
+}
+
 static void
 bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
 {
@@ -3309,15 +3402,18 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
       break;
 
    case nir_op_iand:
-      bi_lshift_and_to(b, sz, dst, s0, s1, bi_imm_u8(0));
+      if (!bi_emit_shifted_logic(b, instr, dst))
+         bi_lshift_and_to(b, sz, dst, s0, s1, bi_imm_u8(0));
       break;
 
    case nir_op_ior:
-      bi_lshift_or_to(b, sz, dst, s0, s1, bi_imm_u8(0));
+      if (!bi_emit_shifted_logic(b, instr, dst))
+         bi_lshift_or_to(b, sz, dst, s0, s1, bi_imm_u8(0));
       break;
 
    case nir_op_ixor:
-      bi_lshift_xor_to(b, sz, dst, s0, s1, bi_imm_u8(0));
+      if (!bi_emit_shifted_logic(b, instr, dst))
+         bi_lshift_xor_to(b, sz, dst, s0, s1, bi_imm_u8(0));
       break;
 
    case nir_op_inot:
@@ -4227,7 +4323,8 @@ static bi_context *
 bi_compile_variant_nir(nir_shader *nir,
                        const struct pan_compile_inputs *inputs,
                        struct util_dynarray *binary, struct pan_shader_info *pinfo,
-                       struct pan_stats *stats, enum bi_idvs_mode idvs)
+                       struct pan_stats *stats, enum bi_idvs_mode idvs,
+                       unsigned spill_headroom)
 {
    bi_context *ctx = rzalloc(NULL, bi_context);
    struct bi_shader_info info = {
@@ -4246,6 +4343,7 @@ bi_compile_variant_nir(nir_shader *nir,
    ctx->arch = pan_arch(inputs->gpu_id);
    ctx->info = info;
    ctx->idvs = idvs;
+   ctx->spill_headroom = spill_headroom;
    ctx->malloc_idvs = (ctx->arch >= 9) && !inputs->no_idvs;
 
    unsigned execution_mode = nir->info.float_controls_execution_mode;
@@ -4531,16 +4629,6 @@ bi_compile_variant_nir(nir_shader *nir,
    /* update info struct */
    pan_shader_update_info(pinfo, ctx->nir, inputs);
 
-   if ((bifrost_debug & (BIFROST_DBG_SHADERDB|BIFROST_DBG_STATSFULL))
-       && !skip_internal) {
-      const char *prefix = bi_shader_stage_name(ctx);
-      if (bifrost_debug & BIFROST_DBG_STATSFULL) {
-         pan_stats_verbose(stderr, prefix, ctx, stats, pinfo);
-      } else {
-         pan_stats_fprintf(stderr, prefix, stats);
-      }
-   }
-
    return ctx;
 }
 
@@ -4566,9 +4654,47 @@ bi_compile_variant(nir_shader *nir,
 
    struct pan_stats *stats =
       idvs == BI_IDVS_VARYING ? &info->stats_idvs_varying : &info->stats;
+   const struct pan_shader_info entry_info = *info;
 
    bi_context *ctx =
-      bi_compile_variant_nir(nir, inputs, binary, info, stats, idvs);
+      bi_compile_variant_nir(nir, inputs, binary, info, stats, idvs, 0);
+
+   /* If LCRA had to spill by itself, compile again with headroom for it and
+    * keep the allocation whose TLS accesses run less often. Only for shaders
+    * compiled once from unchanged NIR (not the IDVS pair).
+    */
+   if (ctx->lcra_spilled && idvs == BI_IDVS_NONE && !inputs->is_blend) {
+      struct util_dynarray alt_binary;
+      util_dynarray_init(&alt_binary, NULL);
+      struct pan_shader_info alt_info = entry_info;
+
+      bi_context *alt =
+         bi_compile_variant_nir(nir, inputs, &alt_binary, &alt_info,
+                                &alt_info.stats, idvs, BI_SPILL_LCRA_HEADROOM);
+
+      if (alt->spill_weight < ctx->spill_weight) {
+         assert(offset == 0);
+         binary->size = 0;
+         util_dynarray_append_array(binary, uint8_t, alt_binary.data,
+                                    alt_binary.size);
+         *info = alt_info;
+         ralloc_free(ctx);
+         ctx = alt;
+      } else {
+         ralloc_free(alt);
+      }
+
+      util_dynarray_fini(&alt_binary);
+   }
+
+   if ((bifrost_debug & (BIFROST_DBG_SHADERDB | BIFROST_DBG_STATSFULL)) &&
+       !(nir->info.internal && !(bifrost_debug & BIFROST_DBG_INTERNAL))) {
+      const char *prefix = bi_shader_stage_name(ctx);
+      if (bifrost_debug & BIFROST_DBG_STATSFULL)
+         pan_stats_verbose(stderr, prefix, ctx, stats, info);
+      else
+         pan_stats_fprintf(stderr, prefix, stats);
+   }
 
    /* A register is preloaded <==> it is live before the first block */
    bi_block *first_block = list_first_entry(&ctx->blocks, bi_block, link);
@@ -4684,6 +4810,31 @@ bi_find_loop_blocks(const bi_context *ctx, bi_block *header, BITSET_WORD *out)
    BITSET_SET(out, header->index);
 
    ralloc_free(dominators);
+}
+
+/* Loop nesting depth of every block, by block index; free() the result */
+uint8_t *
+bi_loop_depths(bi_context *ctx)
+{
+   uint8_t *depth = calloc(ctx->num_blocks, sizeof(uint8_t));
+   BITSET_WORD *loop = BITSET_RZALLOC(NULL, ctx->num_blocks);
+
+   bi_calc_dominance(ctx);
+
+   bi_foreach_block(ctx, header) {
+      if (!header->loop_header)
+         continue;
+
+      memset(loop, 0, BITSET_WORDS(ctx->num_blocks) * sizeof(BITSET_WORD));
+      bi_find_loop_blocks(ctx, header, loop);
+
+      unsigned b;
+      BITSET_FOREACH_SET(b, loop, ctx->num_blocks)
+         depth[b]++;
+   }
+
+   ralloc_free(loop);
+   return depth;
 }
 
 static void

@@ -43,6 +43,11 @@
 #include "pan_trace.h"
 #include "perf/mali_perf.h"
 
+/* Maximum number of /dev/mali* device nodes to probe. */
+#if defined(HAVE_PAN_KMOD_KBASE)
+#define PAN_KBASE_MAX_NODES 8
+#endif
+
 #if defined(__cplusplus)
 extern "C" {
 #endif
@@ -129,6 +134,16 @@ enum pan_kmod_bo_flags {
     * the KMD to force non-coherent mappings on IO coherent setup.
     */
    PAN_KMOD_BO_FLAG_IO_COHERENT = BITFIELD_BIT(7),
+
+   /* kbase CSF event memory monitored for cross-CSG synchronization. */
+   PAN_KMOD_BO_FLAG_CSF_EVENT = BITFIELD_BIT(8),
+
+   /* Only accessed by the GPU, and each location only by the invocation
+    * that wrote it (thread-local storage). Backends that control the GPU
+    * shareability attribute map it non-shareable, which spares the load/store
+    * caches the cross-core coherency protocol on every spill store.
+    */
+   PAN_KMOD_BO_FLAG_GPU_PRIVATE = BITFIELD_BIT(9),
 };
 
 /* Allowed group priority flags. */
@@ -484,6 +499,19 @@ struct pan_kmod_ops {
    struct pan_kmod_bo *(*bo_import)(struct pan_kmod_dev *dev, uint32_t handle,
                                     uint64_t size);
 
+   /* Import a dma-buf directly, without converting it to a DRM GEM handle.
+    * Non-DRM backends such as kbase can implement this instead of bo_import.
+    * This method is optional.
+    */
+   struct pan_kmod_bo *(*bo_import_fd)(struct pan_kmod_dev *dev, int fd,
+                                      uint64_t size);
+
+   /* Export a dma-buf directly, without converting a DRM GEM handle.  Returns
+    * a new close-on-exec fd on success, -1 otherwise.  This method is
+    * optional.
+    */
+   int (*bo_export_fd)(struct pan_kmod_bo *bo);
+
    /* Post export operations.
     * Return 0 on success, -1 otherwise.
     * This method is optional.
@@ -492,6 +520,25 @@ struct pan_kmod_ops {
 
    /* Get the file offset to use to mmap() a buffer object. */
    off_t (*bo_get_mmap_offset)(struct pan_kmod_bo *bo);
+
+   /* Map a buffer object for CPU access.
+    * This method is optional. When missing, the BO is mapped by calling
+    * mmap() on the device fd with the offset returned by
+    * bo_get_mmap_offset().
+    * Backends where the CPU mapping is established at allocation time
+    * (kbase SAME_VA) implement this to return the existing mapping.
+    * Returns MAP_FAILED on error.
+    */
+   void *(*bo_mmap)(struct pan_kmod_bo *bo, int prot, int flags,
+                    void *host_addr);
+
+   /* Unmap a CPU mapping previously returned by pan_kmod_bo_mmap().
+    * This method is optional. When missing, munmap() is called directly.
+    * Backends where the CPU mapping is owned by the BO (kbase SAME_VA)
+    * implement this as a no-op and tear the mapping down at bo_free time.
+    * Returns 0 on success, -1 otherwise.
+    */
+   int (*bo_munmap)(struct pan_kmod_bo *bo, void *host_addr, size_t size);
 
    /* Flush the pending BO map syncs. */
    int (*flush_bo_map_syncs)(struct pan_kmod_dev *dev);
@@ -631,6 +678,12 @@ struct pan_kmod_dev *
 pan_kmod_dev_create(int fd, uint32_t flags,
                     const struct pan_kmod_allocator *allocator);
 
+struct pan_kmod_dev *
+pan_kmod_dev_create_with_driver(int fd, uint32_t flags,
+                                const char *driver_name,
+                                const struct pan_kmod_driver *driver,
+                                const struct pan_kmod_allocator *allocator);
+
 void pan_kmod_dev_destroy(struct pan_kmod_dev *dev);
 
 static inline struct pan_kmod_va_range
@@ -706,10 +759,16 @@ pan_kmod_bo_export(struct pan_kmod_bo *bo)
 
    int fd;
 
-   if (drmPrimeHandleToFD(bo->dev->fd, bo->handle, DRM_CLOEXEC | DRM_RDWR,
-                          &fd)) {
-      mesa_loge("drmPrimeHandleToFD() failed (err=%d)", errno);
-      return -1;
+   if (bo->dev->ops->bo_export_fd) {
+      fd = bo->dev->ops->bo_export_fd(bo);
+      if (fd < 0)
+         return -1;
+   } else {
+      if (drmPrimeHandleToFD(bo->dev->fd, bo->handle,
+                             DRM_CLOEXEC | DRM_RDWR, &fd)) {
+         mesa_loge("drmPrimeHandleToFD() failed (err=%d)", errno);
+         return -1;
+      }
    }
 
    if (bo->dev->ops->bo_export && bo->dev->ops->bo_export(bo, fd)) {
@@ -757,6 +816,14 @@ pan_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags, void *host_addr)
    if (bo->flags & PAN_KMOD_BO_FLAG_NO_MMAP)
       return MAP_FAILED;
 
+   if (bo->dev->ops->bo_mmap) {
+      host_addr = bo->dev->ops->bo_mmap(bo, prot, flags, host_addr);
+      if (host_addr == MAP_FAILED)
+         mesa_loge("bo_mmap(..., size=%" PRIu64 ", prot=%d, flags=0x%x) failed: %s",
+                   bo->size, prot, flags, strerror(errno));
+      return host_addr;
+   }
+
    mmap_offset = bo->dev->ops->bo_get_mmap_offset(bo);
    if (mmap_offset < 0)
       return MAP_FAILED;
@@ -768,6 +835,20 @@ pan_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags, void *host_addr)
                 bo->size, prot, flags, strerror(errno));
 
    return host_addr;
+}
+
+/* Unmap a CPU mapping obtained from pan_kmod_bo_mmap(). Callers must use
+ * this instead of munmap()/os_munmap(): on some backends (kbase SAME_VA)
+ * unmapping would destroy the GPU mapping too, so the backend keeps the
+ * mapping alive until the BO is freed.
+ */
+static inline int
+pan_kmod_bo_munmap(struct pan_kmod_bo *bo, void *host_addr, size_t size)
+{
+   if (bo->dev->ops->bo_munmap)
+      return bo->dev->ops->bo_munmap(bo, host_addr, size);
+
+   return os_munmap(host_addr, size);
 }
 
 static inline bool
