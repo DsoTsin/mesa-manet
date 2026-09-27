@@ -208,8 +208,8 @@ if with_platform_android
   libpanvk_files += files('panvk_android.c')
 endif
 
-libvulkan_panfrost = shared_library(
-  'vulkan_panfrost',
+libvulkan_manet = shared_library(
+  'vulkan_manet',
   [libpanvk_files, panvk_entrypoints, panvk_tracepoints, panvk_drirc],
   include_directories : [
     inc_include,
@@ -252,7 +252,7 @@ if with_symbols_check
     'panvk symbols check',
     symbols_check,
     args : [
-      '--lib', libvulkan_panfrost,
+      '--lib', libvulkan_manet,
       '--symbols-file', vulkan_icd_symbols,
       symbols_check_args,
     ],
@@ -260,12 +260,12 @@ if with_symbols_check
   )
 endif
 
-icd_file_name = libname_prefix + 'vulkan_panfrost.' + libname_suffix
+icd_file_name = libname_prefix + 'vulkan_manet.' + libname_suffix
 
-panfrost_icd = custom_target(
-  'panfrost_icd',
+manet_icd = custom_target(
+  'manet_icd',
   input : [vk_icd_gen, vk_api_xml],
-  output : 'panfrost_icd.' + vulkan_manifest_suffix,
+  output : 'manet_icd.' + vulkan_manifest_suffix,
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
@@ -280,9 +280,9 @@ panfrost_icd = custom_target(
   install : true,
 )
 
-_dev_icdname = 'panfrost_devenv_icd.@0@.json'.format(host_machine.cpu())
+_dev_icdname = 'manet_devenv_icd.@0@.json'.format(host_machine.cpu())
 _dev_icd = custom_target(
-  'panfrost_devenv_icd',
+  'manet_devenv_icd',
   input : [vk_icd_gen, vk_api_xml],
   output : _dev_icdname,
   command : [
