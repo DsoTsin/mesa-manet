@@ -169,7 +169,6 @@ algebraic_late += [
     (('iand', a, b), ('lshift_and_pan', a, 0, b), 'is_kraid'),
     (('ior', a, b), ('lshift_or_pan', a, 0, b), 'is_kraid'),
     (('ixor', a, b), ('lshift_xor_pan', a, 0, b), 'is_kraid'),
-    (('inot', a), ('lshift_xor_pan', a, 0, -1), 'is_kraid'),
     (('ishl', a, b), ('lshift_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
     (('ushr', a, b), ('rshift_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
     (('ishr', a, b), ('arshift_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
