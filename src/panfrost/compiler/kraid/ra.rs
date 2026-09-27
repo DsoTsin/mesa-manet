@@ -1175,7 +1175,7 @@ impl LocalRegAlloc<'_> {
         align: RegAlignConstraint,
         cost_fn: impl Fn(u16) -> u8,
     ) -> Option<u16> {
-        let mut best = (u16::MAX, u8::MAX);
+        let mut best = (u16::MAX, (u8::MAX, u16::MAX));
 
         // First, loop through unused registers in the hopes that one of them
         // ends up having cost 0
@@ -1207,8 +1207,8 @@ impl LocalRegAlloc<'_> {
                 continue;
             }
 
-            let c = cost_fn(b);
-            if c == 0 {
+            let c = (cost_fn(b), 0);
+            if c.0 == 0 {
                 return Some(b);
             } else if c < best.1 {
                 best = (b, c);
@@ -1243,7 +1243,7 @@ impl LocalRegAlloc<'_> {
                 continue;
             }
 
-            let c = cost_fn(b);
+            let c = (cost_fn(b), self.eviction_copy_cost(b..b + u16::from(bytes)));
             if c < best.1 {
                 best = (b, c);
             }
@@ -1254,6 +1254,25 @@ impl LocalRegAlloc<'_> {
         } else {
             Some(best.0)
         }
+    }
+
+    fn eviction_copy_cost(&self, bytes: Range<u16>) -> u16 {
+        if self.arena.is_mem() {
+            return 0;
+        }
+
+        let mut cost = 0;
+        let mut b = bytes.start;
+        while b < bytes.end {
+            if let Some(idx) = self.byte_idx(b) {
+                let allocated = self.idx_bytes(idx);
+                cost += (allocated.end - allocated.start).div_ceil(4);
+                b = allocated.end;
+            } else {
+                b += 1;
+            }
+        }
+        cost
     }
 
     fn choose_bytes(
@@ -2572,6 +2591,7 @@ impl Shader<'_> {
     }
 
     pub fn assign_registers(&mut self) {
+        let tls_base = self.info.tls_size;
         pass!(self.lower_repeated_phi_srcs());
 
         if self.info.is_blend {
@@ -2644,5 +2664,63 @@ impl Shader<'_> {
             alloc_regs(s, &reg_arena, live);
         });
         self.info.registers_used = reg_arena.regs_used();
+        pass!(self.unspill(tls_base));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::model_for_gpu_id;
+
+    #[test]
+    fn eviction_cost_counts_entire_values_once() {
+        let model = model_for_gpu_id(0xa0000000, 0).unwrap();
+        let arena = Arena::new_reg(model.as_ref(), 128);
+        let affinities = AffinityMap {
+            ssa_affinities: SSAValueIndexedVec::with_count(4),
+            phi_webs: SSAValueIndexedVec::with_count(4),
+        };
+        let mut alloc = LocalRegAlloc::new(model.as_ref(), &arena, &affinities);
+        alloc.assign_idx_bytes(0, 0..8);
+        alloc.assign_idx_bytes(1, 8..12);
+        alloc.assign_idx_bytes(2, 12..14);
+        assert_eq!(alloc.eviction_copy_cost(3..4), 2);
+        assert_eq!(alloc.eviction_copy_cost(0..8), 2);
+        assert_eq!(alloc.eviction_copy_cost(7..14), 4);
+        assert_eq!(alloc.eviction_copy_cost(14..16), 0);
+    }
+
+    #[test]
+    fn allocation_ties_prefer_fewer_copies() {
+        let model = model_for_gpu_id(0xa0000000, 0).unwrap();
+        let arena = Arena::new_reg(model.as_ref(), 128);
+        let affinities = AffinityMap {
+            ssa_affinities: SSAValueIndexedVec::with_count(2),
+            phi_webs: SSAValueIndexedVec::with_count(2),
+        };
+        let mut alloc = LocalRegAlloc::new(model.as_ref(), &arena, &affinities);
+        alloc.assign_idx_bytes(0, 0..8);
+        alloc.assign_idx_bytes(1, 8..12);
+        let mut pinned = PinnedByteSet::default();
+        pinned.pin_bytes(12..arena.limit());
+        let align = RegAlignConstraint::for_align(4, 0);
+        assert_eq!(alloc.find_unpinned_bytes(&pinned, 4, align, |_| 0), Some(8));
+        assert_eq!(alloc.find_unpinned_bytes(&pinned, 4, align, |b| u8::from(b == 8)), Some(0));
+        pinned.pin_bytes(8..12);
+        assert_eq!(alloc.find_unpinned_bytes(&pinned, 4, align, |_| 0), Some(0));
+    }
+
+    #[test]
+    fn memory_arena_keeps_existing_cost() {
+        let model = model_for_gpu_id(0xa0000000, 0).unwrap();
+        let arena = Arena::new_mem(model.as_ref(), 0);
+        let affinities = AffinityMap {
+            ssa_affinities: SSAValueIndexedVec::with_count(1),
+            phi_webs: SSAValueIndexedVec::with_count(1),
+        };
+        let mut alloc = LocalRegAlloc::new(model.as_ref(), &arena, &affinities);
+        alloc.assign_idx_bytes(0, 0..8);
+        assert_eq!(alloc.eviction_copy_cost(0..8), 0);
     }
 }

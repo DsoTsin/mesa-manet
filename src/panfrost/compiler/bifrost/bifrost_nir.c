@@ -1544,9 +1544,7 @@ bifrost_compile_shader_nir(nir_shader *nir,
 
    if (bi_use_kraid(nir, gpu_id)) {
       if (inputs->fau.pushable_ubos) {
-         /* We can't push if there's a driver-reserved range */
-         assert(inputs->fau.reserved == 0);
-         NIR_PASS(_, nir, pan_nir_opt_push_ubo, inputs->fau.pushable_ubos,
+         NIR_PASS(_, nir, pan_nir_opt_push_ubo, inputs,
                   &info->fau, &info->ubo_mask);
       }
 

@@ -281,6 +281,9 @@ pub extern "C" fn kraid_compile_nir(
     }
     pass!(s.lower_mkvec_swz());
     pass!(s.opt_var());
+    if pass!(s.opt_cse()) {
+        pass!(s.opt_copy_prop());
+    }
     pass!(s.opt_dce());
     pass!(s.opt_normalize_consts());
     pass!(s.lower_small_constants());
@@ -293,6 +296,7 @@ pub extern "C" fn kraid_compile_nir(
     // Shader::assign_registers() uses pass!() internally
     s.assign_registers();
     pass!(s.lower_copy());
+    pass!(s.schedule_after_ra());
 
     // These have to happen after register allocation because they may add
     // critical edges.

@@ -206,6 +206,7 @@ struct FAUSlot {
     idx64: u16,
     use_count: u8,
     words_used: u8,
+    scalar_uses: [u8; 2],
 }
 
 impl FAUSlot {
@@ -295,10 +296,14 @@ impl LegalizeFAU<'_> {
                     idx64,
                     use_count: 0,
                     words_used: 0,
+                    scalar_uses: [0; 2],
                 }),
             };
 
             slot.use_count += 1;
+            if !fau.load64 {
+                slot.scalar_uses[usize::from(word)] += 1;
+            }
             slot.words_used |= if fau.load64 {
                 0b11
             } else {
@@ -309,9 +314,13 @@ impl LegalizeFAU<'_> {
 
     fn fau_retained(&self, fau: &FAURef) -> bool {
         let idx64 = fau.idx >> 1;
+        let words = if fau.load64 { 0b11 } else { 1 << (fau.idx & 1) };
         self.slots
             .iter()
-            .any(|s| s.page == fau.page && s.idx64 == idx64)
+            .any(|s| {
+                s.page == fau.page && s.idx64 == idx64
+                    && (s.words_used & words) == words
+            })
     }
 
     /// Once we filtered all slots, we can apply it back to the Op
@@ -411,21 +420,29 @@ impl LegalizeFAU<'_> {
         if self.reads_k0 && !self.fau_model.is_zero_free {
             used_words += 1;
         }
-        self.slots.retain(|fau| {
-            let words = fau.words_used.count_ones();
+        for fau in self.slots.iter_mut() {
+            let mut words = fau.words_used.count_ones();
             if used_words + words > 2 {
-                return false;
+                let word = usize::from(fau.scalar_uses[1] > fau.scalar_uses[0]);
+                if used_words == 1 && fau.scalar_uses[word] > 0 {
+                    fau.words_used = 1 << word;
+                    words = 1;
+                } else {
+                    fau.words_used = 0;
+                    continue;
+                }
             }
             if fau.page.is_special() {
                 if special_taken {
-                    return false;
+                    fau.words_used = 0;
+                    continue;
                 } else {
                     special_taken = true;
                 }
             }
             used_words += words;
-            true
-        });
+        }
+        self.slots.retain(|fau| fau.words_used != 0);
         debug_assert!(used_words <= 2);
     }
 
@@ -517,6 +534,100 @@ impl Shader<'_> {
                 b.push_instr(instr);
                 b.into_mapped()
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::model_for_gpu_id;
+    use crate::ops::{CmpOp, OpCSel};
+    use crate::ssa_value::{AllocSSA, SSAValueAllocator};
+
+    #[test]
+    fn scalar_word_bandwidth() {
+        for arch in [9, 10, 12, 13, 14] {
+            let model = model_for_gpu_id(arch << 28, 0).unwrap();
+            for uses in [[1, 1], [1, 2], [3, 1], [0, 1], [1, 0], [0, 0]] {
+                let mut ctx = LegalizeFAU::new(model.fau());
+                ctx.reads_k0 = true;
+                ctx.slots.push(FAUSlot {
+                    page: FAUPage::User,
+                    idx64: 4,
+                    use_count: uses[0] + uses[1] + 1,
+                    words_used: 0b11,
+                    scalar_uses: uses,
+                });
+                ctx.legalize_execution_unit();
+                let full = arch >= 12;
+                let any = uses != [0, 0];
+                let selected = u16::from(uses[1] > uses[0]);
+                for word in 0..2 {
+                    assert_eq!(ctx.fau_retained(&FAURef::user_i32(8 + word)),
+                               full || (any && word == selected));
+                }
+                assert_eq!(ctx.fau_retained(&FAURef::user_i64(8)), full);
+            }
+        }
+    }
+
+    #[test]
+    fn full_pair_without_zero() {
+        let model = model_for_gpu_id(0xa0000000, 0).unwrap();
+        let mut ctx = LegalizeFAU::new(model.fau());
+        ctx.slots.push(FAUSlot {
+            page: FAUPage::User,
+            idx64: 4,
+            use_count: 1,
+            words_used: 0b11,
+            scalar_uses: [0, 0],
+        });
+        ctx.legalize_execution_unit();
+        assert!(ctx.fau_retained(&FAURef::user_i64(8)));
+    }
+
+    #[test]
+    fn single_slot_with_zero() {
+        let model = model_for_gpu_id(0xa0000000, 0).unwrap();
+        let mut ctx = LegalizeFAU::new(model.fau());
+        ctx.reads_k0 = true;
+        for idx64 in [4, 5] {
+            ctx.slots.push(FAUSlot {
+                page: FAUPage::User,
+                idx64,
+                use_count: 2,
+                words_used: 0b11,
+                scalar_uses: [1, 1],
+            });
+        }
+        ctx.legalize_execution_unit();
+        assert_eq!(ctx.slots.len(), 1);
+        assert_eq!(ctx.slots[0].words_used.count_ones(), 1);
+        assert!(!ctx.fau_retained(&FAURef::user_i32(10)));
+    }
+
+    #[test]
+    fn csel_pair_and_zero() {
+        for arch in [10, 12] {
+            let model = model_for_gpu_id(arch << 28, 0).unwrap();
+            let mut alloc = SSAValueAllocator::default();
+            let cmp = alloc.alloc_ref(32);
+            let dst = alloc.alloc_ref(32);
+            let mut op: Op = OpCSel {
+                dst: dst.into(),
+                cmp_type: DataType::S32,
+                cmp_op: CmpOp::Ne,
+                cmp_srcs: [cmp.into(), 0_u32.into()],
+                sel_srcs: [FAURef::user_i32(8).into(),
+                           FAURef::user_i32(9).into()],
+            }.into();
+            let mut b = SSAInstrBuilder::new(model.as_ref(), &mut alloc);
+            legalize_fau_srcs(&mut b, model.fau(), &mut op);
+            assert_eq!(b.into_vec().len(), usize::from(arch == 10));
+            let retained = op.srcs().iter()
+                .filter(|s| matches!(s.src_ref, SrcRef::FAU(_))).count();
+            assert_eq!(retained, if arch == 10 { 1 } else { 2 });
         }
     }
 }

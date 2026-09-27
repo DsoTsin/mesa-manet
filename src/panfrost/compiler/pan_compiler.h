@@ -19,6 +19,12 @@
 
 struct pan_shader_info;
 
+static inline uint32_t
+pan_loop_weight(unsigned depth)
+{
+   return 1u << (4 * MIN2(depth, 6));
+}
+
 uint32_t pan_get_compiler_flags(unsigned arch);
 
 bool pan_will_dump_shaders(unsigned arch);

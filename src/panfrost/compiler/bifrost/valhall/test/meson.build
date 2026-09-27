@@ -11,6 +11,7 @@ test(
       'test-insert-flow.cpp',
       'test-lower-isel.cpp',
       'test-lower-constants.cpp',
+      'test-nir-push-ubo.cpp',
       'test-mark-last.cpp',
       'test-merge-flow.cpp',
       'test-packing.cpp',

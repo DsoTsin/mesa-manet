@@ -4311,14 +4311,6 @@ bi_pack_clauses(bi_context *ctx, struct util_dynarray *binary, unsigned offset)
    }
 }
 
-static int
-compare_u32(const void* a, const void* b, void* _)
-{
-   const uint32_t va = (uintptr_t)a;
-   const uint32_t vb = (uintptr_t)b;
-   return va - vb;
-}
-
 static bi_context *
 bi_compile_variant_nir(nir_shader *nir,
                        const struct pan_compile_inputs *inputs,
@@ -4471,23 +4463,12 @@ bi_compile_variant_nir(nir_shader *nir,
          va_count_constants(ctx, I, const_hist);
       }
 
-      uint32_t const_amount = _mesa_hash_table_u64_num_entries(const_hist);
-      uint32_t *sorted = rzalloc_array(ctx, uint32_t, const_amount);
-
-      uint32_t idx = 0;
-      hash_table_u64_foreach(const_hist, entry)
-      {
-         sorted[idx++] = (uintptr_t)entry.data;
-      }
-
-      util_qsort_r(sorted, const_amount, sizeof(uint32_t), compare_u32, NULL);
       uint32_t max_amount =
          ctx->inputs->fau.promote_immediates
-            ? MIN2(const_amount, pan_fau_available(ctx->info.fau))
+            ? pan_fau_available(ctx->info.fau)
             : 0;
       uint32_t min_count_for_fau =
-         max_amount > 0 ? sorted[max_amount - 1] : UINT32_MAX;
-      ralloc_free(sorted);
+         va_min_fau_count(const_hist, max_amount);
 
       bi_foreach_instr_global_safe(ctx, I) {
          /* Phis become single moves so shouldn't be affected */

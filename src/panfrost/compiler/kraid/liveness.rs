@@ -10,6 +10,74 @@ use compiler::dataflow::BackwardDataflow;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ord;
 
+#[derive(Clone, Copy)]
+pub(crate) struct RegAccess {
+    pub reads: RegByteSet,
+    pub writes: RegByteSet,
+}
+
+impl RegAccess {
+    pub fn for_instr(model: &dyn Model, instr: &Instr) -> Self {
+        let mut reads = RegByteSet::new();
+        let mut writes = RegByteSet::new();
+        for reg in instr.iter_reg_uses() {
+            reads.insert_range(reg.byte_range());
+        }
+        for dst in instr.dsts() {
+            let Some(reg) = dst.dst_ref.as_reg() else { continue; };
+            let bytes = reg.byte_range();
+            if dst.lanes == DstLanes::All {
+                writes.insert_range(bytes);
+            } else if let Some(lanes) = dst.lanes.as_byte_range() {
+                let base = u16::from(reg.idx) * 4;
+                let start = bytes.start.max(base + u16::from(lanes.start));
+                let end = bytes.end.min(base + u16::from(lanes.end));
+                if start < end {
+                    writes.insert_range(start..end);
+                }
+            }
+        }
+        for reg in ra::instr_clobbered_regs(model, &instr.op) {
+            writes.insert_range(reg.byte_range());
+        }
+        Self { reads, writes }
+    }
+
+    pub fn live_before(&self, after: RegByteSet) -> RegByteSet {
+        (after - self.writes) | self.reads
+    }
+}
+
+pub(crate) struct PhysicalLiveness {
+    pub access: Vec<Vec<RegAccess>>,
+    pub live_out: Vec<RegByteSet>,
+}
+
+impl PhysicalLiveness {
+    pub fn for_shader(s: &Shader<'_>) -> Self {
+        let access: Vec<Vec<_>> = s.blocks.iter().map(|b| b.instrs.iter()
+            .map(|instr| RegAccess::for_instr(s.model, instr)).collect()).collect();
+        let mut live_in = vec![RegByteSet::new(); s.blocks.len()];
+        let mut live_out = live_in.clone();
+        BackwardDataflow {
+            cfg: &s.blocks,
+            block_in: &mut live_in,
+            block_out: &mut live_out,
+            transfer: |bi, _, input, output| {
+                let mut live = *output;
+                for a in access[bi].iter().rev() {
+                    live = a.live_before(live);
+                }
+                let changed = live != *input;
+                *input = live;
+                changed
+            },
+            join: |output, input| *output |= input,
+        }.solve();
+        Self { access, live_out }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LiveBytes {
     pub reg: u32,

@@ -58,6 +58,40 @@ class LowerConstantPair : public testing::Test {
    hash_table_u64 *counts;
 };
 
+TEST_F(LowerConstantPair, SelectMostUsedConstants)
+{
+   _mesa_hash_table_u64_clear(counts);
+   _mesa_hash_table_u64_insert(counts, 1, (void *)(uintptr_t)100);
+   _mesa_hash_table_u64_insert(counts, 2, (void *)(uintptr_t)3);
+   _mesa_hash_table_u64_insert(counts, 3, (void *)(uintptr_t)20);
+   _mesa_hash_table_u64_insert(counts, 4, (void *)(uintptr_t)1);
+   EXPECT_EQ(va_min_fau_count(counts, 1), 100u);
+   EXPECT_EQ(va_min_fau_count(counts, 2), 20u);
+   EXPECT_EQ(va_min_fau_count(counts, 3), 3u);
+   EXPECT_EQ(va_min_fau_count(counts, 4), 1u);
+   EXPECT_EQ(va_min_fau_count(counts, 128), 1u);
+}
+
+TEST_F(LowerConstantPair, DisableConstantPromotionWithoutCapacity)
+{
+   EXPECT_EQ(va_min_fau_count(counts, 0), UINT32_MAX);
+   _mesa_hash_table_u64_clear(counts);
+   EXPECT_EQ(va_min_fau_count(counts, 128), UINT32_MAX);
+}
+
+TEST_F(LowerConstantPair, SelectTiedAndLargeCounts)
+{
+   _mesa_hash_table_u64_clear(counts);
+   _mesa_hash_table_u64_insert(counts, 1, (void *)(uintptr_t)UINT32_MAX);
+   _mesa_hash_table_u64_insert(counts, 2, (void *)(uintptr_t)1);
+   _mesa_hash_table_u64_insert(counts, 3, (void *)(uintptr_t)0x80000000u);
+   _mesa_hash_table_u64_insert(counts, 4, (void *)(uintptr_t)0x80000000u);
+   EXPECT_EQ(va_min_fau_count(counts, 1), UINT32_MAX);
+   EXPECT_EQ(va_min_fau_count(counts, 2), 0x80000000u);
+   EXPECT_EQ(va_min_fau_count(counts, 3), 0x80000000u);
+   EXPECT_EQ(va_min_fau_count(counts, 4), 1u);
+}
+
 TEST_F(LowerConstantPair, KeepZeroHighWordAndReuseWholePair)
 {
    bi_instr *first = texture();

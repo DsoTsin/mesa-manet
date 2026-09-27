@@ -636,6 +636,13 @@ impl fmt::Debug for SrcRef {
 }
 
 impl SrcRef {
+    pub fn as_mem(&self) -> Option<&MemRef> {
+        match self {
+            SrcRef::Mem(mem) => Some(mem),
+            _ => None,
+        }
+    }
+
     pub fn as_ssa(&self) -> Option<&SSARef> {
         match self {
             SrcRef::SSA(ssa) => Some(ssa),

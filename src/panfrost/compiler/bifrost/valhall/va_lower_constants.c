@@ -8,6 +8,36 @@
 #include "va_compiler.h"
 #include "valhall.h"
 
+static int
+va_compare_constant_count(const void *a, const void *b)
+{
+   uint32_t va = *(const uint32_t *)a;
+   uint32_t vb = *(const uint32_t *)b;
+   return (va < vb) - (va > vb);
+}
+
+uint32_t
+va_min_fau_count(struct hash_table_u64 *counts, unsigned capacity)
+{
+   unsigned count = _mesa_hash_table_u64_num_entries(counts);
+   if (!capacity || !count)
+      return UINT32_MAX;
+
+   uint32_t *sorted = malloc(sizeof(*sorted) * count);
+   if (!sorted)
+      return UINT32_MAX;
+
+   unsigned idx = 0;
+   hash_table_u64_foreach(counts, entry) {
+      sorted[idx++] = (uintptr_t)entry.data;
+   }
+
+   qsort(sorted, count, sizeof(*sorted), va_compare_constant_count);
+   uint32_t threshold = sorted[MIN2(capacity, count) - 1];
+   free(sorted);
+   return threshold;
+}
+
 /* Only some special immediates are available, as specified in the Table of
  * Immediates in the specification. Other immediates must be lowered, either to
  * uniforms or to moves.

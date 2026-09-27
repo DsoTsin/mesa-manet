@@ -2033,7 +2033,7 @@ uint8_t *bi_loop_depths(bi_context *ctx);
 static inline uint32_t
 bi_loop_weight(unsigned depth)
 {
-   return 1u << (4 * MIN2(depth, 6));
+   return pan_loop_weight(depth);
 }
 
 /* LCRA colours first-fit and needs pair-aligned windows for vector writes,
