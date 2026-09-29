@@ -5021,6 +5021,8 @@ tu_clear_attachments_generic(struct tu_cmd_buffer *cmd,
    }
 
    tu_emit_resolve_group<A7XX>(cmd, cs, &resolve_group);
+
+   TU_CALLX(cmd->device, tu_flush_for_access)(&cmd->state.renderpass_cache, TU_ACCESS_BLIT_WRITE_GMEM, TU_ACCESS_NONE);
 }
 
 template <chip CHIP>
