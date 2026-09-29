@@ -3496,7 +3496,7 @@ by a particular renderpass/blit.
 	<reg64 offset="0x9e12" name="PC_PVIS_STREAM_BIN_BASE" type="waddress" align="32" variants="A6XX-A7XX"/>
 	<reg64 offset="0x9e14" name="PC_DVIS_STREAM_BIN_BASE" type="waddress" align="32" variants="A6XX-A7XX"/>
 
-	<reg32 offset="0x9e0a" name="PC_AUTO_VERTEX_STRIDE"/>
+	<reg32 offset="0x9e0a" name="PC_AUTO_VERTEX_STRIDE" low="0" high="9" type="uint"/>
 	<reg32 offset="0x9e0d" name="PC_VIS_STREAM_CNTL" type="a6xx_pc_vis_stream_cntl" variants="A8XX-"/>
 	<reg64 offset="0x9e0e" name="PC_PVIS_STREAM_BIN_BASE" type="waddress" align="32" variants="A8XX-"/>
 	<reg64 offset="0x9e10" name="PC_DVIS_STREAM_BIN_BASE" type="waddress" align="32" variants="A8XX-"/>
