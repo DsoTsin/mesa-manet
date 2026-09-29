@@ -9455,6 +9455,9 @@ tu_CmdDrawIndirectByteCountEXT(VkCommandBuffer commandBuffer,
 
    tu6_draw_common<CHIP>(cmd, cs, false, 0);
 
+   if (cmd->device->physical_device->info->props.draw_auto_stale_stride_quirk)
+      tu_cs_emit_regs(cs, A6XX_PC_AUTO_VERTEX_STRIDE(vertexStride));
+
    tu_cs_emit_pkt7(cs, CP_DRAW_AUTO, 6);
    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_XFB));
    if (CHIP >= A7XX) {
