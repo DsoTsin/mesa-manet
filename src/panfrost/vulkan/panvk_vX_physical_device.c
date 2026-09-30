@@ -124,6 +124,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .KHR_maintenance7 = true,
       .KHR_maintenance8 = true,
       .KHR_maintenance9 = true,
+      .KHR_maintenance10 = true,
       .KHR_map_memory2 = true,
       .KHR_multiview = true,
       .KHR_pipeline_binary = true,
@@ -584,6 +585,9 @@ panvk_per_arch(get_physical_device_features)(
 
       /* VK_KHR_maintenance9 */
       .maintenance9 = true,
+
+      /* VK_KHR_maintenance10 */
+      .maintenance10 = true,
 
       /* VK_KHR_internally_synchronized_queues */
       .internallySynchronizedQueues = true,
@@ -1408,6 +1412,11 @@ panvk_per_arch(get_physical_device_properties)(
       /* Sparse binding not supported yet. */
       .image2DViewOf3DSparse = false,
       .defaultVertexAttributeValue = VK_DEFAULT_VERTEX_ATTRIBUTE_VALUE_ZERO_ZERO_ZERO_ZERO_KHR,
+
+      /* VK_KHR_maintenance10 */
+      .rgba4OpaqueBlackSwizzled = true,
+      .resolveSrgbFormatAppliesTransferFunction = true,
+      .resolveSrgbFormatSupportsTransferFunctionControl = true,
 
       /* VK_EXT_conservative_rasterization */
       .primitiveOverestimationSize = 1.0f / 512.0f,
