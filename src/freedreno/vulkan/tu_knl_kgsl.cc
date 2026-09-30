@@ -865,7 +865,7 @@ static VkResult
 kgsl_queue_wait_fence(struct tu_queue *queue, uint32_t fence,
                       uint64_t timeout_ns)
 {
-   uint64_t abs_timeout_ns = os_time_get_nano() + timeout_ns;
+   uint64_t abs_timeout_ns = os_time_get_absolute_timeout(timeout_ns);
 
    return wait_timestamp_safe(queue->device->fd, queue->msm_queue_id,
                               fence, abs_timeout_ns);
