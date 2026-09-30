@@ -965,8 +965,8 @@ kgsl_syncobj_wait(struct tu_device *device,
    }
 }
 
-#define kgsl_syncobj_foreach_state(syncobjs, filter) \
-   for (uint32_t i = 0; sync = syncobjs[i], i < count; i++) \
+#define kgsl_syncobj_foreach_state(syncobjs, filter)                                                                   \
+   for (uint32_t i = 0; i < count && (sync = syncobjs[i]); i++)                                                        \
       if (sync->state == filter)
 
 static VkResult
