@@ -844,6 +844,21 @@ kgsl_timestamp_error(
                     operation, context_id, timestamp, error, strerror(error));
 }
 
+static VkResult
+kgsl_poll_timestamp(struct tu_device *device, unsigned int context_id, unsigned int timestamp)
+{
+   struct kgsl_cmdstream_readtimestamp_ctxtid read = {
+      .context_id = context_id,
+      .type = KGSL_TIMESTAMP_RETIRED,
+   };
+
+   if (safe_ioctl(device->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &read))
+      return vk_errorf(device, VK_ERROR_UNKNOWN, "KGSL timestamp read failed: context %u, timestamp %u, errno %d (%s)",
+                       context_id, timestamp, errno, strerror(errno));
+
+   return timestamp_cmp(read.timestamp, timestamp) ? VK_SUCCESS : VK_TIMEOUT;
+}
+
 /* safe_ioctl is not enough as restarted waits would not adjust the timeout
  * which could lead to waiting substantially longer than requested
  */
@@ -853,25 +868,21 @@ wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned 
    struct kgsl_device_waittimestamp_ctxtid wait = {
       .context_id = context_id,
       .timestamp = timestamp,
-      .timeout = get_relative_ms(abs_timeout_ns),
    };
 
    while (true) {
+      int timeout_ms = get_relative_ms(abs_timeout_ns);
+      if (timeout_ms == 0)
+         return kgsl_poll_timestamp(device, context_id, timestamp);
+
+      wait.timeout = timeout_ms;
       int ret = ioctl(device->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
-
-      if (ret == -1 && (errno == EINTR || errno == EAGAIN)) {
-         int timeout_ms = get_relative_ms(abs_timeout_ns);
-
-         /* update timeout to consider time that has passed since the start */
-         if (timeout_ms == 0)
-            return VK_TIMEOUT;
-
-         wait.timeout = timeout_ms;
-      } else if (ret == -1) {
-         return kgsl_timestamp_error(device, context_id, timestamp, "wait", errno);
-      } else {
+      if (ret == 0)
          return VK_SUCCESS;
-      }
+
+      const int error = errno;
+      if (error != EINTR && error != EAGAIN)
+         return kgsl_timestamp_error(device, context_id, timestamp, "wait", error);
    }
 }
 
