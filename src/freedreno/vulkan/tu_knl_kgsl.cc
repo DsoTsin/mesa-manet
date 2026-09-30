@@ -1067,14 +1067,17 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
          }
       } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
 
+      const int error = errno;
       for (uint32_t i = 0; i < fds_count - num_fds; i++)
          close(fds[i].fd);
 
-      if (ret != 0) {
-         assert(errno == ETIME);
+      if (ret > 0) {
+         result = VK_SUCCESS;
+      } else if (ret == 0) {
          result = VK_TIMEOUT;
       } else {
-         result = VK_SUCCESS;
+         result =
+            vk_errorf(device, VK_ERROR_UNKNOWN, "KGSL sync FD poll failed: errno %d (%s)", error, strerror(error));
       }
    }
 
