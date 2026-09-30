@@ -1022,7 +1022,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
       /* TSs could be merged by finding the one with the lowest timestamp */
       bool first_ts = true;
       kgsl_syncobj_foreach_state(syncobjs, KGSL_SYNCOBJ_STATE_TS) {
-         if (first_ts || timestamp_cmp(sync->timestamp, lowest_timestamp)) {
+         if (first_ts || timestamp_cmp(lowest_timestamp, sync->timestamp)) {
             first_ts = false;
             lowest_timestamp = sync->timestamp;
          }
