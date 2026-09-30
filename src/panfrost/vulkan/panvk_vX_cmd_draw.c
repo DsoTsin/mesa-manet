@@ -13,6 +13,7 @@
 #include "pan_util.h"
 
 #include "vk_android.h"
+#include "vk_render_pass.h"
 
 static enum pan_fb_load_op
 get_att_fb_load_op(const VkRenderingAttachmentInfo *att)
@@ -221,6 +222,7 @@ render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
       const struct panvk_resolve_attachment resolve = {
          .dst_iview = ms2ss ? iview_ss : resolve_iview,
          .mode = att->resolveMode,
+         .flags = vk_get_rendering_attachment_flags(att),
       };
       assert(resolve.dst_iview != NULL);
       assert(resolve.dst_iview->pview.nr_samples == 1);
@@ -228,8 +230,17 @@ render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
       const struct pan_image *resolve_pimage =
          pan_image_view_get_color_plane(&resolve.dst_iview->pview).image;
 
+      /* The tile buffer holds linear values, an in-tile resolve always
+       * applies the transfer function.
+       */
+      const bool skip_transfer_function =
+         (resolve.flags &
+          VK_RENDERING_ATTACHMENT_RESOLVE_SKIP_TRANSFER_FUNCTION_BIT_KHR) &&
+         vk_format_is_srgb(fmt);
+
       if ((ms2ss || att->storeOp != VK_ATTACHMENT_STORE_OP_STORE) &&
-          !avoid_direct_resolve_to(resolve_pimage)) {
+          !avoid_direct_resolve_to(resolve_pimage) &&
+          !skip_transfer_function) {
          render->fb.resolve.rts[index] = (struct pan_fb_resolve_target) {
             .in_bounds = {
                .resolve = PAN_FB_RESOLVE_RT(index),

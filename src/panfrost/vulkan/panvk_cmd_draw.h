@@ -48,6 +48,7 @@ struct panvk_attrib_buf {
 
 struct panvk_resolve_attachment {
    VkResolveModeFlagBits mode;
+   VkRenderingAttachmentFlagsKHR flags;
    struct panvk_image_view *dst_iview;
 };
 
