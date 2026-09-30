@@ -389,6 +389,12 @@ struct fd_dev_info {
        */
       bool enable_tp_ubwc_flag_hint;
 
+      /* Whether SP_CHICKEN_BITS_2.INDEPENDENT_ICACHE_MISS exists, A750 only.
+       * It helps some workloads and hurts others, so it is only set when
+       * the tu_independent_icache_miss driconf option asks for it.
+       */
+      bool has_independent_icache_miss;
+
       bool storage_8bit;
 
       /* A750+ added a special flag that allows HW to correctly interpret UBWC, including

@@ -1334,6 +1334,7 @@ add_gpus([
         CHIP.A7XX,
         [a7xx_base, a7xx_gen3, GPUProps(
             QCTDD10789828 = True,
+            has_independent_icache_miss = True,
         )],
         num_ccu = 6,
         tile_align_w = 96,

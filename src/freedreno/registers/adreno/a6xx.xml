@@ -4382,7 +4382,17 @@ by a particular renderpass/blit.
 	<reg32 offset="0xae06" name="SP_ISDB_CNTL" variants="A7XX-" usage="init"/>
 	<reg32 offset="0xae07" name="SP_PERFCTR_CNTL"/>
 	<reg32 offset="0xae08" name="SP_CHICKEN_BITS_1" variants="A7XX-" usage="init"/>
-	<reg32 offset="0xae09" name="SP_CHICKEN_BITS_2" variants="A7XX-" usage="init"/>
+	<reg32 offset="0xae09" name="SP_CHICKEN_BITS_2" variants="A7XX-" usage="init">
+		<bitfield name="INDEPENDENT_ICACHE_MISS" pos="30" type="boolean">
+			<doc>
+				A750 only. When set, each wave handles its instruction
+				cache misses independently and only the wave that missed
+				waits. When clear, a miss stalls all waves together, which
+				helps when the other waves would take the same miss and
+				hurts when their fetches diverge.
+			</doc>
+		</bitfield>
+	</reg32>
 	<reg32 offset="0xae0a" name="SP_CHICKEN_BITS_3" variants="A7XX-" usage="init"/>
 	<reg32 offset="0xae0b" name="SP_CHICKEN_BITS_4" variants="A8XX-"/>
 	<reg32 offset="0xae0c" name="SP_STATUS"/>
