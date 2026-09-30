@@ -1949,6 +1949,7 @@ tu_init_dri_options(struct tu_instance *instance)
       .applicationVersion = instance->vk.app_info.app_version,
       .engineName = instance->vk.app_info.engine_name,
       .engineVersion = instance->vk.app_info.engine_version,
+      .logNonDefaultOptions = TU_DEBUG(STARTUP),
    };
 
    turnip_parse_dri_options(&instance->drirc, &params);
