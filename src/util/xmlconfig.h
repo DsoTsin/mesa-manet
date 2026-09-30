@@ -146,6 +146,8 @@ typedef struct {
    const char *engineName;
    uint32_t engineVersion;
 
+   bool logNonDefaultOptions;
+
    driShaderOptionCallback shaderOptionCallback;
    void *shaderOptionCallbackData;
 } driConfigFileParseParams;

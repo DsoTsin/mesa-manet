@@ -58,6 +58,7 @@ static inline void regfree(regex_t* r) {}
 #include <fcntl.h>
 #include <math.h>
 #include "strndup.h"
+#include "log.h"
 #include "u_process.h"
 #include "os_file.h"
 #include "os_misc.h"
@@ -1425,6 +1426,51 @@ driInjectExecName(const char *exec)
    execname = exec;
 }
 
+static void
+driLogNonDefaultOptions(const driOptionCache *cache,
+                        const driOptionCache *defaults,
+                        const char *tag)
+{
+   assert(cache->tableSize == defaults->tableSize);
+   assert(cache->info == defaults->info);
+
+   for (unsigned i = 0; i < (1u << cache->tableSize); i++) {
+      const driOptionInfo *info = &cache->info[i];
+      if (!info->name)
+         continue;
+
+      const driOptionValue *value = &cache->values[i];
+      const driOptionValue *default_value = &defaults->values[i];
+
+      switch (info->type) {
+      case DRI_BOOL:
+         if (value->_bool != default_value->_bool)
+            mesa_log(MESA_LOG_INFO, tag, "drirc: %s=%s", info->name,
+                     value->_bool ? "true" : "false");
+         break;
+      case DRI_ENUM:
+      case DRI_INT:
+         if (value->_int != default_value->_int)
+            mesa_log(MESA_LOG_INFO, tag, "drirc: %s=%d", info->name, value->_int);
+         break;
+      case DRI_UINT64:
+         if (value->_uint64 != default_value->_uint64)
+            mesa_log(MESA_LOG_INFO, tag, "drirc: %s=%" PRIu64, info->name, value->_uint64);
+         break;
+      case DRI_FLOAT:
+         if (value->_float != default_value->_float)
+            mesa_log(MESA_LOG_INFO, tag, "drirc: %s=%g", info->name, value->_float);
+         break;
+      case DRI_STRING:
+         if (strcmp(value->_string, default_value->_string))
+            mesa_log(MESA_LOG_INFO, tag, "drirc: %s=%s", info->name, value->_string);
+         break;
+      case DRI_SECTION:
+         break;
+      }
+   }
+}
+
 void
 driParseConfigFiles(driOptionCache *cache, const driOptionCache *info,
                     const driConfigFileParseParams *params)
@@ -1479,6 +1525,9 @@ driParseConfigFiles(driOptionCache *cache, const driOptionCache *info,
 #else
    parseStaticConfig(&userData);
 #endif /* WITH_XMLCONFIG */
+
+   if (params->logNonDefaultOptions)
+      driLogNonDefaultOptions(cache, info, params->driverName);
 }
 
 void
