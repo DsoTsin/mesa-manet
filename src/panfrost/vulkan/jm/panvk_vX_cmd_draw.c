@@ -1931,7 +1931,9 @@ panvk_per_arch(CmdBeginRendering)(VkCommandBuffer commandBuffer,
 }
 
 VKAPI_ATTR void VKAPI_CALL
-panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
+panvk_per_arch(CmdEndRendering2KHR)(
+   VkCommandBuffer commandBuffer,
+   UNUSED const VkRenderingEndInfoKHR *pRenderingEndInfo)
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
