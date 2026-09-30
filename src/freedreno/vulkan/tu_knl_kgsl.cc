@@ -818,12 +818,13 @@ get_relative_ms(uint64_t abs_timeout_ns)
        */
       return -1;
 
-   uint64_t cur_time_ms = os_time_get_nano() / 1000000;
-   uint64_t abs_timeout_ms = abs_timeout_ns / 1000000;
-   if (abs_timeout_ms <= cur_time_ms)
+   uint64_t cur_time_ns = os_time_get_nano();
+   if (abs_timeout_ns <= cur_time_ns)
       return 0;
 
-   return abs_timeout_ms - cur_time_ms;
+   uint64_t relative_ns = abs_timeout_ns - cur_time_ns;
+   uint64_t relative_ms = relative_ns / 1000000 + (relative_ns % 1000000 != 0);
+   return relative_ms > INT_MAX ? -1 : relative_ms;
 }
 
 static VkResult
