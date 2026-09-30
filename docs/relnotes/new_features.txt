@@ -57,3 +57,4 @@ VK_KHR_push_descriptor on pvr
 VK_EXT_image_sliced_view_of_3d on pvr
 VK_EXT_image_compression_control on panvk
 Support for G2-Ultra, G2-Premium and G2-Pro GPUs on Panfrost and PanVK
+VK_KHR_maintenance10 on panvk
