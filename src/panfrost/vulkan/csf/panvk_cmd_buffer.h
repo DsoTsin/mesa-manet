@@ -20,6 +20,7 @@
 #include "panvk_cmd_dispatch.h"
 #include "panvk_cmd_draw.h"
 #include "panvk_cmd_push_constant.h"
+#include "panvk_cmd_ray_tracing.h"
 #include "panvk_queue.h"
 
 #include "vk_command_buffer.h"
@@ -130,6 +131,11 @@ struct panvk_fb_layer_state {
 
    /** GPU address to the RENDER_TARGET descriptors. */
    uint64_t rtd_pointer;
+
+#if PAN_ARCH >= 15
+   /** GPU address to the per-region counter GENERIC_PLANE. It may be 0. */
+   uint64_t perf_counter_plane;
+#endif
 } __attribute__((aligned(64)));
 #endif /* PAN_ARCH >= 14 */
 
@@ -338,8 +344,13 @@ enum panvk_cs_regs {
     * command stream initialization, and should never be touched again. */
    PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_0_START = 28,
    PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_0_END = 47,
+#if PAN_ARCH >= 15
+   PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_1_START = 50,
+   PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_1_END = 53,
+#else
    PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_1_START = 52,
    PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_1_END = 52,
+#endif
    PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_2_START = 54,
    PANVK_CS_REG_RUN_FRAGMENT_SR_RANGE_2_END = 55,
 #else
@@ -634,6 +645,7 @@ struct panvk_cmd_buffer {
    struct {
       struct panvk_cmd_graphics_state gfx;
       struct panvk_cmd_compute_state compute;
+      struct panvk_cmd_ray_tracing_state ray_tracing;
       struct panvk_push_constant_state push_constants;
       struct panvk_cs_state cs[PANVK_SUBQUEUE_COUNT];
       struct panvk_tls_state tls;
@@ -643,6 +655,8 @@ struct panvk_cmd_buffer {
       uint64_t tiler_work_estimate;
 
       struct panvk_cond_render_state cond_render;
+
+      struct panvk_shader_instrumentation *shader_instr;
 
       /* Promoted UBO words of the current VS and FS FAU buffers. */
       struct {
@@ -732,6 +746,9 @@ panvk_cmd_get_desc_state(struct panvk_cmd_buffer *cmdbuf,
 
    case VK_PIPELINE_BIND_POINT_COMPUTE:
       return &cmdbuf->state.compute.desc_state;
+
+   case VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR:
+      return &cmdbuf->state.ray_tracing.desc_state;
 
    default:
       assert(!"Unsupported bind point");
@@ -1046,7 +1063,10 @@ panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)
              VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT |
              VK_PIPELINE_STAGE_2_COPY_BIT |
              VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR |
-             VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
+             VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT |
+             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR |
+             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
    default:
       UNREACHABLE("Invalid subqueue id");
    }
@@ -1130,6 +1150,24 @@ cs_emit_layer_fragment_state(struct cs_builder *b, struct cs_index fbd_ptr)
                 offsetof(struct panvk_fb_layer_state, dcd_pointer));
 }
 #endif /* PAN_ARCH >= 14 */
+
+#if PAN_ARCH >= 15
+static inline void
+cs_emit_layer_perf_counter_state(struct cs_builder *b, struct cs_index fbd_ptr)
+{
+   struct cs_index plane = cs_sr_reg64(b, FRAGMENT, PERF_COUNTER_PLANE_POINTER);
+   struct cs_index flags1 = cs_sr_reg32(b, FRAGMENT, FLAGS_1);
+
+   cs_load64_to(b, plane, fbd_ptr,
+                offsetof(struct panvk_fb_layer_state, perf_counter_plane));
+
+   /* Perf Counters Enable is bit 6 of Fragment Flags 1. */
+   cs_if(b, MALI_CS_CONDITION_NEQUAL, plane)
+      cs_bfins_imm32(b, flags1, flags1, 6, 1, 1);
+   cs_else(b)
+      cs_bfins_imm32(b, flags1, flags1, 6, 1, 0);
+}
+#endif
 
 void panvk_per_arch(collect_crc_invalidation_deps)(const VkDependencyInfo *info,
                                                    struct panvk_cs_deps *deps,

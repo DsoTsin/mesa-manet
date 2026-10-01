@@ -2220,6 +2220,7 @@ impl ShaderInfo {
 pub struct ConstantPool {
     pub label: Label,
     pub data: Vec<u8>,
+    pub instrumented_blocks: Vec<(Label, usize)>,
 }
 
 pub struct Shader<'a> {

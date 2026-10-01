@@ -1502,6 +1502,7 @@ impl LocalRegAlloc<'_> {
             idx: u32,
         }
 
+        let early_clobber = instr.op.dst_is_early_clobber();
         let mut src_bytes = BitSet::new();
         let mut evicted = VecDeque::new();
         let mut srcs_dsts: Vec<SrcDst> = Vec::new();
@@ -1649,6 +1650,14 @@ impl LocalRegAlloc<'_> {
                     src_dst.align,
                     &src_bytes,
                 )
+            } else if early_clobber {
+                debug_assert_eq!(src_dst.bytes, src_dst.vec.bytes());
+                self.choose_ssa_ref_bytes(
+                    &self.pinned_in_out,
+                    &src_dst.vec,
+                    src_dst.align,
+                    |_| 0,
+                )
             } else {
                 self.choose_dst_bytes(
                     &src_dst.vec,
@@ -1693,6 +1702,9 @@ impl LocalRegAlloc<'_> {
                 }
             } else {
                 self.pinned_out.pin_bytes(bytes.clone());
+                if early_clobber {
+                    self.pinned_in.pin_bytes(bytes.clone());
+                }
             }
             self.pinned_in_out.pin_bytes_no_check(bytes.clone());
 

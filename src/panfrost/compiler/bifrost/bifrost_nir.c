@@ -93,6 +93,10 @@ bi_lower_bit_size(const nir_instr *instr, void *data)
          /* We only support ballot on 32-bit types. */
          return (nir_src_bit_size(intr->src[0]) == 32) ? 0 : 32;
       case nir_intrinsic_read_invocation:
+      case nir_intrinsic_quad_broadcast:
+      case nir_intrinsic_quad_swap_horizontal:
+      case nir_intrinsic_quad_swap_vertical:
+      case nir_intrinsic_quad_swap_diagonal:
          /* CLPER only supports 32-bit types. */
          return (intr->def.bit_size < 32) ? 32 : 0;
       default:
@@ -459,6 +463,7 @@ bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
 {
    MESA_TRACE_FUNC();
 
+   NIR_PASS(_, nir, pan_nir_lower_bf16);
    NIR_PASS(_, nir, nir_split_var_copies);
 
    /* The DISCARD instruction just flags the thread as discarded, but the
@@ -487,6 +492,15 @@ bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
    bi_optimize_loop(nir, gpu_id, true /* allow_copies */);
 
    NIR_PASS(_, nir, nir_lower_var_copies);
+}
+
+static bool
+bi_lower_subgroups_filter(const nir_intrinsic_instr *intr,
+                          UNUSED const void *data)
+{
+   return intr->intrinsic != nir_intrinsic_shuffle_xor ||
+          intr->def.num_components != 1 || intr->def.bit_size != 32 ||
+          !nir_src_is_const(intr->src[1]);
 }
 
 static bool
@@ -941,6 +955,7 @@ bifrost_postprocess_nir(nir_shader *nir,
 
    NIR_PASS(_, nir, pan_nir_lower_tex, gpu_id);
    NIR_PASS(_, nir, pan_nir_lower_image, gpu_id);
+   NIR_PASS(_, nir, pan_nir_lower_tensor);
 
    /* Remove useless movs left behind from lower_io_to_scalar/vectorize_io */
    NIR_PASS(_, nir, nir_opt_copy_prop);
@@ -1054,6 +1069,7 @@ bifrost_postprocess_nir(nir_shader *nir,
     * to scalar first.
     */
    const nir_lower_subgroups_options lower_subgroup_opts = {
+      .filter = bi_use_kraid(nir, gpu_id) ? bi_lower_subgroups_filter : NULL,
       .subgroup_size = pan_subgroup_size(gpu_arch),
       .ballot_bit_size = 32,
       .ballot_components = 1,
@@ -1066,7 +1082,7 @@ bifrost_postprocess_nir(nir_shader *nir,
       .lower_subgroup_masks = true,
       .lower_relative_shuffle = true,
       .lower_shuffle = true,
-      .lower_quad = true,
+      .lower_quad = !bi_use_kraid(nir, gpu_id),
       .lower_quad_broadcast_dynamic = true,
       .lower_quad_vote = true,
       .lower_elect = true,
@@ -1495,6 +1511,11 @@ kraid_compile_variant(nir_shader *nir,
          NIR_PASS(progress, nir, nir_opt_dead_cf);
          NIR_PASS(progress, nir, nir_opt_cse);
       }
+   }
+
+   if (inputs->instrument) {
+      NIR_PASS(_, nir, pan_nir_instrument, inputs->instrument_fau);
+      info->instrumented = true;
    }
 
 #ifdef WITH_PANFROST_RUST

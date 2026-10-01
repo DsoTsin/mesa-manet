@@ -11,6 +11,63 @@ use crate::ops::*;
 use compiler::bitset::BitSet;
 use kraid_bindings::*;
 
+#[derive(Clone, Copy)]
+pub enum ExecClass {
+    Fma,
+    Cvt,
+    Sfu,
+    LoadStore,
+    Texture,
+    Varying,
+}
+
+pub fn exec_class(model: &dyn Model, op: &Op) -> Option<ExecClass> {
+    Some(match model.op_exec_unit(op).unwrap() {
+        ExecUnit::Cvt => ExecClass::Cvt,
+        ExecUnit::Fma => ExecClass::Fma,
+        ExecUnit::Sfu => ExecClass::Sfu,
+        ExecUnit::Msg => match op {
+            Op::ACmpXchg(_)
+            | Op::Atom(_)
+            | Op::Atom1(_)
+            | Op::LeaBuf(_)
+            | Op::LeaPka(_)
+            | Op::LeaTex(_)
+            | Op::LdAttr(_)
+            | Op::LdCvt(_)
+            | Op::LdGClk(_)
+            | Op::LdPka(_)
+            | Op::LdTensor(_)
+            | Op::LdTex(_)
+            | Op::LeaTensor(_)
+            | Op::Load(_)
+            | Op::StChecked(_)
+            | Op::StCvt(_)
+            | Op::Store(_) => ExecClass::LoadStore,
+            Op::LdVarSpecial(op) if op.name == VarSpecialName::FragZ => {
+                return None;
+            }
+            Op::LdVar(_)
+            | Op::LdVarBuf(_)
+            | Op::LdVarBufFlat(_)
+            | Op::LdVarFlat(_)
+            | Op::LdVarSpecial(_) => ExecClass::Varying,
+            Op::TexFetch(_)
+            | Op::TexGather(_)
+            | Op::TexGradient(_)
+            | Op::TexSingle(_) => ExecClass::Texture,
+            Op::ATest(_)
+            | Op::Barrier(_)
+            | Op::Blend(_)
+            | Op::LdTile(_)
+            | Op::RtTrace(_)
+            | Op::StTile(_)
+            | Op::ZSEmit(_) => return None,
+            _ => panic!("Unknown message instruction"),
+        },
+    })
+}
+
 #[derive(Default)]
 struct VaStatCount {
     fma: f32,
@@ -81,56 +138,21 @@ impl VaStatCount {
             }
         };
 
-        match model.op_exec_unit(&instr.op).unwrap() {
-            ExecUnit::Cvt => self.cvt += f32::from(cycles),
-            ExecUnit::Fma => self.fma += f32::from(cycles),
-            ExecUnit::Sfu => self.sfu += f32::from(cycles),
-            ExecUnit::Msg => match &instr.op {
-                Op::ACmpXchg(_)
-                | Op::Atom(_)
-                | Op::Atom1(_)
-                | Op::LeaBuf(_)
-                | Op::LeaPka(_)
-                | Op::LeaTex(_)
-                | Op::LdAttr(_)
-                | Op::LdCvt(_)
-                | Op::LdGClk(_)
-                | Op::LdPka(_)
-                | Op::LdTex(_)
-                | Op::Load(_)
-                | Op::StCvt(_)
-                | Op::Store(_) => {
-                    self.ls += 1.0;
-                }
-                Op::LdVarSpecial(op) if op.name == VarSpecialName::FragZ => {}
-                Op::LdVar(_)
-                | Op::LdVarBuf(_)
-                | Op::LdVarBufFlat(_)
-                | Op::LdVarFlat(_)
-                | Op::LdVarSpecial(_) => {
-                    let total_bytes = if let Op::LdVarBuf(op) = &instr.op {
-                        (op.mem_type.bits() / 8) * op.dst_type.comps()
-                    } else {
-                        dst_bytes
-                    };
-                    self.v += f32::from(total_bytes.div_ceil(4));
-                }
-                Op::TexFetch(_)
-                | Op::TexGather(_)
-                | Op::TexGradient(_)
-                | Op::TexSingle(_) => {
-                    self.t += 1.0;
-                }
-                Op::ATest(_)
-                | Op::Barrier(_)
-                | Op::Blend(_)
-                | Op::LdTile(_)
-                | Op::StTile(_)
-                | Op::ZSEmit(_) => {
-                    // These aren't counted
-                }
-                _ => panic!("Unknown message instruction"),
-            },
+        match exec_class(model, &instr.op) {
+            Some(ExecClass::Cvt) => self.cvt += f32::from(cycles),
+            Some(ExecClass::Fma) => self.fma += f32::from(cycles),
+            Some(ExecClass::Sfu) => self.sfu += f32::from(cycles),
+            Some(ExecClass::LoadStore) => self.ls += 1.0,
+            Some(ExecClass::Varying) => {
+                let total_bytes = if let Op::LdVarBuf(op) = &instr.op {
+                    (op.mem_type.bits() / 8) * op.dst_type.comps()
+                } else {
+                    dst_bytes
+                };
+                self.v += f32::from(total_bytes.div_ceil(4));
+            }
+            Some(ExecClass::Texture) => self.t += 1.0,
+            None => (),
         }
 
         match &instr.op {

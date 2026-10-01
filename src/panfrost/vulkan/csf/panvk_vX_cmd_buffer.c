@@ -880,6 +880,24 @@ panvk_per_arch(add_cs_deps)(struct panvk_cmd_buffer *cmdbuf,
 
       collect_cs_deps(cmdbuf, in, src, dst, out);
    }
+
+   const VkTensorDependencyInfoARM *tensor_deps =
+      vk_find_struct_const(in->pNext, TENSOR_DEPENDENCY_INFO_ARM);
+   const VkTensorMemoryBarrierARM *tensor_barriers =
+      tensor_deps ? tensor_deps->pTensorMemoryBarriers
+                  : vk_find_struct_const(in->pNext, TENSOR_MEMORY_BARRIER_ARM);
+   const uint32_t tensor_barrier_count =
+      tensor_deps ? tensor_deps->tensorMemoryBarrierCount : !!tensor_barriers;
+
+   for (uint32_t i = 0; i < tensor_barrier_count; i++) {
+      const VkTensorMemoryBarrierARM *barrier = &tensor_barriers[i];
+      struct panvk_sync_scope src = {barrier->srcStageMask, barrier->srcAccessMask};
+      struct panvk_sync_scope dst = {barrier->dstStageMask, barrier->dstAccessMask};
+      normalize_dependency(&src, &dst, barrier->srcQueueFamilyIndex,
+                           barrier->dstQueueFamilyIndex);
+
+      collect_cs_deps(cmdbuf, in, src, dst, out);
+   }
 }
 
 static void

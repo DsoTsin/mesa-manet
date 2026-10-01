@@ -148,15 +148,24 @@ gpu_queue_uses_kbase(const struct panvk_device *dev)
 }
 
 static uint32_t
-kbase_resource_mask(enum panvk_subqueue_id subqueue)
+get_resource_mask(const struct panvk_device *dev,
+                  enum panvk_subqueue_id subqueue)
 {
+   uint32_t mask = 0;
+
+#if PAN_ARCH >= 15
+   if (dev->vk.enabled_features.rayQuery ||
+       dev->vk.enabled_features.rayTracingPipeline)
+      mask |= CS_RT_RES;
+#endif
+
    switch (subqueue) {
    case PANVK_SUBQUEUE_VERTEX_TILER:
-      return CS_IDVS_RES | CS_TILER_RES;
+      return mask | CS_IDVS_RES | CS_TILER_RES;
    case PANVK_SUBQUEUE_FRAGMENT:
-      return CS_FRAG_RES;
+      return mask | CS_FRAG_RES;
    case PANVK_SUBQUEUE_COMPUTE:
-      return CS_COMPUTE_RES;
+      return mask | CS_COMPUTE_RES;
    default:
       UNREACHABLE("Unknown subqueue");
    }
@@ -348,7 +357,7 @@ kbase_log_subqueue_state(struct panvk_gpu_queue *queue, uint32_t subqueue,
 {
    struct panvk_subqueue *subq = &queue->subqueues[subqueue];
 
-   if (!subq->kbase.user_io || !subq->kbase.ringbuf_cpu)
+   if (!subq->kbase.user_io.map || !subq->kbase.ringbuf_cpu)
       return;
 
    volatile struct panvk_cs_sync64 *cell =
@@ -368,7 +377,7 @@ kbase_log_subqueue_state(struct panvk_gpu_queue *queue, uint32_t subqueue,
    volatile uint32_t *stream_progress =
       (volatile uint32_t *)((volatile uint8_t *)cell +
                             KBASE_SEQNO_STREAM_PROGRESS_OFFSET);
-   const uint8_t *output_page = (uint8_t *)subq->kbase.user_io + 8192;
+   const uint8_t *output_page = subq->kbase.user_io.output;
    uint64_t extract =
       *(volatile uint64_t *)(output_page + CS_USER_IO_OUTPUT_CS_EXTRACT);
    uint32_t active =
@@ -459,7 +468,7 @@ kbase_subqueue_reserve_ring(struct panvk_gpu_queue *queue,
 {
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
    struct panvk_subqueue *subq = &queue->subqueues[subqueue];
-   const uint8_t *output_page = (uint8_t *)subq->kbase.user_io + 8192;
+   const uint8_t *output_page = subq->kbase.user_io.output;
    uint64_t extract = *(volatile uint64_t *)(output_page +
                                              CS_USER_IO_OUTPUT_CS_EXTRACT);
    uint32_t offset = subq->kbase.insert % KBASE_RINGBUF_SIZE;
@@ -552,7 +561,7 @@ kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
     * declared in the queue ring itself before ordinary commands are run.
     * The panthor kernel path owns that scheduling contract internally, but on
     * kbase our flush+CALL wrapper is the first firmware-visible work item. */
-   cs_req_res(&b, kbase_resource_mask(subqueue));
+   cs_req_res(&b, get_resource_mask(dev, subqueue));
 
    /* The PanVK command streams assume the subqueue context register is live
     * on entry. The panthor kernel ring preserves that queue ABI for us, but
@@ -742,7 +751,7 @@ kbase_subqueue_publish(struct panvk_gpu_queue *queue, uint32_t subqueue)
 {
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
    struct panvk_subqueue *subq = &queue->subqueues[subqueue];
-   uint8_t *input_page = (uint8_t *)subq->kbase.user_io + 4096;
+   uint8_t *input_page = subq->kbase.user_io.input;
 
    /* kbase_subqueue_emit_job() has already cleaned the CPU-written ring
     * cachelines and completed that clean with kbase_gpu_wmb().  Do not issue
@@ -756,12 +765,12 @@ kbase_subqueue_publish(struct panvk_gpu_queue *queue, uint32_t subqueue)
     * CS_ACTIVE again after ringing it; if a suspend raced the write, the
     * scheduler kick below safely resumes the group. */
    kbase_gpu_wmb();
-   uint8_t *output_page = (uint8_t *)subq->kbase.user_io + 8192;
+   uint8_t *output_page = subq->kbase.user_io.output;
    volatile uint32_t *active =
       (volatile uint32_t *)(output_page + CS_USER_IO_OUTPUT_CS_ACTIVE);
 
    if (*active) {
-      *(volatile uint32_t *)subq->kbase.user_io = 1;
+      *(volatile uint32_t *)subq->kbase.user_io.doorbell = 1;
       kbase_gpu_wmb();
       if (*active)
          return;
@@ -794,8 +803,8 @@ kbase_subqueue_wait_seqno(struct panvk_gpu_queue *queue, uint32_t subqueue,
    volatile uint32_t *stream_progress =
       (volatile uint32_t *)((volatile uint8_t *)cell +
                             KBASE_SEQNO_STREAM_PROGRESS_OFFSET);
-   const uint8_t *input_page = (uint8_t *)subq->kbase.user_io + 4096;
-   const uint8_t *output_page = (uint8_t *)subq->kbase.user_io + 8192;
+   const uint8_t *input_page = subq->kbase.user_io.input;
+   const uint8_t *output_page = subq->kbase.user_io.output;
    uint64_t target_insert = subq->kbase.insert;
    uint64_t seqno_addr = kbase_subqueue_seqno_dev_addr(queue, subqueue);
    int64_t start = os_time_get_nano();
@@ -920,6 +929,9 @@ kbase_subqueue_wait_seqno(struct panvk_gpu_queue *queue, uint32_t subqueue,
 
          kbase_log_queue_syncobjs(queue);
 
+         for (uint32_t i = 0; i < 16; i++)
+            kbase_kmod_csf_wait_event(dev->kmod.dev, 0);
+
          for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++)
             kbase_log_subqueue_state(queue, i, "timeout snapshot");
 
@@ -1034,13 +1046,12 @@ kbase_destroy_group(struct panvk_gpu_queue *queue)
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct panvk_subqueue *subq = &queue->subqueues[i];
 
-      if (subq->kbase.user_io)
+      if (subq->kbase.user_io.map)
          kbase_kmod_csf_queue_term(dev->kmod.dev, subq->kbase.ringbuf_dev,
-                                   subq->kbase.user_io);
+                                   &subq->kbase.user_io);
 
       pan_kmod_bo_put(subq->kbase.ringbuf_bo);
       subq->kbase.ringbuf_bo = NULL;
-      subq->kbase.user_io = NULL;
 
       if (subq->kbase.group_handle != UINT32_MAX) {
          kbase_kmod_csf_group_destroy(dev->kmod.dev,
@@ -1057,7 +1068,7 @@ kbase_destroy_group(struct panvk_gpu_queue *queue)
 }
 
 static VkResult
-kbase_create_group(struct panvk_gpu_queue *queue)
+kbase_create_group(struct panvk_gpu_queue *queue, uint32_t shader_core_count)
 {
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
    const struct panvk_physical_device *phys_dev =
@@ -1078,6 +1089,7 @@ kbase_create_group(struct panvk_gpu_queue *queue)
    if (single_csg &&
        kbase_kmod_csf_group_create(dev->kmod.dev, PANVK_SUBQUEUE_COUNT,
                                    phys_dev->kbase.gpu_heap_ops,
+                                   shader_core_count,
                                    &queue->group_handle)) {
       queue->group_handle = UINT32_MAX;
       return panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
@@ -1089,6 +1101,7 @@ kbase_create_group(struct panvk_gpu_queue *queue)
 
       if (!single_csg &&
           kbase_kmod_csf_group_create(dev->kmod.dev, 1, false,
+                                      shader_core_count,
                                       &subq->kbase.group_handle)) {
          result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                                "Failed to create a kbase queue group");
@@ -1138,11 +1151,11 @@ kbase_create_group(struct panvk_gpu_queue *queue)
                                subq->kbase.ringbuf_cpu, KBASE_RINGBUF_SIZE, "kbase_ringbuf");
       }
 
-      subq->kbase.user_io = kbase_kmod_csf_queue_bind(
-         dev->kmod.dev,
-         single_csg ? queue->group_handle : subq->kbase.group_handle,
-         single_csg ? i : 0, subq->kbase.ringbuf_dev, KBASE_RINGBUF_SIZE);
-      if (!subq->kbase.user_io) {
+      if (!kbase_kmod_csf_queue_bind(
+             dev->kmod.dev,
+             single_csg ? queue->group_handle : subq->kbase.group_handle,
+             single_csg ? i : 0, subq->kbase.ringbuf_dev, KBASE_RINGBUF_SIZE,
+             &subq->kbase.user_io)) {
          result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                                "Failed to bind a kbase CS queue");
          goto err_destroy_group;
@@ -1154,7 +1167,7 @@ kbase_create_group(struct panvk_gpu_queue *queue)
                 "ring VA 0x%" PRIx64 ", user_io %p",
                 i, single_csg ? queue->group_handle : subq->kbase.group_handle,
                 single_csg ? i : 0, subq->kbase.ringbuf_cpu,
-                subq->kbase.ringbuf_dev, subq->kbase.user_io);
+                subq->kbase.ringbuf_dev, subq->kbase.user_io.map);
    }
 
    return VK_SUCCESS;
@@ -1607,21 +1620,6 @@ init_utrace(struct panvk_gpu_queue *queue)
    return VK_SUCCESS;
 }
 
-static uint32_t
-get_resource_mask(enum panvk_subqueue_id subqueue)
-{
-   switch (subqueue) {
-   case PANVK_SUBQUEUE_VERTEX_TILER:
-      return CS_IDVS_RES | CS_TILER_RES;
-   case PANVK_SUBQUEUE_FRAGMENT:
-      return CS_FRAG_RES;
-   case PANVK_SUBQUEUE_COMPUTE:
-      return CS_COMPUTE_RES;
-   default:
-      UNREACHABLE("Unknown subqueue");
-   }
-}
-
 static VkResult
 init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
 {
@@ -1674,7 +1672,7 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
    };
 
    cs_builder_init(&b, &conf, root_cs);
-   cs_req_res(&b, get_resource_mask(subqueue));
+   cs_req_res(&b, get_resource_mask(dev, subqueue));
    cs_end(&b);
    assert(cs_is_valid(&b));
    subq->req_resource.cs_buffer_size = cs_root_chunk_size(&b);
@@ -2392,10 +2390,11 @@ panvk_queue_submit_init_storage(
          /* If we need a resource the subqueue has not requested yet. */
          if (b->req_resource_mask & (~subq->req_resource.mask)) {
             /* Ensure we do not need a resource not expected for this subqueue. */
-            assert(!(b->req_resource_mask & (~get_resource_mask(j))));
+            assert(!(b->req_resource_mask &
+                     (~get_resource_mask(submit->dev, j))));
             submit->qsubmit_count++;
             submit->req_resource_subqueue_mask |= BITFIELD_BIT(j);
-            subq->req_resource.mask = get_resource_mask(j);
+            subq->req_resource.mask = get_resource_mask(submit->dev, j);
          }
 
          struct u_trace *ut = &cmdbuf->utrace.uts[j];
@@ -3405,10 +3404,12 @@ panvk_per_arch(create_gpu_queue)(struct panvk_device *dev,
    const VkDeviceQueueShaderCoreControlCreateInfoARM *core_ctrl =
       vk_find_struct_const(create_info->pNext,
                            DEVICE_QUEUE_SHADER_CORE_CONTROL_CREATE_INFO_ARM);
+   const uint32_t shader_core_count =
+      core_ctrl ? core_ctrl->shaderCoreCount : dev->shader_core_count;
 
 #ifdef HAVE_PAN_KMOD_KBASE
    if (uses_kbase) {
-      result = kbase_create_group(queue);
+      result = kbase_create_group(queue, shader_core_count);
       if (result != VK_SUCCESS)
          goto err_destroy_syncobj;
       group_created = true;
@@ -3426,7 +3427,7 @@ panvk_per_arch(create_gpu_queue)(struct panvk_device *dev,
       tiler_initialized = true;
 
       result = create_group(queue, get_panthor_group_priority(create_info),
-                            core_ctrl ? core_ctrl->shaderCoreCount : 0);
+                            shader_core_count);
       if (result != VK_SUCCESS)
          goto err_cleanup_created;
       group_created = true;

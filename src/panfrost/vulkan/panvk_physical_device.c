@@ -46,7 +46,9 @@
 #include "panvk_entrypoints.h"
 #include "panvk_image.h"
 #include "panvk_instance.h"
+#include "panvk_perf_counters_by_region.h"
 #include "panvk_physical_device.h"
+#include "panvk_tensor.h"
 #include "panvk_wsi.h"
 
 #include "pan_afbc.h"
@@ -1484,6 +1486,7 @@ panvk_physical_device_init_kbase(struct panvk_physical_device *device,
    case 6:
    case 7:
    case 14:
+   case 15:
       if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
          result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                                "WARNING: panvk is not well-tested on v%d, "
@@ -1688,6 +1691,85 @@ panvk_GetPhysicalDeviceQueueFamilyProperties2(
    }
 }
 
+struct panvk_cmat_config {
+   uint8_t m, n, k;
+   VkComponentTypeKHR ab, c;
+};
+
+#define CMAT_F16 VK_COMPONENT_TYPE_FLOAT16_KHR
+#define CMAT_F32 VK_COMPONENT_TYPE_FLOAT32_KHR
+#define CMAT_BF16 VK_COMPONENT_TYPE_BFLOAT16_KHR
+#define CMAT_E4M3 VK_COMPONENT_TYPE_FLOAT8_E4M3_EXT
+#define CMAT_E5M2 VK_COMPONENT_TYPE_FLOAT8_E5M2_EXT
+
+static const struct panvk_cmat_config panvk_cmat_configs[] = {
+   {4, 4, 4, CMAT_F32, CMAT_F32},
+   {16, 16, 16, CMAT_F32, CMAT_F32},
+   {4, 8, 8, CMAT_F16, CMAT_F32},
+   {16, 32, 32, CMAT_F16, CMAT_F32},
+   {4, 16, 16, VK_COMPONENT_TYPE_SINT8_KHR, VK_COMPONENT_TYPE_SINT32_KHR},
+   {4, 16, 16, VK_COMPONENT_TYPE_UINT8_KHR, VK_COMPONENT_TYPE_UINT32_KHR},
+   {4, 4, 4, CMAT_BF16, CMAT_BF16},
+   {4, 4, 4, CMAT_F32, CMAT_BF16},
+   {4, 4, 4, CMAT_BF16, CMAT_F32},
+   {16, 16, 16, CMAT_BF16, CMAT_BF16},
+   {16, 16, 16, CMAT_F32, CMAT_BF16},
+   {16, 16, 16, CMAT_BF16, CMAT_F32},
+   {4, 8, 8, CMAT_F16, CMAT_F16},
+   {16, 32, 32, CMAT_F16, CMAT_F16},
+   {4, 8, 8, CMAT_E4M3, CMAT_E4M3},
+   {16, 32, 32, CMAT_E4M3, CMAT_E4M3},
+   {4, 8, 8, CMAT_E5M2, CMAT_E5M2},
+   {16, 32, 32, CMAT_E5M2, CMAT_E5M2},
+};
+
+static unsigned
+panvk_cmat_config_count(unsigned arch)
+{
+   if (arch >= 15)
+      return ARRAY_SIZE(panvk_cmat_configs);
+   if (arch >= 14)
+      return 14;
+   if (arch >= 11)
+      return 12;
+   return 0;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+panvk_EnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM(
+   VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex,
+   uint32_t *pCounterCount, VkPerformanceCounterARM *pCounters,
+   VkPerformanceCounterDescriptionARM *pCounterDescriptions)
+{
+   VK_FROM_HANDLE(panvk_physical_device, physical_device, physicalDevice);
+   const uint32_t count =
+      physical_device->vk.supported_extensions.ARM_performance_counters_by_region &&
+            queueFamilyIndex == PANVK_QUEUE_FAMILY_GPU
+         ? PANVK_PERF_COUNTERS_BY_REGION_COUNT
+         : 0;
+
+   if (!pCounters && !pCounterDescriptions) {
+      *pCounterCount = count;
+      return VK_SUCCESS;
+   }
+
+   const uint32_t written = MIN2(*pCounterCount, count);
+   for (uint32_t i = 0; i < written; i++) {
+      if (pCounters)
+         pCounters[i].counterID = panvk_perf_counters_by_region[i].id;
+
+      if (pCounterDescriptions) {
+         pCounterDescriptions[i].flags = 0;
+         snprintf(pCounterDescriptions[i].name,
+                  sizeof(pCounterDescriptions[i].name), "%s",
+                  panvk_perf_counters_by_region[i].name);
+      }
+   }
+
+   *pCounterCount = written;
+   return written < count ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 panvk_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(
    VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
@@ -1699,97 +1781,22 @@ panvk_GetPhysicalDeviceCooperativeMatrixPropertiesKHR(
 
    unsigned arch = pan_arch(physical_device->kmod.dev->props.gpu_id);
 
-   if (arch < 11)
-      return VK_SUCCESS;
-
-   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
-      *p = (VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 4,
-         .NSize = 4,
-         .KSize = 4,
-         .AType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .BType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .CType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .ResultType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .saturatingAccumulation = false,
-         .scope = VK_SCOPE_SUBGROUP_KHR,
-      };
-   }
-
-   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
-      *p = (VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 16,
-         .NSize = 16,
-         .KSize = 16,
-         .AType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .BType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .CType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .ResultType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .saturatingAccumulation = false,
-         .scope = VK_SCOPE_SUBGROUP_KHR,
-      };
-   }
-
-   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
-      *p = (VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 4,
-         .NSize = 8,
-         .KSize = 8,
-         .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-         .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-         .CType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .ResultType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .saturatingAccumulation = false,
-         .scope = VK_SCOPE_SUBGROUP_KHR,
-      };
-   }
-
-   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
-      *p = (VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 16,
-         .NSize = 32,
-         .KSize = 32,
-         .AType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-         .BType = VK_COMPONENT_TYPE_FLOAT16_KHR,
-         .CType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .ResultType = VK_COMPONENT_TYPE_FLOAT32_KHR,
-         .saturatingAccumulation = false,
-         .scope = VK_SCOPE_SUBGROUP_KHR,
-      };
-   }
-
-   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
-      *p = (VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 4,
-         .NSize = 16,
-         .KSize = 16,
-         .AType = VK_COMPONENT_TYPE_SINT8_KHR,
-         .BType = VK_COMPONENT_TYPE_SINT8_KHR,
-         .CType = VK_COMPONENT_TYPE_SINT32_KHR,
-         .ResultType = VK_COMPONENT_TYPE_SINT32_KHR,
-         .saturatingAccumulation = false,
-         .scope = VK_SCOPE_SUBGROUP_KHR,
-      };
-   }
-
-   vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
-      *p = (VkCooperativeMatrixPropertiesKHR){
-         .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-         .MSize = 4,
-         .NSize = 16,
-         .KSize = 16,
-         .AType = VK_COMPONENT_TYPE_UINT8_KHR,
-         .BType = VK_COMPONENT_TYPE_UINT8_KHR,
-         .CType = VK_COMPONENT_TYPE_UINT32_KHR,
-         .ResultType = VK_COMPONENT_TYPE_UINT32_KHR,
-         .saturatingAccumulation = false,
-         .scope = VK_SCOPE_SUBGROUP_KHR,
-      };
+   for (unsigned i = 0; i < panvk_cmat_config_count(arch); i++) {
+      const struct panvk_cmat_config *cfg = &panvk_cmat_configs[i];
+      vk_outarray_append_typed(VkCooperativeMatrixPropertiesKHR, &out, p) {
+         *p = (VkCooperativeMatrixPropertiesKHR){
+            .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+            .MSize = cfg->m,
+            .NSize = cfg->n,
+            .KSize = cfg->k,
+            .AType = cfg->ab,
+            .BType = cfg->ab,
+            .CType = cfg->c,
+            .ResultType = cfg->c,
+            .saturatingAccumulation = false,
+            .scope = VK_SCOPE_SUBGROUP_KHR,
+         };
+      }
    }
 
    return vk_outarray_status(&out);
@@ -1989,6 +1996,10 @@ get_image_plane_format_features(struct panvk_physical_device *physical_device,
 
    if (features != 0)
       features |= VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT;
+
+   if (features != 0 && physical_device->vk.supported_extensions.ARM_tensors &&
+       panvk_tensor_image_aliasing_supported(format))
+      features |= VK_FORMAT_FEATURE_2_TENSOR_IMAGE_ALIASING_BIT_ARM;
 
    return features;
 }
@@ -2288,6 +2299,38 @@ panvk_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
 
    }
 
+   VkTensorFormatPropertiesARM *tensor_props =
+      vk_find_struct(pFormatProperties->pNext, TENSOR_FORMAT_PROPERTIES_ARM);
+   if (tensor_props) {
+      tensor_props->optimalTilingTensorFeatures =
+         panvk_get_tensor_format_features(physical_device, format,
+                                          VK_TENSOR_TILING_OPTIMAL_ARM);
+      tensor_props->linearTilingTensorFeatures =
+         panvk_get_tensor_format_features(physical_device, format,
+                                          VK_TENSOR_TILING_LINEAR_ARM);
+   }
+
+   VkTensorExplicitTilingFormatPropertiesARM *tiling_props = vk_find_struct(
+      pFormatProperties->pNext, TENSOR_EXPLICIT_TILING_FORMAT_PROPERTIES_ARM);
+   if (tiling_props) {
+      tiling_props->brick16TilingTensorFeatures =
+         panvk_get_tensor_format_features(physical_device, format,
+                                          VK_TENSOR_TILING_BRICK_16_WIDE_ARM);
+      tiling_props->brick8TilingTensorFeatures =
+         panvk_get_tensor_format_features(physical_device, format,
+                                          VK_TENSOR_TILING_BRICK_8_WIDE_ARM);
+      tiling_props->brick4TilingTensorFeatures =
+         panvk_get_tensor_format_features(physical_device, format,
+                                          VK_TENSOR_TILING_BRICK_4_WIDE_ARM);
+      tiling_props->blockUTilingTensorFeatures =
+         panvk_get_tensor_format_features(
+            physical_device, format, VK_TENSOR_TILING_BLOCK_U_INTERLEAVED_ARM);
+      tiling_props->blockU64kTilingTensorFeatures =
+         panvk_get_tensor_format_features(
+            physical_device, format,
+            VK_TENSOR_TILING_BLOCK_U_INTERLEAVED_64K_ARM);
+   }
+
    VkSubpassResolvePerformanceQueryEXT *subpass_resolve_perf = vk_find_struct(
       pFormatProperties->pNext, SUBPASS_RESOLVE_PERFORMANCE_QUERY_EXT);
    if (subpass_resolve_perf) {
@@ -2534,6 +2577,11 @@ get_image_format_properties(struct panvk_physical_device *physical_device,
             goto unsupported;
          }
       }
+
+      if ((all_usage & VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM) &&
+          !(format_feature_flags &
+            VK_FORMAT_FEATURE_2_TENSOR_IMAGE_ALIASING_BIT_ARM))
+         goto unsupported;
    }
 
    *pImageFormatProperties = (VkImageFormatProperties){

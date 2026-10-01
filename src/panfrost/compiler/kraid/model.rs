@@ -89,6 +89,10 @@ pub trait Model {
 
     fn op_src_is_staging_reg(&self, op: &Op, src: &Src) -> bool;
 
+    fn op_src_is_reg_only(&self, op: &Op, src: &Src) -> bool {
+        self.op_src_is_staging_reg(op, src) || v9_op_src_is_reg_only(op)
+    }
+
     fn op_src_is_64bit(&self, op: &Op, src: &Src) -> bool;
 
     fn op_src_supports_imm32(&self, op: &Op, src: &Src, imm: u32) -> bool;

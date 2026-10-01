@@ -252,6 +252,8 @@ pan_nir_def_as_add_imm(nir_def *def, uint8_t imm_bits, bool imm_sign)
 
 bool pan_nir_lower_bool_to_bitsize(nir_shader *shader);
 
+bool pan_nir_lower_bf16(nir_shader *shader);
+
 bool pan_nir_lower_vertex_id(nir_shader *shader);
 
 bool pan_nir_lower_image_ms(nir_shader *shader);
@@ -274,6 +276,8 @@ bool pan_nir_lower_fs_inputs(nir_shader *shader, uint64_t gpu_id,
 bool pan_nir_lower_helper_invocation(nir_shader *shader);
 bool pan_nir_lower_sample_pos(nir_shader *shader);
 bool pan_nir_remove_xfb(nir_shader *nir);
+
+bool pan_nir_instrument(nir_shader *nir, unsigned counters_fau);
 
 bool pan_nir_lower_image_index(nir_shader *shader,
                                unsigned vs_img_attrib_offset);
@@ -360,6 +364,7 @@ void pan_nir_lower_mediump_io(nir_shader *nir);
 
 bool pan_nir_lower_tex(nir_shader *nir, uint64_t gpu_id);
 bool pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id);
+bool pan_nir_lower_tensor(nir_shader *nir);
 
 bool pan_nir_lower_mem_to_global(nir_shader *nir);
 

@@ -18,6 +18,10 @@
 #include "panvk_mempool.h"
 #include "panvk_nir.h"
 #include "panvk_physical_device.h"
+#if PAN_ARCH >= 15
+#include "panvk_ray_tracing.h"
+#include "panvk_rt_pipeline.h"
+#endif
 #include "panvk_sampler.h"
 #include "panvk_shader.h"
 
@@ -563,6 +567,7 @@ panvk_get_spirv_options(UNUSED struct vk_physical_device *vk_pdev,
       .ssbo_addr_format = panvk_buffer_ssbo_addr_format(rs->storage_buffers),
       .phys_ssbo_addr_format = nir_address_format_64bit_global,
       .shared_addr_format = nir_address_format_32bit_offset,
+      .tensor_addr_format = nir_address_format_vec2_index_32bit_offset,
       .min_ubo_alignment = 16,
       .min_ssbo_alignment = 16,
       .debug_info = pan_want_debug_info(PAN_ARCH),
@@ -636,7 +641,7 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
 
    assert(pdev->kmod.dev->props.shader_present != 0);
    uint64_t core_max_id =
-      util_last_bit(pdev->kmod.dev->props.shader_present) - 1;
+      util_bitcount64(pdev->kmod.dev->props.shader_present) - 1;
    NIR_PASS(_, nir, nir_inline_sysval, nir_intrinsic_load_core_max_id_arm,
             core_max_id);
 
@@ -981,6 +986,7 @@ panvk_lower_nir(struct panvk_device *dev, nir_shader *nir,
     */
    NIR_PASS(_, nir, panvk_nir_lower_cooperative_matrix,
             pan_subgroup_size(PAN_ARCH));
+   NIR_PASS(_, nir, pan_nir_lower_bf16);
 
    const nir_opt_access_options access_options = {
       .is_vulkan = true,
@@ -1163,6 +1169,16 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
    /* We're going to modify this so make our own copy to be nicer to callers */
    struct pan_compile_inputs input = *compile_input;
 
+#if PAN_ARCH >= 15
+   uint32_t ray_query_slots = panvk_per_arch(nir_lower_ray_queries)(nir);
+   if (ray_query_slots) {
+      VkResult result =
+         panvk_per_arch(device_reserve_ray_query_slots)(dev, ray_query_slots);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+#endif
+
    pan_postprocess_nir(nir, &input, &shader->info);
 
    if (noperspective_varyings && nir->info.stage == MESA_SHADER_VERTEX) {
@@ -1179,7 +1195,19 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
    NIR_PASS(_, nir, nir_shader_instructions_pass, panvk_lower_sysvals,
             nir_metadata_control_flow, &lower_sysvals_ctx);
 
+   input.instrument =
+      (shader_flags & VK_SHADER_CREATE_INSTRUMENT_SHADER_BIT_ARM) &&
+      (nir->info.stage == MESA_SHADER_VERTEX ||
+       nir->info.stage == MESA_SHADER_FRAGMENT ||
+       nir->info.stage == MESA_SHADER_COMPUTE);
+   if (input.instrument)
+      shader_use_sysval(shader, common, instr_counters);
+
    lower_load_push_consts(nir, shader);
+
+   if (input.instrument)
+      input.instrument_fau = shader_remapped_sysval_offset(
+         shader, common_sysval_offset(instr_counters));
 
    /* Reserve sysvals/push-const, the compiler may fill the remaining space with
     * promoted constants. */
@@ -3246,3 +3274,38 @@ VkResult panvk_per_arch(create_shader)(
 
    return VK_SUCCESS;
 }
+
+#if PAN_ARCH >= 15
+VkResult
+panvk_per_arch(rt_compile_nir)(
+   struct panvk_device *dev, nir_shader *nir, struct vk_pipeline_layout *layout,
+   const struct vk_pipeline_robustness_state *robustness,
+   VkPipelineCreateFlags2KHR flags, const VkAllocationCallbacks *alloc,
+   struct panvk_shader **shader_out)
+{
+   *shader_out = NULL;
+   struct vk_shader_compile_info info = {
+      .stage = MESA_SHADER_COMPUTE,
+      .nir = nir,
+      .robustness = robustness,
+      .set_layout_count = layout->set_count,
+      .set_layouts = layout->set_layouts,
+      .push_constant_range_count = layout->push_range_count,
+      .push_constant_ranges = layout->push_ranges,
+   };
+   if (flags & VK_PIPELINE_CREATE_2_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR)
+      info.flags |= VK_SHADER_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_MESA;
+
+
+   panvk_per_arch(compiler_lock)();
+   panvk_preprocess_nir(dev->vk.physical, nir, robustness);
+   struct vk_shader *shader;
+   VkResult result = panvk_compile_shader(dev, &info, NULL, NULL, NULL,
+                                          alloc, &shader);
+   panvk_per_arch(compiler_unlock)();
+   ralloc_free(nir);
+   if (result == VK_SUCCESS)
+      *shader_out = container_of(shader, struct panvk_shader, vk);
+   return result;
+}
+#endif

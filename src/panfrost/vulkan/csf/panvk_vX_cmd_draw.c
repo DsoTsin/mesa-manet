@@ -35,9 +35,11 @@
 #include "panvk_image_view.h"
 #include "panvk_instance.h"
 #include "panvk_instr.h"
+#include "panvk_perf_counters_by_region.h"
 #include "panvk_priv_bo.h"
 #include "panvk_query_pool.h"
 #include "panvk_shader.h"
+#include "panvk_shader_instrumentation.h"
 #include "panvk_tracepoints.h"
 
 #include "pan_desc.h"
@@ -2122,6 +2124,23 @@ init_layer_fragment_state(const struct pan_fb_desc_info *info,
 }
 #endif /* PAN_ARCH >= 14 */
 
+#if PAN_ARCH >= 15
+static uint64_t
+get_perf_counter_plane(const struct panvk_rendering_state *render,
+                       uint32_t layer)
+{
+   const struct pan_ptr planes = render->perf_counters.planes;
+
+   if (!planes.gpu)
+      return 0;
+
+   const struct mali_generic_plane_packed *descs = planes.cpu;
+   pan_unpack(&descs[layer], GENERIC_PLANE, plane);
+
+   return plane.pointer ? planes.gpu + layer * pan_size(GENERIC_PLANE) : 0;
+}
+#endif
+
 #if PAN_ARCH == 10
 static void
 patch_crc_valid(struct cs_builder *b, const struct pan_fb_crc_rt_info *crc_info,
@@ -2383,6 +2402,10 @@ get_fb_descs(struct panvk_cmd_buffer *cmdbuf)
       uint32_t new_fbd_flags = GENX(pan_emit_fb_desc)(&fbd_info, &fb_descs);
 #if PAN_ARCH >= 14
       init_layer_fragment_state(&fbd_info, fbd, has_zs_crc_ext);
+#endif
+#if PAN_ARCH >= 15
+      ((struct panvk_fb_layer_state *)fbd.cpu)->perf_counter_plane =
+         get_perf_counter_plane(render, i);
 #endif
 
       /* Make sure all FBDs have the same flags. */
@@ -5082,6 +5105,8 @@ panvk_per_arch(CmdDraw)(VkCommandBuffer commandBuffer, uint32_t vertexCount,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
+   panvk_per_arch(cmd_instrument_draw)(cmdbuf);
+
    if (instanceCount == 0 || vertexCount == 0)
       return;
 
@@ -5112,6 +5137,8 @@ panvk_per_arch(CmdDrawIndexed)(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
+   panvk_per_arch(cmd_instrument_draw)(cmdbuf);
+
    if (instanceCount == 0 || indexCount == 0)
       return;
 
@@ -5139,6 +5166,8 @@ panvk_per_arch(CmdDrawIndirect)(VkCommandBuffer commandBuffer, VkBuffer _buffer,
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
    VK_FROM_HANDLE(panvk_buffer, buffer, _buffer);
 
+   panvk_per_arch(cmd_instrument_draw)(cmdbuf);
+
    if (drawCount == 0)
       return;
 
@@ -5159,6 +5188,8 @@ panvk_per_arch(CmdDrawIndexedIndirect)(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
    VK_FROM_HANDLE(panvk_buffer, buffer, _buffer);
+
+   panvk_per_arch(cmd_instrument_draw)(cmdbuf);
 
    if (drawCount == 0)
       return;
@@ -5187,6 +5218,8 @@ panvk_per_arch(CmdDrawIndirectCount)(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(panvk_buffer, buffer, _buffer);
    VK_FROM_HANDLE(panvk_buffer, count_buffer, countBuffer);
 
+   panvk_per_arch(cmd_instrument_draw)(cmdbuf);
+
    if (maxDrawCount == 0)
       return;
 
@@ -5214,6 +5247,8 @@ panvk_per_arch(CmdDrawIndexedIndirectCount)(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
    VK_FROM_HANDLE(panvk_buffer, buffer, _buffer);
    VK_FROM_HANDLE(panvk_buffer, count_buffer, countBuffer);
+
+   panvk_per_arch(cmd_instrument_draw)(cmdbuf);
 
    if (maxDrawCount == 0)
       return;
@@ -5332,6 +5367,61 @@ panvk_per_arch(cmd_inherit_render_state)(
    vk_cmd_set_rendering_attachment_locations(&cmdbuf->vk, att_loc_info);
 }
 
+#if PAN_ARCH >= 15
+static void
+init_perf_counters(struct panvk_cmd_buffer *cmdbuf,
+                   const VkRenderingInfo *rendering)
+{
+   struct panvk_rendering_state *render = &cmdbuf->state.gfx.render;
+   const VkRenderPassPerformanceCountersByRegionBeginInfoARM *info =
+      vk_find_struct_const(rendering->pNext,
+                           RENDER_PASS_PERFORMANCE_COUNTERS_BY_REGION_BEGIN_INFO_ARM);
+
+   memset(&render->perf_counters, 0, sizeof(render->perf_counters));
+   if (!info)
+      return;
+
+   const uint32_t layer_count = calc_enabled_layer_count(cmdbuf);
+   struct pan_ptr planes =
+      panvk_cmd_alloc_desc_array(cmdbuf, layer_count, GENERIC_PLANE);
+   if (!planes.gpu)
+      return;
+
+   const struct pan_fb_bbox *area = &render->fb.layout.render_area_px;
+   const uint32_t cols = area->max_x / PANVK_PERF_COUNTERS_REGION_SIZE + 1;
+   const uint32_t rows = area->max_y / PANVK_PERF_COUNTERS_REGION_SIZE + 1;
+   const uint32_t row_stride =
+      ALIGN_POT(cols * PANVK_PERF_COUNTERS_REGION_STRIDE,
+                PANVK_PERF_COUNTERS_ROW_ALIGN);
+   struct mali_generic_plane_packed *descs = planes.cpu;
+
+   for (uint32_t i = 0; i < layer_count; i++) {
+      const uint64_t addr =
+         i < info->counterAddressCount ? info->pCounterAddresses[i] : 0;
+
+      if (!addr) {
+         memset(&descs[i], 0, sizeof(descs[i]));
+         continue;
+      }
+
+      pan_pack(&descs[i], GENERIC_PLANE, cfg) {
+         cfg.clump_ordering = MALI_CLUMP_ORDERING_LINEAR;
+         cfg.clump_format = MALI_CLUMP_FORMAT_RAW128;
+         cfg.size = row_stride * rows;
+         cfg.pointer = addr;
+         cfg.row_stride = row_stride;
+         cfg.width = cols;
+         cfg.height = rows;
+      }
+   }
+
+   render->perf_counters.planes = planes;
+   render->perf_counters.select = panvk_perf_counters_by_region_select(
+      info->pCounterIndices, info->counterIndexCount);
+   render->perf_counters.serialize = info->serializeRegions;
+}
+#endif
+
 static void
 invalidate_initial_attachment_crcs(struct panvk_cmd_buffer *cmdbuf,
                                    const VkRenderingInfo *rendering)
@@ -5389,6 +5479,9 @@ panvk_per_arch(CmdBeginRendering)(VkCommandBuffer commandBuffer,
    bool resuming = pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT;
 
    panvk_per_arch(cmd_init_render_state)(cmdbuf, pRenderingInfo);
+#if PAN_ARCH >= 15
+   init_perf_counters(cmdbuf, pRenderingInfo);
+#endif
 
    /* Renderpass lowering can fold an initial layout transition into
     * CmdBeginRendering() and report the old layout through
@@ -6005,6 +6098,10 @@ cs_emit_static_fragment_state(struct cs_builder *b,
       assert(fb->rt_count > 0);
       cfg.render_target_count = fb->rt_count;
       cfg.color_buffer_allocation = fb->tile_rt_alloc_B;
+#if PAN_ARCH >= 15
+      cfg.serialize_regions =
+         render->perf_counters.planes.gpu && render->perf_counters.serialize;
+#endif
    }
    cs_move32_to(b, cs_sr_reg32(b, FRAGMENT, FLAGS_1), flags1.opaque[0]);
 
@@ -6140,14 +6237,32 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
 
    struct cs_index fbd_pointer = cs_sr_reg64(b, FRAGMENT, FBD_POINTER);
 
+#if PAN_ARCH >= 15
+   const bool perf_counters =
+      cmdbuf->state.gfx.render.perf_counters.planes.gpu != 0;
+
+   if (perf_counters) {
+      cs_wait_slots(b, dev->csf.sb.all_mask);
+      cs_perf_counter_enable(b);
+      cs_update_frag_ctx(b)
+         cs_move32_to(b, cs_sr_reg32(b, FRAGMENT, PERF_COUNTER_SELECT),
+                      cmdbuf->state.gfx.render.perf_counters.select);
+   }
+#endif
+
    panvk_per_arch(kbase_mark_progress)(
       cmdbuf, PANVK_SUBQUEUE_FRAGMENT,
       PANVK_KBASE_PROGRESS_FRAG_BEFORE_RUN);
 
    if (cmdbuf->state.gfx.render.layer_count <= 1) {
 #if PAN_ARCH >= 14
-      cs_update_frag_ctx(b)
+      cs_update_frag_ctx(b) {
          cs_emit_layer_fragment_state(b, fbd_pointer);
+#if PAN_ARCH >= 15
+         if (perf_counters)
+            cs_emit_layer_perf_counter_state(b, fbd_pointer);
+#endif
+      }
       cs_trace_run_fragment2(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
                              false, MALI_TILE_RENDER_ORDER_Z_ORDER);
 #else
@@ -6163,8 +6278,13 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
          cs_add_imm32(b, remaining_layers, remaining_layers, -1);
 
 #if PAN_ARCH >= 14
-         cs_update_frag_ctx(b)
+         cs_update_frag_ctx(b) {
             cs_emit_layer_fragment_state(b, fbd_pointer);
+#if PAN_ARCH >= 15
+            if (perf_counters)
+               cs_emit_layer_perf_counter_state(b, fbd_pointer);
+#endif
+         }
          cs_trace_run_fragment2(b, tracing_ctx, run_fragment_regs, false,
                                 MALI_TILE_RENDER_ORDER_Z_ORDER);
 #else
@@ -6258,6 +6378,13 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
                          SB_ID(DEFERRED_SYNC));
 #else
       async = cs_defer(SB_WAIT_ITER(sb_upd_ctx.cur_sb), SB_ID(DEFERRED_SYNC));
+#endif
+
+#if PAN_ARCH >= 15
+      if (perf_counters) {
+         cs_wait_slots(b, dev->csf.sb.all_mask);
+         cs_perf_counter_disable(b);
+      }
 #endif
 
       if (free_render_descs) {

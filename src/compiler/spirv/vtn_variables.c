@@ -224,6 +224,8 @@ nir_desc_type_for_mode(struct vtn_builder *b, enum vtn_variable_mode mode)
       return nir_descriptor_type_storage_buffer;
    case vtn_variable_mode_accel_struct:
       return nir_descriptor_type_acceleration_structure;
+   case vtn_variable_mode_tensor:
+      return nir_descriptor_type_tensor_arm;
    default:
       vtn_fail("Invalid mode for vulkan_resource_index");
    }
@@ -340,7 +342,8 @@ vtn_pointer_dereference(struct vtn_builder *b,
       tail = base->deref;
    } else if (b->options->environment == NIR_SPIRV_VULKAN &&
               (vtn_pointer_is_external_block(b, base) ||
-               base->mode == vtn_variable_mode_accel_struct)) {
+               base->mode == vtn_variable_mode_accel_struct ||
+               base->mode == vtn_variable_mode_tensor)) {
       nir_def *desc_index = base->desc_index;
 
       /* We dereferencing an external block pointer.  Correctness of this
@@ -369,7 +372,8 @@ vtn_pointer_dereference(struct vtn_builder *b,
        */
       nir_def *desc_arr_idx = NULL;
       if (!desc_index || vtn_type_contains_block(b, type) ||
-          base->mode == vtn_variable_mode_accel_struct) {
+          base->mode == vtn_variable_mode_accel_struct ||
+          base->mode == vtn_variable_mode_tensor) {
          /* If our type contains a block, then we're still outside the block
           * and we need to process enough levels of dereferences to get inside
           * of it.  Same applies to acceleration structures.
@@ -415,6 +419,7 @@ vtn_pointer_dereference(struct vtn_builder *b,
        * later access chain when it hits the block type.
        */
       if (base->mode == vtn_variable_mode_accel_struct ||
+          base->mode == vtn_variable_mode_tensor ||
           vtn_type_is_block_array(b, type)) {
          /* This has to be the end of the access chain */
          vtn_assert(idx == deref_chain->length);
@@ -669,7 +674,8 @@ vtn_local_store(struct vtn_builder *b, struct vtn_ssa_value *src,
 static nir_def *
 vtn_pointer_to_descriptor(struct vtn_builder *b, struct vtn_pointer *ptr)
 {
-   assert(ptr->mode == vtn_variable_mode_accel_struct);
+   assert(ptr->mode == vtn_variable_mode_accel_struct ||
+          ptr->mode == vtn_variable_mode_tensor);
    if (!ptr->desc_index) {
       struct vtn_access_chain chain = {
          .length = 0,
@@ -705,7 +711,8 @@ _vtn_variable_load_store(struct vtn_builder *b, bool load,
          (*inout)->def = vtn_sampled_image_to_nir_ssa(b, si);
          return;
       }
-   } else if (ptr->mode == vtn_variable_mode_accel_struct) {
+   } else if (ptr->mode == vtn_variable_mode_accel_struct ||
+              ptr->mode == vtn_variable_mode_tensor) {
       vtn_assert(load);
       (*inout)->def = vtn_pointer_to_descriptor(b, ptr);
       return;
@@ -1818,6 +1825,10 @@ vtn_storage_class_to_mode(struct vtn_builder *b,
                  interface_type->base_type == vtn_base_type_accel_struct) {
          mode = vtn_variable_mode_accel_struct;
          nir_mode = nir_var_uniform;
+      } else if (interface_type &&
+                 interface_type->base_type == vtn_base_type_tensor) {
+         mode = vtn_variable_mode_tensor;
+         nir_mode = nir_var_uniform;
       } else {
          /* OpTypeUntypedPointerKHR with UniformConstant is allowed with
           * descriptor heap.
@@ -1954,6 +1965,9 @@ vtn_mode_to_address_format(struct vtn_builder *b, enum vtn_variable_mode mode)
    case vtn_variable_mode_node_payload:
       return nir_address_format_64bit_global;
 
+   case vtn_variable_mode_tensor:
+      return b->options->tensor_addr_format;
+
    case vtn_variable_mode_task_payload:
       return b->options->task_payload_addr_format;
 
@@ -1984,7 +1998,8 @@ vtn_pointer_ssa_is_desc_index(struct vtn_builder *b,
                               struct vtn_pointer *ptr)
 {
    /* Acceleration structures are always desc_index */
-   if (ptr->mode == vtn_variable_mode_accel_struct)
+   if (ptr->mode == vtn_variable_mode_accel_struct ||
+       ptr->mode == vtn_variable_mode_tensor)
       return true;
 
    /* Physical storage buffers don't have descriptors
@@ -2244,6 +2259,7 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
    case vtn_variable_mode_ssbo:
    case vtn_variable_mode_push_constant:
    case vtn_variable_mode_accel_struct:
+   case vtn_variable_mode_tensor:
    case vtn_variable_mode_shader_record:
       var->var = nir_variable_create_zeroed(b->shader);
       nir_variable_set_name(b->shader, var->var, val->name);
@@ -2539,6 +2555,7 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
    } else {
       vtn_assert(vtn_pointer_is_external_block(b, val->pointer) ||
                  var->mode == vtn_variable_mode_accel_struct ||
+                 var->mode == vtn_variable_mode_tensor ||
                  var->mode == vtn_variable_mode_shader_record);
    }
 }

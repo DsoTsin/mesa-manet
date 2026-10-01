@@ -26,6 +26,7 @@
 #include "panvk_macros.h"
 #include "panvk_meta.h"
 #include "panvk_physical_device.h"
+#include "panvk_shader_instrumentation.h"
 #include "panvk_tracepoints.h"
 
 #include "pan_desc.h"
@@ -258,7 +259,8 @@ panvk_per_arch(cmd_dispatch_shader)(
 
       struct mali_compute_size_workgroup_packed wg_size;
       pan_pack(&wg_size, COMPUTE_SIZE_WORKGROUP, cfg) {
-         cfg.workgroup_size_x = cs->cs.local_size.x;
+         cfg.workgroup_size_x =
+            info->wg_size_x ? info->wg_size_x : cs->cs.local_size.x;
          cfg.workgroup_size_y = cs->cs.local_size.y;
          cfg.workgroup_size_z = cs->cs.local_size.z;
          cfg.allow_merging_workgroups = cs->info.cs.allow_merging_workgroups;
@@ -364,7 +366,8 @@ panvk_per_arch(cmd_dispatch_shader)(
 }
 
 static void
-cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
+cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
+             const struct panvk_dispatch_info *info)
 {
    const struct panvk_shader_variant *cs =
       panvk_shader_only_variant(cmdbuf->state.compute.shader);
@@ -454,6 +457,28 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
                                        tsd, info);
 }
 
+#if PAN_ARCH >= 15
+void
+panvk_per_arch(cmd_dispatch_rt)(
+   struct panvk_cmd_buffer *cmdbuf, const struct panvk_shader *shader,
+   const struct panvk_dispatch_info *info, uint64_t dispatch_addr)
+{
+   const struct panvk_cmd_compute_state saved = cmdbuf->state.compute;
+   cmdbuf->state.compute = (struct panvk_cmd_compute_state){
+      .shader = shader,
+      .desc_state = cmdbuf->state.ray_tracing.desc_state,
+      .sysvals.rt_dispatch = dispatch_addr,
+   };
+   BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,
+                    PANVK_CMD_COMPUTE_DIRTY_STATE_COUNT - 1);
+   cmd_dispatch(cmdbuf, info);
+   cmdbuf->state.ray_tracing.desc_state = cmdbuf->state.compute.desc_state;
+   cmdbuf->state.compute = saved;
+   BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,
+                    PANVK_CMD_COMPUTE_DIRTY_STATE_COUNT - 1);
+}
+#endif
+
 VkResult
 panvk_per_arch(cmd_prepare_dgc_dispatch)(
    struct panvk_cmd_buffer *cmdbuf, struct panlib_dgc_execute *params)
@@ -490,35 +515,29 @@ panvk_per_arch(cmd_prepare_dgc_dispatch)(
    return VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL
-panvk_per_arch(CmdDispatchBase)(VkCommandBuffer commandBuffer,
-                                uint32_t baseGroupX, uint32_t baseGroupY,
-                                uint32_t baseGroupZ, uint32_t groupCountX,
-                                uint32_t groupCountY, uint32_t groupCountZ)
+static void
+cmd_dispatch_direct(struct panvk_cmd_buffer *cmdbuf,
+                    const struct panvk_dispatch_info *info)
 {
-   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
    const struct panvk_shader_variant *shader =
       panvk_shader_only_variant(cmdbuf->state.compute.shader);
-   struct panvk_dispatch_info info = {
-      .wg_base = {baseGroupX, baseGroupY, baseGroupZ},
-      .direct.wg_count = {groupCountX, groupCountY, groupCountZ},
-      .barrier = PANVK_CSF_BARRIER_SYNC,
-   };
 
+   panvk_per_arch(cmd_instrument_dispatch)(cmdbuf);
    panvk_per_arch(panvk_instr_begin_work)(PANVK_SUBQUEUE_COMPUTE, cmdbuf,
                                           PANVK_INSTR_WORK_TYPE_DISPATCH);
 
-   cmd_dispatch(cmdbuf, &info);
+   cmd_dispatch(cmdbuf, info);
 
    struct panvk_instr_end_args instr_info = {
       .dispatch = {
-         .base_group_x = baseGroupX,
-         .base_group_y = baseGroupY,
-         .base_group_z = baseGroupZ,
-         .group_count_x = groupCountX,
-         .group_count_y = groupCountY,
-         .group_count_z = groupCountZ,
-         .group_size_x = shader->cs.local_size.x,
+         .base_group_x = info->wg_base.x,
+         .base_group_y = info->wg_base.y,
+         .base_group_z = info->wg_base.z,
+         .group_count_x = info->direct.wg_count.x,
+         .group_count_y = info->direct.wg_count.y,
+         .group_count_z = info->direct.wg_count.z,
+         .group_size_x =
+            info->wg_size_x ? info->wg_size_x : shader->cs.local_size.x,
          .group_size_y = shader->cs.local_size.y,
          .group_size_z = shader->cs.local_size.z,
       }};
@@ -526,6 +545,60 @@ panvk_per_arch(CmdDispatchBase)(VkCommandBuffer commandBuffer,
    panvk_per_arch(panvk_instr_end_work_async)(
       PANVK_SUBQUEUE_COMPUTE, cmdbuf, PANVK_INSTR_WORK_TYPE_DISPATCH,
       &instr_info, cs_defer(dev->csf.sb.all_iters_mask, 0));
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdDispatchBase)(VkCommandBuffer commandBuffer,
+                                uint32_t baseGroupX, uint32_t baseGroupY,
+                                uint32_t baseGroupZ, uint32_t groupCountX,
+                                uint32_t groupCountY, uint32_t groupCountZ)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   const struct panvk_dispatch_info info = {
+      .wg_base = {baseGroupX, baseGroupY, baseGroupZ},
+      .direct.wg_count = {groupCountX, groupCountY, groupCountZ},
+      .barrier = PANVK_CSF_BARRIER_SYNC,
+   };
+
+   cmd_dispatch_direct(cmdbuf, &info);
+}
+
+void
+panvk_per_arch(cmd_dispatch_unaligned)(VkCommandBuffer commandBuffer,
+                                       uint32_t invocations_x,
+                                       uint32_t invocations_y,
+                                       uint32_t invocations_z)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   const struct panvk_shader_variant *shader =
+      panvk_shader_only_variant(cmdbuf->state.compute.shader);
+   const uint32_t wg_size = shader->cs.local_size.x;
+
+   assert(invocations_y == 1 && invocations_z == 1);
+   assert(shader->cs.local_size.y == 1 && shader->cs.local_size.z == 1);
+
+   const uint32_t full_wgs = invocations_x / wg_size;
+   const uint32_t partial_wg_size = invocations_x % wg_size;
+
+   if (full_wgs) {
+      const struct panvk_dispatch_info info = {
+         .direct.wg_count = {full_wgs, 1, 1},
+         .barrier = PANVK_CSF_BARRIER_SYNC,
+      };
+
+      cmd_dispatch_direct(cmdbuf, &info);
+   }
+
+   if (partial_wg_size) {
+      const struct panvk_dispatch_info info = {
+         .wg_base = {full_wgs, 0, 0},
+         .direct.wg_count = {1, 1, 1},
+         .wg_size_x = partial_wg_size,
+         .barrier = PANVK_CSF_BARRIER_SYNC,
+      };
+
+      cmd_dispatch_direct(cmdbuf, &info);
+   }
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -540,6 +613,7 @@ panvk_per_arch(CmdDispatchIndirect)(VkCommandBuffer commandBuffer,
       .barrier = PANVK_CSF_BARRIER_SYNC,
    };
 
+   panvk_per_arch(cmd_instrument_dispatch)(cmdbuf);
    panvk_per_arch(panvk_instr_begin_work)(
       PANVK_SUBQUEUE_COMPUTE, cmdbuf, PANVK_INSTR_WORK_TYPE_DISPATCH_INDIRECT);
 

@@ -431,10 +431,7 @@ bi_mark_interference(bi_block *block, struct lcra_state *l, uint8_t *live,
       /* MMUL must not write its result into a multiply operand, but the
        * accumulator (src2) may be reused.
        */
-      if (ins->op == BI_OPCODE_MMUL_F32 ||
-          ins->op == BI_OPCODE_MMUL_V2F16 ||
-          ins->op == BI_OPCODE_MMUL_V4S8 ||
-          ins->op == BI_OPCODE_MMUL_V4U8) {
+      if (bi_is_mmul(ins->op)) {
          const unsigned dnode = ins->dest[0].value;
          const unsigned dmask = bi_writemask(ins, 0);
 

@@ -49,10 +49,16 @@ typedef const native_handle_t *panvk_v19_buffer_handle_t;
 typedef int32_t (*panvk_v19_import_fn)(const native_handle_t *, panvk_v19_buffer_handle_t *);
 typedef int32_t (*panvk_v19_free_fn)(panvk_v19_buffer_handle_t);
 typedef int32_t (*panvk_v19_getstd_fn)(panvk_v19_buffer_handle_t, int64_t, void *, size_t);
+typedef struct {
+   const char *name;
+   int64_t value;
+} panvk_v19_metadata_type;
+typedef int32_t (*panvk_v19_getmeta_fn)(panvk_v19_buffer_handle_t, panvk_v19_metadata_type, void *, size_t);
 struct panvk_v19_mapper_v5 {
    panvk_v19_import_fn importBuffer;
    panvk_v19_free_fn freeBuffer;
-   void *getTransportSize, *lock, *unlock, *flushLockedBuffer, *rereadLockedBuffer, *getMetadata;
+   void *getTransportSize, *lock, *unlock, *flushLockedBuffer, *rereadLockedBuffer;
+   panvk_v19_getmeta_fn getMetadata;
    panvk_v19_getstd_fn getStandardMetadata;
 };
 struct panvk_v19_mapper {
@@ -117,7 +123,7 @@ panvk_v19_mapper_init_once(void)
              panvk_v19_mapper_ptr, panvk_v19_mapper_ptr ? panvk_v19_mapper_ptr->version : 0);
    if (rc || !panvk_v19_mapper_ptr || panvk_v19_mapper_ptr->version < 5 ||
        !panvk_v19_mapper_ptr->v5.importBuffer || !panvk_v19_mapper_ptr->v5.freeBuffer ||
-       !panvk_v19_mapper_ptr->v5.getStandardMetadata)
+       !panvk_v19_mapper_ptr->v5.getMetadata || !panvk_v19_mapper_ptr->v5.getStandardMetadata)
       return;
    panvk_v19_mapper_so = so;
    panvk_v19_mapper_status = 0;
@@ -207,6 +213,25 @@ panvk_v19_get_scalar(panvk_v19_buffer_handle_t h, int64_t type, void *dst, size_
 }
 
 static int
+panvk_v19_plane_fd_indices(panvk_v19_buffer_handle_t h, uint64_t planes, int idx[4])
+{
+   static const panvk_v19_metadata_type plane_fds = {"arm.graphics.ArmMetadataType", 1};
+   int64_t fds[5];
+   int32_t got = panvk_v19_mapper_ptr->v5.getMetadata(h, plane_fds, fds, sizeof(fds));
+   if (got != (int32_t)((planes + 1) * sizeof(int64_t)) || fds[0] != (int64_t)planes)
+      return -EINVAL;
+   for (uint64_t i = 0; i < planes; i++) {
+      idx[i] = -1;
+      for (int j = 0; j < h->numFds && idx[i] < 0; j++)
+         if (h->data[j] == fds[i + 1])
+            idx[i] = j;
+      if (idx[i] < 0)
+         return -EINVAL;
+   }
+   return 0;
+}
+
+static int
 panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
                         uint64_t allocation, struct u_gralloc_buffer_basic_info *out)
 {
@@ -223,7 +248,10 @@ panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
    }
    int strides[4] = {0}, offsets[4] = {0};
    int fds[4] = {-1, -1, -1, -1};
-   int fd_index = 0;
+   int fd_index[4];
+   if (panvk_v19_plane_fd_indices(h, planes, fd_index)) {
+      free(b.data); return -EINVAL;
+   }
    for (uint64_t i = 0; i < planes; i++) {
       uint64_t components = 0;
       if (panvk_v19_read_u64(&b, &pos, &components) || components > 16) { rc = -EINVAL; break; }
@@ -252,11 +280,10 @@ panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
           hsub <= 0 || vsub <= 0) { rc = -EINVAL; break; }
       offsets[i] = (int)offset;
       strides[i] = (int)stride;
-      if (offsets[i] == 0 && i > 0) fd_index++;
-      if (!raw || fd_index >= raw->numFds) { rc = -EINVAL; break; }
-      fds[i] = raw->data[fd_index];
+      if (!raw || fd_index[i] >= raw->numFds) { rc = -EINVAL; break; }
+      fds[i] = raw->data[fd_index[i]];
       mesa_logi("[P0A-V19-FULLPLANE] plane=%u fd_index=%d offset=%d stride=%d total=%lld sample_bits=%lld samples=%lldx%lld sub=%lldx%lld",
-                (unsigned)i, fd_index, offsets[i], strides[i], (long long)total,
+                (unsigned)i, fd_index[i], offsets[i], strides[i], (long long)total,
                 (long long)sample_inc, (long long)width, (long long)height,
                 (long long)hsub, (long long)vsub);
    }

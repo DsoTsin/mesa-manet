@@ -17,6 +17,10 @@
 
 #include "panvk_device.h"
 
+#ifdef HAVE_PAN_KMOD_KBASE
+#include "kmod/kbase_kmod.h"
+#endif
+
 #include "vk_queue.h"
 
 enum panvk_subqueue_id {
@@ -79,9 +83,7 @@ struct panvk_subqueue {
       void *ringbuf_cpu;
       uint64_t ringbuf_dev;
 
-      /* USER_IO pages from KBASE_IOCTL_CS_QUEUE_BIND: doorbell page,
-       * input page (CS_INSERT), output page (CS_EXTRACT/CS_ACTIVE). */
-      void *user_io;
+      struct kbase_kmod_csf_user_io user_io;
 
       /* Monotonically-increasing byte offset of the next ring entry. */
       uint64_t insert;

@@ -1,0 +1,85 @@
+/*
+ * Copyright © 2026 Pix Philosophy (HK) Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "panvk_bvh.h"
+#define VK_USED_BUILD_FLAGS 0
+#include "vk_bvh_helpers.h"
+
+layout(push_constant) uniform CONSTS {
+   panvk_copy_args args;
+};
+
+void
+main()
+{
+   VOID_REF src = args.src_addr;
+   VOID_REF dst = args.dst_addr;
+   VOID_REF handles = 0;
+   uint32_t instance_count = 0;
+
+   if (args.mode == PANVK_COPY_MODE_DESERIALIZE) {
+      instance_count = uint32_t(DEREF(REF(uint64_t)(OFFSET(src, 2 * VK_UUID_SIZE + 16))));
+      handles = OFFSET(src, PANVK_BVH_SERIAL_HEADER_SIZE);
+      src = OFFSET(handles, instance_count * 8);
+   }
+
+   REF(panvk_bvh_header) hdr = REF(panvk_bvh_header)(src);
+   uint64_t size = DEREF(hdr).size;
+   uint32_t leaf_first = DEREF(hdr).node_count;
+
+   if (args.mode != PANVK_COPY_MODE_DESERIALIZE)
+      instance_count = uint32_t(DEREF(hdr).instance_count);
+
+   uint64_t serialization_size = PANVK_BVH_SERIAL_HEADER_SIZE + uint64_t(instance_count) * 8 + size;
+
+   if (args.mode == PANVK_COPY_MODE_SERIALIZE) {
+      handles = OFFSET(dst, PANVK_BVH_SERIAL_HEADER_SIZE);
+      dst = OFFSET(handles, instance_count * 8);
+
+      if (gl_GlobalInvocationID.x == 0) {
+         for (uint32_t i = 0; i < 8; i++)
+            DEREF(INDEX(uint32_t, args.dst_addr, i)) = args.uuid[i];
+         DEREF(INDEX(uint64_t, args.dst_addr, 4)) = serialization_size;
+         DEREF(INDEX(uint64_t, args.dst_addr, 5)) = size;
+         DEREF(INDEX(uint64_t, args.dst_addr, 6)) = instance_count;
+      }
+   }
+
+   uint32_t stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x * 8;
+   for (uint64_t offset = gl_GlobalInvocationID.x * 8; offset < size; offset += stride) {
+      uint64_t value = DEREF(REF(uint64_t)(OFFSET(src, offset)));
+
+      if (offset == PANVK_BVH_SERIALIZATION_SIZE_OFFSET)
+         value = serialization_size;
+      else if (offset == PANVK_BVH_INSTANCE_COUNT_OFFSET)
+         value = instance_count;
+
+      if (instance_count > 0 && offset >= PANVK_BVH_HEADER_SIZE &&
+          (offset - PANVK_BVH_HEADER_SIZE) % PANVK_BVH_NODE_SIZE == 0x38) {
+         uint32_t node = uint32_t((offset - PANVK_BVH_HEADER_SIZE) / PANVK_BVH_NODE_SIZE);
+         if (node >= leaf_first && node < leaf_first + instance_count) {
+            uint32_t leaf = node - leaf_first;
+            if (args.mode == PANVK_COPY_MODE_SERIALIZE) {
+               uint64_t ptr = value & ~PANVK_BVH_INSTANCE_AABBS;
+               DEREF(INDEX(uint64_t, handles, leaf)) = (ptr & ~0x3ful) - PANVK_BVH_HEADER_SIZE;
+               uint32_t hi = uint32_t(ptr & 0x3f) | ((value & PANVK_BVH_INSTANCE_AABBS) != 0 ? 0x80000000 : 0);
+               value = (uint64_t(hi) << 32) | leaf;
+            } else if (args.mode == PANVK_COPY_MODE_DESERIALIZE) {
+               uint32_t hi = uint32_t(value >> 32);
+               uint64_t base = DEREF(INDEX(uint64_t, handles, uint32_t(value)));
+               value = base + PANVK_BVH_HEADER_SIZE + (hi & 0x3f);
+               if ((hi & 0x80000000) != 0)
+                  value |= PANVK_BVH_INSTANCE_AABBS;
+            }
+         }
+      }
+
+      DEREF(REF(uint64_t)(OFFSET(dst, offset))) = value;
+   }
+}

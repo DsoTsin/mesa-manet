@@ -37,8 +37,8 @@ class LowerConstantPair : public testing::Test {
    {
       va_lower_constants(b->shader, I, counts, 1);
       bi_builder before = bi_init_builder(b->shader, bi_before_instr(I));
-      va_repair_fau(&before, I);
-      EXPECT_TRUE(va_validate_fau(I));
+      va_repair_fau(&before, I, b->shader->arch);
+      EXPECT_TRUE(va_validate_fau(I, b->shader->arch));
    }
 
    void expect_pair(bi_instr *I, unsigned word, uint32_t hi = 0)

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #if defined(__cplusplus)
@@ -42,17 +43,27 @@ bool kbase_kmod_supports_dmabuf(const struct pan_kmod_dev *dev);
 int kbase_kmod_csf_group_create(struct pan_kmod_dev *dev,
                                 uint32_t cs_queue_count,
                                 bool tiler_oom_handler,
+                                uint32_t max_cores,
                                 uint32_t *group_handle);
 void kbase_kmod_csf_group_destroy(struct pan_kmod_dev *dev,
                                   uint32_t group_handle);
 
-/* Registers and binds the ring buffer at ringbuf_va; returns the mmap()ed
- * USER_IO pages (BASEP_QUEUE_NR_MMAP_USER_PAGES) or NULL on failure. */
-void *kbase_kmod_csf_queue_bind(struct pan_kmod_dev *dev,
-                                uint32_t group_handle, uint32_t csi_index,
-                                uint64_t ringbuf_va, uint32_t ringbuf_size);
+struct kbase_kmod_csf_user_io {
+   void *map;
+   uint8_t *doorbell;
+   uint8_t *input;
+   uint8_t *output;
+};
+
+/* Registers and binds the ring buffer at ringbuf_va and maps its USER_IO
+ * pages.  From CSF uAPI 1.35 the input and output pages are shared by the
+ * CSG and each stream owns a 16-byte slot at 16 * csi_index. */
+bool kbase_kmod_csf_queue_bind(struct pan_kmod_dev *dev,
+                               uint32_t group_handle, uint32_t csi_index,
+                               uint64_t ringbuf_va, uint32_t ringbuf_size,
+                               struct kbase_kmod_csf_user_io *io);
 void kbase_kmod_csf_queue_term(struct pan_kmod_dev *dev, uint64_t ringbuf_va,
-                               void *user_io);
+                               struct kbase_kmod_csf_user_io *io);
 int kbase_kmod_csf_queue_kick(struct pan_kmod_dev *dev, uint64_t ringbuf_va);
 
 /* Block (up to timeout_ns) until the kernel has a CSF notification, then

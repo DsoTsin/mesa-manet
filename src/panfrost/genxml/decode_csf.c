@@ -671,6 +671,20 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
       break;
    }
 
+#if PAN_ARCH >= 15
+   case MALI_CS_OPCODE_PERF_COUNTER_ENABLE: {
+      cs_unpack(instr, CS_PERF_COUNTER_ENABLE, I);
+      fprintf(fp, "PERF_COUNTER_ENABLE");
+      break;
+   }
+
+   case MALI_CS_OPCODE_PERF_COUNTER_DISABLE: {
+      cs_unpack(instr, CS_PERF_COUNTER_DISABLE, I);
+      fprintf(fp, "PERF_COUNTER_DISABLE");
+      break;
+   }
+#endif
+
    default: {
       fprintf(fp, "UNKNOWN_%u 0x%" PRIX64 "\n", base.opcode, base.data);
       break;
@@ -716,8 +730,13 @@ pandecode_brief_shader(struct pandecode_context *ctx, const char *label,
    pandecode_log(ctx, "BRIEF %s spd=0x%" PRIx64, label, spd);
    if (shader) {
       pan_unpack(shader, SHADER_PROGRAM, desc);
+#if PAN_ARCH >= 15
+      fprintf(ctx->dump_stream, " code=0x%" PRIx64 " register_count=%u",
+              desc.binary, desc.register_count);
+#else
       fprintf(ctx->dump_stream, " code=0x%" PRIx64 " register_alloc=%u",
               desc.binary, desc.register_allocation);
+#endif
    } else {
       fprintf(ctx->dump_stream, " code=%s", spd ? "unmapped" : "none");
    }
@@ -1485,6 +1504,16 @@ pandecode_run_fragment2(struct pandecode_context *ctx, FILE *fp,
 
    DUMP_CL(ctx, VRS_IMAGE, &qctx->regs[MALI_FRAGMENT_SR_VRS_IMAGE],
            "VRS image:\n");
+
+#if PAN_ARCH >= 15
+   if (flags1_unpacked.perf_counters_enable) {
+      pandecode_log(ctx, "Perf counter select: 0x%08" PRIx32 "\n",
+                    cs_get_u32(qctx, MALI_FRAGMENT_SR_PERF_COUNTER_SELECT));
+      DUMP_ADDR(ctx, GENERIC_PLANE,
+                cs_get_u64(qctx, MALI_FRAGMENT_SR_PERF_COUNTER_PLANE_POINTER),
+                "Perf counter plane:\n");
+   }
+#endif
 
    GENX(pandecode_sample_locations)(ctx, sample_locations);
 

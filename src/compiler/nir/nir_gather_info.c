@@ -378,6 +378,8 @@ nir_intrinsic_writes_external_memory(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_buffer_amd:
    case nir_intrinsic_store_ssbo:
    case nir_intrinsic_store_ssbo_ir3:
+   case nir_intrinsic_tensor_write_arm:
+   case nir_intrinsic_store_tensor_pan:
       return true;
 
    case nir_intrinsic_store_deref:

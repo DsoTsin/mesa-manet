@@ -133,6 +133,14 @@ struct panvk_rendering_state {
       uint64_t fbds[3];
    } ir;
 #endif
+
+#if PAN_ARCH >= 15
+   struct {
+      struct pan_ptr planes;
+      uint32_t select;
+      bool serialize;
+   } perf_counters;
+#endif
 };
 
 enum panvk_cmd_graphics_dirty_state {

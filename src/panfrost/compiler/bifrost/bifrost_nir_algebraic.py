@@ -84,6 +84,13 @@ algebraic_late = [
     (('f2u16', a), ('u2u16', ('f2u32', a)), 'is_kraid'),
     (('f2i16', a), ('u2u16', ('f2i32', a)), 'is_kraid'),
 
+    (('f2e4m3fn', ('f2f32', 'a@16')), ('f162e4m3fn_pan', a)),
+    (('f2e4m3fn_sat', ('f2f32', 'a@16')), ('f162e4m3fn_sat_pan', a)),
+    (('f2e5m2', ('f2f32', 'a@16')), ('f162e5m2_pan', a)),
+    (('f2e5m2_sat', ('f2f32', 'a@16')), ('f162e5m2_sat_pan', a)),
+    (('f2f16', ('e4m3fn2f', a)), ('e4m3fn2f16_pan', a)),
+    (('f2f16', ('e5m22f', a)), ('e5m22f16_pan', a)),
+
     # Copy-prop will clean these up
     (('pack_uvec2_to_uint', a), ('pack_32_2x16', ('u2u16', a))),
     (('pack_uvec4_to_uint', a), ('pack_32_4x8', ('u2u8', a))),
@@ -92,6 +99,12 @@ algebraic_late = [
     # We lower ffract here instead to ensure lower_bit_size has been performed.
     (('ffract', a), ('fadd', a, ('fneg', ('ffloor', a))), 'gpu_arch >= 11'),
 ]
+
+for fmt in ['e4m3fn', 'e5m2']:
+    for sat in ['', '_sat']:
+        for rnd in ['_rtz', '_ru', '_rd']:
+            op = f'f2{fmt}{sat}{rnd}'
+            algebraic_late += [((op, ('f2f32', 'a@16')), (op, a))]
 
 # nir_lower_bool_to_bitsize can generate needless conversions.
 for bits in [8, 16, 32]:
@@ -127,15 +140,13 @@ for fsz in [16, 32]:
     ]
 
 for isz in [8, 16, 32]:
-    upcast = (f'i2i{isz}', a)
-    downcast = a if isz == 32 else (f'u2u{isz}', a)
+    for bsz in [8, 16, 32]:
+        conv = a if bsz == isz else (f'u2u{isz}' if bsz > isz else f'i2i{isz}', a)
 
-    algebraic_late += [
-        ((f'b2i{isz}', ('inot', f'a@32')), ('bcsel_pan', downcast, 0, 1), 'is_kraid'),
-        ((f'b2i{isz}', ('inot', a)), ('bcsel_pan', upcast, 0, 1), 'is_kraid'),
-        ((f'b2i{isz}', f'a@{isz}'), ('bcsel_pan', downcast, 1, 0), 'is_kraid'),
-        ((f'b2i{isz}', a), ('bcsel_pan', upcast, 1, 0), 'is_kraid'),
-    ]
+        algebraic_late += [
+            ((f'b2i{isz}', ('inot', f'a@{bsz}')), ('bcsel_pan', conv, 0, 1), 'is_kraid'),
+            ((f'b2i{isz}', f'a@{bsz}'), ('bcsel_pan', conv, 1, 0), 'is_kraid'),
+        ]
 
 LOPS = ['and', 'or', 'xor']
 SHIFTS = [

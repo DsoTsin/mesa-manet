@@ -750,6 +750,15 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
                      load_may_tear(state, instr);
       break;
 
+   case nir_intrinsic_tensor_read_arm:
+   case nir_intrinsic_load_tensor_pan:
+      is_divergent = (src_divergent(instr->src[0], state) &&
+                      (nir_intrinsic_access(instr) & ACCESS_NON_UNIFORM)) ||
+                     src_divergent(instr->src[1], state) ||
+                     src_divergent(instr->src[2], state) ||
+                     load_may_tear(state, instr);
+      break;
+
    case nir_intrinsic_optimization_barrier_vgpr_amd:
       is_divergent = src_divergent(instr->src[0], state);
       break;
@@ -811,6 +820,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_image_deref_size:
    case nir_intrinsic_bindless_image_size:
    case nir_intrinsic_image_heap_size:
+   case nir_intrinsic_tensor_size_arm:
    case nir_intrinsic_image_descriptor_amd:
    case nir_intrinsic_image_deref_descriptor_amd:
    case nir_intrinsic_image_heap_descriptor_amd:
@@ -828,6 +838,8 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_attr_pan:
    case nir_intrinsic_lea_attr_pan:
    case nir_intrinsic_lea_buf_pan:
+   case nir_intrinsic_rt_trace_begin_pan:
+   case nir_intrinsic_rt_trace_resume_pan:
    case nir_intrinsic_cubeface_pan:
    case nir_intrinsic_cube_ssel_pan:
    case nir_intrinsic_cube_tsel_pan:

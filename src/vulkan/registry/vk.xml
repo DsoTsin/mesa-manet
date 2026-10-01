@@ -31933,15 +31933,31 @@ endif::VK_KHR_internally_synchronized_queues[]
                 <enum bitpos="22" extends="VkImageCreateFlagBits2KHR" name="VK_IMAGE_CREATE_2_ALIAS_SINGLE_LAYER_DESCRIPTOR_BIT_KHR" />
             </require>
         </extension>
-        <extension name="VK_ARM_extension_659" number="659" author="Arm" contact="Kevin Petit @kpet" supported="disabled">
+        <extension name="VK_ARM_neural_accelerator" number="659" author="Arm" contact="Kevin Petit @kpet" type="device" supported="disabled">
             <require>
-                <enum value="0" name="VK_ARM_EXTENSION_659_SPEC_VERSION" />
-                <enum value="&quot;VK_ARM_extension_659&quot;" name="VK_ARM_EXTENSION_659_EXTENSION_NAME" />
-                <enum bitpos="11" extends="VkQueueFlagBits" name="VK_QUEUE_RESERVED_11_BIT_ARM" />
-                <enum bitpos="43" extends="VkPipelineStageFlagBits2" name="VK_PIPELINE_STAGE_2_RESERVED_43_BIT_ARM" />
-                <enum bitpos="49" extends="VkAccessFlagBits2" name="VK_ACCESS_2_RESERVED_49_BIT_ARM" />
-                <enum bitpos="50" extends="VkAccessFlagBits2" name="VK_ACCESS_2_RESERVED_50_BIT_ARM" />
-                <enum bitpos="47" extends="VkFormatFeatureFlagBits2" name="VK_FORMAT_FEATURE_2_RESERVED_47_BIT_ARM" />
+                <enum value="1" name="VK_ARM_NEURAL_ACCELERATOR_SPEC_VERSION" />
+                <enum value="&quot;VK_ARM_neural_accelerator&quot;" name="VK_ARM_NEURAL_ACCELERATOR_EXTENSION_NAME" />
+                <enum offset="0" extends="VkStructureType" name="VK_STRUCTURE_TYPE_NEURAL_ACCELERATOR_PIPELINE_CREATE_INFO_ARM" />
+                <enum offset="2" extends="VkStructureType" name="VK_STRUCTURE_TYPE_NEURAL_ACCELERATOR_WEIGHTS_CREATE_INFO_ARM" />
+                <enum offset="3" extends="VkStructureType" name="VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_NEURAL_ACCELERATOR_WEIGHTS_ARM" />
+                <enum offset="4" extends="VkStructureType" name="VK_STRUCTURE_TYPE_NEURAL_ACCELERATOR_WEIGHTS_DEVICE_ADDRESS_INFO_ARM" />
+                <enum offset="7" extends="VkStructureType" name="VK_STRUCTURE_TYPE_NEURAL_ACCELERATOR_PIPELINE_STATISTICS_DISPATCH_INFO_ARM" />
+                <enum offset="8" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NEURAL_ACCELERATOR_PROPERTIES_ARM" />
+                <enum offset="9" extends="VkStructureType" name="VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NEURAL_ACCELERATOR_FEATURES_ARM" />
+                <enum offset="10" extends="VkStructureType" name="VK_STRUCTURE_TYPE_BIND_NEURAL_ACCELERATOR_WEIGHTS_MEMORY_INFO_ARM" />
+                <enum offset="11" extends="VkStructureType" name="VK_STRUCTURE_TYPE_NEURAL_ACCELERATOR_WEIGHTS_MEMORY_REQUIREMENTS_INFO_ARM" />
+                <enum offset="12" extends="VkStructureType" name="VK_STRUCTURE_TYPE_DEVICE_NEURAL_ACCELERATOR_WEIGHTS_MEMORY_REQUIREMENTS_ARM" />
+                <enum offset="13" extends="VkStructureType" name="VK_STRUCTURE_TYPE_NEURAL_ACCELERATOR_DISPATCH_INFO_ARM" />
+                <enum offset="0" extends="VkObjectType" name="VK_OBJECT_TYPE_NEURAL_ACCELERATOR_WEIGHTS_ARM" />
+                <enum offset="0" extends="VkFormat" name="VK_FORMAT_SBS80_ARM" />
+                <enum bitpos="11" extends="VkQueueFlagBits" name="VK_QUEUE_NEURAL_ACCELERATOR_BIT_ARM" />
+                <enum bitpos="43" extends="VkPipelineStageFlagBits2" name="VK_PIPELINE_STAGE_2_NEURAL_ACCELERATOR_BIT_ARM" />
+                <enum bitpos="49" extends="VkAccessFlagBits2" name="VK_ACCESS_2_NEURAL_ACCELERATOR_READ_BIT_ARM" />
+                <enum bitpos="50" extends="VkAccessFlagBits2" name="VK_ACCESS_2_NEURAL_ACCELERATOR_WRITE_BIT_ARM" />
+                <enum bitpos="47" extends="VkFormatFeatureFlagBits2" name="VK_FORMAT_FEATURE_2_TENSOR_NEURAL_ACCELERATOR_BIT_ARM" />
+            </require>
+            <require depends="VK_ARM_tensors">
+                <enum bitpos="6" extends="VkTensorUsageFlagBitsARM" name="VK_TENSOR_USAGE_NEURAL_ACCELERATOR_BIT_ARM" />
             </require>
         </extension>
         <extension name="VK_EXT_cooperative_matrix_maintenance1" number="660" type="device" author="EXT" depends="VK_KHR_cooperative_matrix" contact="Jeff Bolz @jeffbolznv" supported="vulkan" ratified="vulkan">

@@ -142,6 +142,7 @@ struct kbase_ioctl_get_gpuprops {
 #define KBASE_GPUPROP_RAW_THREAD_TLS_ALLOC          83
 #define KBASE_GPUPROP_TLS_ALLOC                     84
 #define KBASE_GPUPROP_RAW_GPU_FEATURES              85
+#define KBASE_GPUPROP_THREAD_NUM_ACTIVE_GRANULARITY 88
 
 /* -----------------------------------------------------------------------
  * Memory allocation.
@@ -179,7 +180,7 @@ union kbase_ioctl_mem_alloc_ex {
       __u64 extension;
       __u64 flags;
       __u64 fixed_address;
-      __u64 extra[3];
+      __u64 extra[5];
    } in;
    struct {
       __u64 flags;
@@ -188,6 +189,8 @@ union kbase_ioctl_mem_alloc_ex {
 };
 #define KBASE_IOCTL_MEM_ALLOC_EX \
    _IOWR(KBASE_IOCTL_TYPE, 59, union kbase_ioctl_mem_alloc_ex)
+#define KBASE_IOCTL_MEM_ALLOC_EX_1_9 \
+   _IOC(_IOC_READ | _IOC_WRITE, KBASE_IOCTL_TYPE, 59, 64)
 
 /* Memory allocation/import flags (base_mem_alloc_flags) */
 #define BASE_MEM_PROT_CPU_RD              ((__u64)1 << 0)
@@ -321,6 +324,7 @@ union kbase_ioctl_mem_import {
       __u64 phandle;
       __u32 type;
       __u32 padding;
+      __u64 extra[2];
    } in;
    struct {
       __u64 flags;
@@ -330,6 +334,8 @@ union kbase_ioctl_mem_import {
 };
 #define KBASE_IOCTL_MEM_IMPORT \
    _IOWR(KBASE_IOCTL_TYPE, 22, union kbase_ioctl_mem_import)
+#define KBASE_IOCTL_MEM_IMPORT_LEGACY \
+   _IOC(_IOC_READ | _IOC_WRITE, KBASE_IOCTL_TYPE, 22, 24)
 
 /* base_mem_import_type */
 #define BASE_MEM_IMPORT_TYPE_INVALID     0
@@ -472,7 +478,7 @@ union kbase_ioctl_cs_queue_group_create {
       __u64 neural_mask;
       __u8 comp_pri_threshold;
       __u8 comp_pri_ratio;
-      __u8 padding[62];
+      __u8 padding[70];
    } in;
    struct {
       __u8 group_handle;
@@ -481,7 +487,9 @@ union kbase_ioctl_cs_queue_group_create {
    } out;
 };
 #define KBASE_IOCTL_CS_QUEUE_GROUP_CREATE \
-   _IOWR(KBASE_IOCTL_TYPE, 58, union kbase_ioctl_cs_queue_group_create)
+   _IOWR(KBASE_IOCTL_TYPE, 63, union kbase_ioctl_cs_queue_group_create)
+#define KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_19 \
+   _IOC(_IOC_READ | _IOC_WRITE, KBASE_IOCTL_TYPE, 58, 112)
 
 struct kbase_ioctl_cs_queue_group_term {
    __u8 group_handle;

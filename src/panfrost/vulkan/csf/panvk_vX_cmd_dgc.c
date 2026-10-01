@@ -13,6 +13,7 @@
 #include "panvk_dgc_submit.h"
 #include "panvk_entrypoints.h"
 #include "panvk_precomp_cache.h"
+#include "panvk_shader_instrumentation.h"
 
 static_assert(sizeof(struct panlib_dgc_execution) % 64 == 0,
               "DGC variable execution payload starts on a cache line");
@@ -406,6 +407,9 @@ panvk_per_arch(CmdExecuteGeneratedCommandsEXT)(
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    const bool compute = info->shaderStages & VK_SHADER_STAGE_COMPUTE_BIT;
    const bool indexed = layout->vk.dgc_info & BITFIELD_BIT(MESA_VK_DGC_DRAW_INDEXED);
+
+   if (cmdbuf->state.shader_instr)
+      cmdbuf->state.shader_instr->next_result_index++;
 
    /* Shader-object binding and multi-draw-count tokens are optional and are
     * not included in the advertised binding stages/token properties.

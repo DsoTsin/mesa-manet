@@ -13,6 +13,7 @@ mod flow;
 mod foldable;
 #[cfg(test)]
 mod hw_tests;
+mod instrumentation;
 mod ir;
 mod isa;
 mod jump_thread;

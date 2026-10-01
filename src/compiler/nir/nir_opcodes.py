@@ -2100,6 +2100,21 @@ unop_numeric_convert("e5m22f", tfloat32, tuint8, "_mesa_e5m2_to_float(src0)")
 unop_numeric_convert("f2e5m2", tuint8, tfloat32, "_mesa_float_to_e5m2(src0)")
 unop_numeric_convert("f2e5m2_sat", tuint8, tfloat32, "_mesa_float_to_e5m2_sat(src0)")
 
+for fmt in ["e4m3fn", "e5m2"]:
+   for sat in ["", "_sat"]:
+      for rnd, mode in [("_rtz", "FLOAT8_ROUND_TO_ZERO"), ("_ru", "FLOAT8_ROUND_UP"),
+                        ("_rd", "FLOAT8_ROUND_DOWN")]:
+         unop_numeric_convert("f2" + fmt + sat + rnd, tuint8, tfloat,
+                              "_mesa_float_to_{}_round(src0, {}, {})".format(
+                                 fmt, mode, "true" if sat else "false"))
+
+unop_numeric_convert("e4m3fn2f16_pan", tfloat16, tuint8, "_mesa_e4m3fn_to_float(src0)")
+unop_numeric_convert("e5m22f16_pan", tfloat16, tuint8, "_mesa_e5m2_to_float(src0)")
+unop_numeric_convert("f162e4m3fn_pan", tuint8, tfloat16, "_mesa_float_to_e4m3fn(src0)")
+unop_numeric_convert("f162e4m3fn_sat_pan", tuint8, tfloat16, "_mesa_float_to_e4m3fn_sat(src0)")
+unop_numeric_convert("f162e5m2_pan", tuint8, tfloat16, "_mesa_float_to_e5m2(src0)")
+unop_numeric_convert("f162e5m2_sat_pan", tuint8, tfloat16, "_mesa_float_to_e5m2_sat(src0)")
+
 
 opcode("f16dot2_fadd", 1, tfloat, [2, 2, 1], [tfloat16, tfloat16, tfloat],
        False, _2src_commutative, """

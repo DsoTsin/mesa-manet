@@ -1509,6 +1509,7 @@ enum cs_res_id {
    CS_FRAG_RES = BITFIELD_BIT(1),
    CS_TILER_RES = BITFIELD_BIT(2),
    CS_IDVS_RES = BITFIELD_BIT(3),
+   CS_RT_RES = BITFIELD_BIT(4),
 };
 
 static inline void
@@ -1674,6 +1675,22 @@ cs_finish_tiling(struct cs_builder *b)
    cs_emit(b, FINISH_TILING, I)
       ;
 }
+
+#if PAN_ARCH >= 15
+static inline void
+cs_perf_counter_enable(struct cs_builder *b)
+{
+   cs_emit(b, PERF_COUNTER_ENABLE, I)
+      ;
+}
+
+static inline void
+cs_perf_counter_disable(struct cs_builder *b)
+{
+   cs_emit(b, PERF_COUNTER_DISABLE, I)
+      ;
+}
+#endif
 
 static inline void
 cs_finish_fragment(struct cs_builder *b, bool increment_frag_completed,
@@ -1894,6 +1911,19 @@ cs_lshift_imm32(struct cs_builder *b, struct cs_index dest, struct cs_index src,
       I.destination = cs_dst32(b, dest);
       I.source = cs_src32(b, src);
       I.shift_amount = imm;
+   }
+}
+
+static inline void
+cs_bfins_imm32(struct cs_builder *b, struct cs_index dest, struct cs_index src,
+               uint8_t position, uint8_t width, uint16_t imm)
+{
+   cs_emit(b, BFINS_IMM32, I) {
+      I.destination = cs_dst32(b, dest);
+      I.source = cs_src32(b, src);
+      I.position = position;
+      I.width = width;
+      I.imm = imm;
    }
 }
 
@@ -2253,6 +2283,9 @@ cs_req_res(struct cs_builder *b, uint32_t res_mask)
       I.tiler = res_mask & CS_TILER_RES;
       I.idvs = res_mask & CS_IDVS_RES;
       I.fragment = res_mask & CS_FRAG_RES;
+#if PAN_ARCH >= 15
+      I.rt = res_mask & CS_RT_RES;
+#endif
    }
 }
 

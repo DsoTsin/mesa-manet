@@ -54,6 +54,10 @@ write_fau_recipe(struct panvk_device *device,
                ? device->printf.bo->addr.dev : 0;
             word->source = PANLIB_DGC_FAU_IMMEDIATE;
             word->value = address >> (half * 32);
+         } else if (offset == offsetof(struct panvk_common_sysvals,
+                                       common.instr_counters)) {
+            word->source = PANLIB_DGC_FAU_IMMEDIATE;
+            word->value = PAN_SHADER_OOB_ADDRESS >> (half * 32);
          } else {
             word->source = PANLIB_DGC_FAU_SYSVAL;
             word->value = offset + half * 4;
@@ -95,6 +99,7 @@ write_gpu_shader(struct panvk_device *device, const struct panvk_shader *shader,
    gpu->code = panvk_shader_variant_get_dev_addr(variant);
    gpu->tls_size = info->tls_size;
    gpu->wls_size = info->wls_size;
+   gpu->work_reg_count = info->work_reg_count;
    gpu->outputs_written = info->outputs_written;
    gpu->used_set_mask = shader->desc_info.used_set_mask;
    STATIC_ASSERT(MAX_DYNAMIC_BUFFERS <= PANLIB_DGC_MAX_DYNAMIC_BUFFERS);
@@ -138,7 +143,8 @@ write_gpu_shader(struct panvk_device *device, const struct panvk_shader *shader,
       }
       gpu->compute_size_workgroup = wg.opaque[0];
       gpu->workgroups_per_task = pan_calc_workgroups_per_task(
-         &variant->cs.local_size, &device->kmod.dev->props);
+         &variant->cs.local_size, &device->kmod.dev->props,
+         info->work_reg_count);
       return;
    }
 

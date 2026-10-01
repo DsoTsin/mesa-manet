@@ -111,6 +111,9 @@ struct panvk_common_sysvals_inner {
 
    /* Address of the shader constant data buffer */
    aligned_u64 constant_data;
+
+   aligned_u64 instr_counters;
+   aligned_u64 ray_query_state;
 } __attribute__((aligned(FAU_WORD_SIZE)));
 
 struct panvk_common_sysvals {
@@ -235,6 +238,8 @@ struct panvk_compute_sysvals {
    struct {
       uint32_t x, y, z;
    } local_group_size;
+
+   aligned_u64 rt_dispatch;
 
 #if PAN_ARCH < 9
    struct {

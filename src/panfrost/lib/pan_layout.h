@@ -35,11 +35,12 @@ struct pan_afbc_image_slice_layout {
       /* For 3D textures, this is the size in bytes of AFBC headers covering
        * a single Z slice. For 2D this is the total header size. This size is
        * the utile header size, it doesn't count the padding needed to meet the
-       * body alignment constraints. Pass this to pan_afbc_body_offset() to get
-       * the body offset.
+       * body alignment constraints.
        */
       uint32_t surface_size_B;
    } header;
+
+   uint32_t body_offset_B;
 
    /* For 3D textures, this is the stride in bytes between AFBC headers of two
     * consecutive Z slices. For 2D, this is the total size of the 2D level.
@@ -137,6 +138,8 @@ struct pan_image_layout_constraints {
 
    /* Row pitch in bytes. Non-zero if layout is explicit. */
    uint32_t wsi_row_pitch_B;
+
+   uint32_t afbc_body_align_B;
 
    /* Array stride in bytes for explicit multi-layer imports. When non-zero
     * and array_size > 1, used as array_stride_B directly. */

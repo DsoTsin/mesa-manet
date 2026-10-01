@@ -88,6 +88,7 @@ struct panlib_dgc_shader {
    uint32_t allow_merging_workgroups;
    uint32_t compute_size_workgroup;
    uint32_t workgroups_per_task;
+   uint32_t work_reg_count;
    uint32_t fau_count;
    uint32_t used_set_mask;
    /* Always zero for IES entries. Fixed-pipeline DGC can use dynamic buffers. */

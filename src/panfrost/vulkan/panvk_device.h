@@ -27,6 +27,7 @@
 #include "util/perf/u_trace.h"
 
 #include "util/simple_mtx.h"
+#include "util/u_dynarray.h"
 #include "util/u_call_once.h"
 #include "util/u_printf.h"
 #include "util/vma.h"
@@ -132,6 +133,13 @@ struct panvk_device {
       struct panvk_priv_bo *bo;
    } printf;
 
+   struct {
+      simple_mtx_t lock;
+      struct panvk_priv_bo *bo;
+      uint32_t slots;
+      struct util_dynarray retired;
+   } ray_query;
+
    union {
       struct {
          struct {
@@ -142,6 +150,8 @@ struct panvk_device {
          } sb;
       } csf;
    };
+
+   uint32_t shader_core_count;
 
    int drm_fd;
 };

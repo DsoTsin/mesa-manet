@@ -1,0 +1,362 @@
+/*
+ * Copyright © 2022 Friedrich Vock
+ * Copyright © 2026 Pix Philosophy (HK) Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "panvk_bvh.h"
+#define VK_USED_BUILD_FLAGS (VK_BUILD_FLAG_HAS_QUADS)
+#include "vk_bvh_helpers.h"
+
+layout(push_constant) uniform CONSTS {
+   panvk_encode_args args;
+};
+
+uint32_t active_leaves;
+
+REF(panvk_bvh_header)
+output_header()
+{
+   return REF(panvk_bvh_header)(args.output_bvh);
+}
+
+VOID_REF
+node_addr(uint32_t index)
+{
+   return OFFSET(args.output_bvh, PANVK_BVH_HEADER_SIZE + index * PANVK_BVH_NODE_SIZE);
+}
+
+vk_aabb
+ir_bounds(uint32_t id)
+{
+   return DEREF(REF(vk_ir_node)OFFSET(args.intermediate_bvh, ir_id_to_offset(id))).aabb;
+}
+
+u32vec3
+origin_bits(vec3 v)
+{
+   u32vec3 b = floatBitsToUint(v);
+   return mix(b & ~0xffu, (b + 0xffu) & ~0xffu, notEqual(b & 0x80000000u, u32vec3(0)));
+}
+
+uint32_t
+quant_exponent(float extent)
+{
+   if (!(extent > 0.0))
+      return 1;
+
+   int e;
+   frexp(extent / 255.0, e);
+   e = clamp(e, -126, 127);
+   if (extent * exp2(float(-e)) > 255.0)
+      e++;
+   return uint32_t(clamp(e + 127, 1, 254));
+}
+
+float
+sub_round_down(float a, float b)
+{
+   float d = a - b;
+   if (d > 0.0)
+      d = uintBitsToFloat(floatBitsToUint(d) - 1);
+   return d;
+}
+
+float
+sub_round_up(float a, float b)
+{
+   float d = a - b;
+   if (d > 0.0)
+      d = uintBitsToFloat(floatBitsToUint(d) + 1);
+   return d;
+}
+
+void
+write_box(uint32_t index, uint32_t type, vk_aabb child_bounds[PANVK_BVH_MAX_CHILDREN],
+          uint32_t child_desc[PANVK_BVH_MAX_CHILDREN], uint32_t child_count,
+          uint32_t internal_base, uint32_t leaf_base, uint32_t leaf_count)
+{
+   vec3 lo = vec3(INFINITY);
+   vec3 hi = vec3(-INFINITY);
+   for (uint32_t i = 0; i < child_count; i++) {
+      lo = min(lo, child_bounds[i].min);
+      hi = max(hi, child_bounds[i].max);
+   }
+   if (child_count == 0) {
+      lo = vec3(0.0);
+      hi = vec3(0.0);
+   }
+
+   u32vec3 obits = origin_bits(lo);
+   vec3 origin = uintBitsToFloat(obits);
+   u32vec3 exps = u32vec3(quant_exponent(hi.x - origin.x), quant_exponent(hi.y - origin.y),
+                          quant_exponent(hi.z - origin.z));
+   vec3 inv_scale = vec3(exp2(127.0 - float(exps.x)), exp2(127.0 - float(exps.y)),
+                         exp2(127.0 - float(exps.z)));
+
+   uint32_t bounds[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+   for (uint32_t i = 0; i < child_count; i++) {
+      for (uint32_t a = 0; a < 3; a++) {
+         float qlo = floor(sub_round_down(child_bounds[i].min[a], origin[a]) * inv_scale[a]);
+         float qhi = ceil(sub_round_up(child_bounds[i].max[a], origin[a]) * inv_scale[a]);
+         uint32_t pair = uint32_t(clamp(qlo, 0.0, 255.0)) | (uint32_t(clamp(qhi, 0.0, 255.0)) << 8);
+         uint32_t byte = a * 12 + i * 2;
+         bounds[byte / 4] |= pair << ((byte % 4) * 8);
+      }
+   }
+
+   uint32_t desc[PANVK_BVH_MAX_CHILDREN];
+   for (uint32_t i = 0; i < PANVK_BVH_MAX_CHILDREN; i++)
+      desc[i] = i < child_count ? child_desc[i] : PANVK_BVH_CHILD_EMPTY;
+
+   REF(panvk_bvh_box_node) dst = REF(panvk_bvh_box_node)(node_addr(index));
+   DEREF(dst).origin_x_type = obits.x | type;
+   DEREF(dst).origin_y_exp_x = obits.y | exps.x;
+   DEREF(dst).origin_z_exp_y = obits.z | exps.y;
+   DEREF(dst).internal_base = internal_base;
+   DEREF(dst).leaf_base = leaf_base;
+   DEREF(dst).exp_z_leaf_count_child01 = exps.z | (leaf_count << 8) | (desc[0] << 16) | (desc[1] << 24);
+   DEREF(dst).child2345 = desc[2] | (desc[3] << 8) | (desc[4] << 16) | (desc[5] << 24);
+   DEREF(dst).bounds = bounds;
+}
+
+mat3x4
+invert_transform(mat3x4 m)
+{
+   mat3 inv = inverse(mat3(m[0].xyz, m[1].xyz, m[2].xyz));
+   vec3 t = -(vec3(m[0].w, m[1].w, m[2].w) * inv);
+   return mat3x4(vec4(inv[0], t.x), vec4(inv[1], t.y), vec4(inv[2], t.z));
+}
+
+void
+write_leaf(uint32_t id, uint32_t slot)
+{
+   uint32_t type = ir_id_to_type(id);
+   VOID_REF src = OFFSET(args.intermediate_bvh, ir_id_to_offset(id));
+   VOID_REF dst = node_addr(args.leaf_base + slot);
+
+   if (type == vk_ir_node_triangle) {
+      vk_ir_triangle_node tri = DEREF(REF(vk_ir_triangle_node)(src));
+      uint32_t flags = PANVK_BVH_LEAF_IN_ORDER;
+      if ((tri.geometry_id_and_flags & VK_GEOMETRY_OPAQUE) != 0)
+         flags |= PANVK_BVH_LEAF_OPAQUE;
+
+      REF(panvk_bvh_triangle_leaf) leaf = REF(panvk_bvh_triangle_leaf)(dst);
+      for (uint32_t v = 0; v < 3; v++)
+         DEREF(leaf).coords[v] = tri.coords[v];
+      DEREF(leaf).coords[3] = float[3](0.0, 0.0, 0.0);
+      DEREF(leaf).primitive_id_b = 0;
+      DEREF(leaf).primitive_id_a = tri.triangle_id;
+      DEREF(leaf).geometry_id_b = 0;
+      DEREF(leaf).geometry_id_a_flags = (flags << 24) | (tri.geometry_id_and_flags & 0xffffff);
+   } else if (type == vk_ir_node_aabb) {
+      vk_ir_aabb_node aabb = DEREF(REF(vk_ir_aabb_node)(src));
+      uint32_t flags = PANVK_BVH_LEAF_IN_ORDER;
+      if ((aabb.geometry_id_and_flags & VK_GEOMETRY_OPAQUE) != 0)
+         flags |= PANVK_BVH_LEAF_OPAQUE;
+
+      REF(panvk_bvh_aabb_leaf) leaf = REF(panvk_bvh_aabb_leaf)(dst);
+      for (uint32_t i = 0; i < 13; i++)
+         DEREF(leaf).reserved[i] = 0;
+      DEREF(leaf).primitive_id = aabb.primitive_id;
+      DEREF(leaf).reserved1 = 0;
+      DEREF(leaf).geometry_id_flags = (flags << 24) | (aabb.geometry_id_and_flags & 0xffffff);
+   } else {
+      vk_ir_instance_node inst = DEREF(REF(vk_ir_instance_node)(src));
+      uint64_t blas_ptr = inst.base_ptr + PANVK_BVH_HEADER_SIZE;
+      if (DEREF(REF(panvk_bvh_header)(inst.base_ptr)).flags == PANVK_BVH_FLAGS_AABBS)
+         blas_ptr |= PANVK_BVH_INSTANCE_AABBS;
+
+      REF(panvk_bvh_instance_leaf) leaf = REF(panvk_bvh_instance_leaf)(dst);
+      DEREF(leaf).wto_matrix = invert_transform(inst.otw_matrix);
+      DEREF(leaf).mask_index = (inst.custom_instance_and_mask & 0xff000000) | slot;
+      DEREF(leaf).flags_sbt_offset = inst.sbt_offset_and_flags;
+      DEREF(leaf).blas_ptr = blas_ptr;
+
+      REF(panvk_bvh_instance_extra) extra = REF(panvk_bvh_instance_extra)(
+         OFFSET(node_addr(args.leaf_base + active_leaves), slot * SIZEOF(panvk_bvh_instance_extra)));
+      DEREF(extra).custom_index = inst.custom_instance_and_mask & 0xffffff;
+      DEREF(extra).instance_id = inst.instance_id;
+   }
+}
+
+void
+write_header(uint32_t internal_count)
+{
+   bool tlas = args.geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR;
+   uint32_t instance_count = tlas ? active_leaves : 0;
+   uint64_t size = PANVK_BVH_HEADER_SIZE + uint64_t(args.leaf_base + active_leaves) * PANVK_BVH_NODE_SIZE +
+                   uint64_t(instance_count) * SIZEOF(panvk_bvh_instance_extra);
+
+   vk_aabb bounds;
+   bounds.min = vec3(0.0);
+   bounds.max = vec3(0.0);
+   if (active_leaves > 0) {
+      for (uint32_t a = 0; a < 3; a++) {
+         bounds.min[a] = from_emulated_float(DEREF(args.header).min_bounds[a]);
+         bounds.max[a] = from_emulated_float(DEREF(args.header).max_bounds[a]);
+      }
+   }
+
+   REF(panvk_bvh_header) hdr = output_header();
+   DEREF(hdr).size = size;
+   DEREF(hdr).node_count = args.leaf_base;
+   DEREF(hdr).version = PANVK_BVH_VERSION;
+   DEREF(hdr).primitive_count = active_leaves;
+   DEREF(hdr).geometry_count = args.geometry_count;
+   DEREF(hdr).bounds = bounds;
+   DEREF(hdr).flags = tlas ? PANVK_BVH_FLAGS_INSTANCES
+                           : args.geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR ? PANVK_BVH_FLAGS_AABBS
+                                                                              : PANVK_BVH_FLAGS_TRIANGLES;
+   DEREF(hdr).reserved0 = 0;
+   DEREF(hdr).omm_data_offset = 0;
+   DEREF(hdr).omm_handles_offset = 0;
+   DEREF(hdr).serialization_size = PANVK_BVH_SERIAL_HEADER_SIZE + uint64_t(instance_count) * 8 + size;
+   DEREF(hdr).instance_count = instance_count;
+   for (uint32_t i = 0; i < 10; i++)
+      DEREF(hdr).reserved1[i] = 0;
+
+   if (internal_count == 0) {
+      vk_aabb none[PANVK_BVH_MAX_CHILDREN];
+      uint32_t desc[PANVK_BVH_MAX_CHILDREN];
+      write_box(0, tlas ? PANVK_BVH_BOX_TLAS : PANVK_BVH_BOX_BLAS, none, desc, 0, 0, args.leaf_base, 0);
+   }
+}
+
+void
+main()
+{
+   uint32_t internal_count = DEREF(args.header).ir_internal_node_count;
+   active_leaves = DEREF(args.header).active_leaf_count;
+
+   if (gl_GlobalInvocationID.x == 0)
+      write_header(internal_count);
+
+   if (gl_GlobalInvocationID.x >= internal_count)
+      return;
+
+   uint32_t node_index = internal_count - 1 - gl_GlobalInvocationID.x;
+   bool is_root = gl_GlobalInvocationID.x == 0;
+   bool aabbs = args.geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR;
+   uint32_t box_type = args.geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR ? PANVK_BVH_BOX_TLAS : PANVK_BVH_BOX_BLAS;
+
+   REF(vk_ir_box_node) internal_nodes =
+      REF(vk_ir_box_node)OFFSET(args.intermediate_bvh, args.leaf_node_count * vk_ir_node_size(args.geometry_type));
+   REF(vk_ir_box_node) src_node = INDEX(vk_ir_box_node, internal_nodes, node_index);
+   vk_ir_box_node src = DEREF(src_node);
+
+   if (is_root)
+      DEREF(args.header).dst_node_offset = 1;
+
+   for (;;) {
+      memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
+                    gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+      uint32_t box_index = is_root ? 0 : DEREF(src_node).bvh_offset;
+      if (box_index == VK_UNKNOWN_BVH_OFFSET)
+         continue;
+      if (box_index == VK_NULL_BVH_OFFSET)
+         break;
+
+      uint32_t children[PANVK_BVH_MAX_CHILDREN];
+      uint32_t child_count = 0;
+      for (uint32_t i = 0; i < 2; i++) {
+         if (src.children[i] != VK_BVH_INVALID_NODE)
+            children[child_count++] = src.children[i];
+      }
+
+      while (child_count < PANVK_BVH_MAX_CHILDREN) {
+         int32_t collapse = -1;
+         float largest = -INFINITY;
+         for (uint32_t i = 0; i < child_count; i++) {
+            if (ir_id_to_type(children[i]) != vk_ir_node_internal)
+               continue;
+            float area = aabb_surface_area(ir_bounds(children[i]));
+            if (area > largest) {
+               largest = area;
+               collapse = int32_t(i);
+            }
+         }
+         if (collapse < 0)
+            break;
+
+         REF(vk_ir_box_node) child_node =
+            REF(vk_ir_box_node)OFFSET(args.intermediate_bvh, ir_id_to_offset(children[collapse]));
+         uint32_t grandchildren[2] = DEREF(child_node).children;
+         DEREF(child_node).bvh_offset = VK_NULL_BVH_OFFSET;
+
+         if (grandchildren[0] == VK_BVH_INVALID_NODE) {
+            grandchildren[0] = grandchildren[1];
+            grandchildren[1] = VK_BVH_INVALID_NODE;
+         }
+         if (grandchildren[0] == VK_BVH_INVALID_NODE) {
+            children[collapse] = children[--child_count];
+         } else {
+            children[collapse] = grandchildren[0];
+            if (grandchildren[1] != VK_BVH_INVALID_NODE)
+               children[child_count++] = grandchildren[1];
+         }
+      }
+
+      uint32_t internal_count_here = 0;
+      uint32_t leaf_count_here = 0;
+      for (uint32_t i = 0; i < child_count; i++) {
+         uint32_t type = ir_id_to_type(children[i]);
+         if (type == vk_ir_node_internal || aabbs)
+            internal_count_here++;
+         if (type != vk_ir_node_internal)
+            leaf_count_here++;
+      }
+
+      uint32_t first_internal = 0;
+      if (internal_count_here > 0)
+         first_internal = atomicAdd(DEREF(args.header).dst_node_offset, internal_count_here);
+      uint32_t first_leaf = 0;
+      if (leaf_count_here > 0)
+         first_leaf = atomicAdd(DEREF(args.header).dst_leaf_node_offset, leaf_count_here);
+
+      vk_aabb child_bounds[PANVK_BVH_MAX_CHILDREN];
+      uint32_t child_desc[PANVK_BVH_MAX_CHILDREN];
+      uint32_t next_internal = 0;
+      uint32_t next_leaf = 0;
+      uint32_t direct_leaves = 0;
+      for (uint32_t i = 0; i < child_count; i++) {
+         uint32_t type = ir_id_to_type(children[i]);
+         child_bounds[i] = ir_bounds(children[i]);
+
+         if (type == vk_ir_node_internal) {
+            REF(vk_ir_box_node) child_node =
+               REF(vk_ir_box_node)OFFSET(args.intermediate_bvh, ir_id_to_offset(children[i]));
+            DEREF(child_node).bvh_offset = first_internal + next_internal;
+            child_desc[i] = PANVK_BVH_CHILD_INTERNAL | next_internal++;
+            continue;
+         }
+
+         uint32_t slot = first_leaf + next_leaf++;
+         write_leaf(children[i], slot);
+
+         if (aabbs) {
+            vk_aabb wrap_bounds[PANVK_BVH_MAX_CHILDREN];
+            uint32_t wrap_desc[PANVK_BVH_MAX_CHILDREN];
+            wrap_bounds[0] = child_bounds[i];
+            wrap_desc[0] = 0;
+            write_box(first_internal + next_internal, box_type, wrap_bounds, wrap_desc, 1, 0,
+                      args.leaf_base + slot, 1);
+            child_desc[i] = PANVK_BVH_CHILD_INTERNAL | next_internal++;
+         } else {
+            child_desc[i] = direct_leaves++;
+         }
+      }
+
+      memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
+                    gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+      write_box(box_index, box_type, child_bounds, child_desc, child_count, first_internal,
+                args.leaf_base + first_leaf, direct_leaves);
+      break;
+   }
+}

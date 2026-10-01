@@ -16,6 +16,13 @@ va_compare_constant_count(const void *a, const void *b)
    return (va < vb) - (va > vb);
 }
 
+static bool
+va_src_is_register_only(bi_context *ctx, const bi_instr *I, unsigned s)
+{
+   return s < get_valhall_opcode(I->op, ctx->arch).nr_staging_srcs ||
+          bi_is_mmul(I->op);
+}
+
 uint32_t
 va_min_fau_count(struct hash_table_u64 *counts, unsigned capacity)
 {
@@ -290,7 +297,7 @@ va_lower_constant_pair(bi_context *ctx, bi_instr *I, unsigned s,
                        struct hash_table_u64 *counts, uint32_t min_fau_count)
 {
    if (!ctx->inputs->fau.promote_immediates || s >= 4 || s + 1 >= I->nr_srcs ||
-       va_src_info(I->op, s).size != VA_SIZE_64 ||
+       va_src_info(I->op, s, ctx->arch).size != VA_SIZE_64 ||
        bi_count_read_registers(I, s) != 1)
       return false;
 
@@ -344,8 +351,7 @@ va_lower_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts, 
          assert(!I->src[s].abs && "redundant .abs modifier");
 
          bool is_signed = get_valhall_opcode(I->op, ctx->arch).is_signed;
-         bool staging =
-            (s < get_valhall_opcode(I->op, ctx->arch).nr_staging_srcs);
+         bool register_only = va_src_is_register_only(ctx, I, s);
          struct va_src_info info = va_src_info(I->op, s, ctx->arch);
          const uint32_t value = va_resolve_swizzles(ctx, I, s);
 
@@ -353,7 +359,7 @@ va_lower_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts, 
          const bool move_to_fau = count >= min_fau_count;
 
          bi_index cons =
-            va_resolve_constant(&b, value, info, is_signed, staging, move_to_fau);
+            va_resolve_constant(&b, value, info, is_signed, register_only, move_to_fau);
          cons.neg ^= I->src[s].neg;
          I->src[s] = cons;
 
@@ -381,9 +387,7 @@ va_count_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts)
       if (I->src[s].type != BI_INDEX_CONSTANT)
          continue;
 
-      const bool staging =
-         (s < get_valhall_opcode(I->op, ctx->arch).nr_staging_srcs);
-      if (staging)
+      if (va_src_is_register_only(ctx, I, s))
          continue;
 
       bool is_signed = get_valhall_opcode(I->op, ctx->arch).is_signed;

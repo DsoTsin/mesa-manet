@@ -162,17 +162,24 @@ pan_mod_afbc_init_slice_layout(
 
    uint64_t hdr_surf_size_B =
       (uint64_t)surface_stride_sb * AFBC_HEADER_BYTES_PER_TILE;
+   const unsigned body_align_B =
+      MAX2(pan_afbc_body_align(PAN_ARCH, props->modifier),
+           layout_constraints ? layout_constraints->afbc_body_align_B : 0);
+   if (!util_is_power_of_two_nonzero(body_align_B))
+      return false;
+
    uint64_t body_offset_B =
-      pan_afbc_body_offset(PAN_ARCH, props->modifier, hdr_surf_size_B);
+      ALIGN_POT(hdr_surf_size_B, (uint64_t)body_align_B);
    uint64_t surf_stride_B =
       body_offset_B + ((uint64_t)surface_stride_sb * afbc_tile_payload_size_B);
 
+   if (hdr_surf_size_B > UINT32_MAX || body_offset_B > UINT32_MAX)
+      return false;
+
    slayout->afbc.header.surface_size_B = hdr_surf_size_B;
+   slayout->afbc.body_offset_B = body_offset_B;
    slayout->afbc.surface_stride_B = surf_stride_B;
    slayout->size_B = surf_stride_B * mip_extent_px.depth;
-
-   if (hdr_surf_size_B > UINT32_MAX)
-      return false;
 
    return true;
 }

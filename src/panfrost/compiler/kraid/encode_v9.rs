@@ -1146,6 +1146,7 @@ impl From<FRound> for Round {
             FRound::Down => Round::RoundDown,
             FRound::TowardsZero => Round::RoundZero,
             FRound::NearestValue => Round::RoundNa,
+            FRound::Odd => Round::RoundOdd,
         }
     }
 }
@@ -1187,6 +1188,64 @@ impl V9Instr for OpF32ToF16 {
     }
 }
 
+impl From<F8Format> for V2f16ToV2f8Variant {
+    fn from(format: F8Format) -> Self {
+        match format {
+            F8Format::E4M3 => V2f16ToV2f8Variant::E4m3,
+            F8Format::E5M2 => V2f16ToV2f8Variant::E5m2,
+        }
+    }
+}
+
+impl From<F8Format> for V2f8ToV2f16Variant {
+    fn from(format: F8Format) -> Self {
+        match format {
+            F8Format::E4M3 => V2f8ToV2f16Variant::E4m3,
+            F8Format::E5M2 => V2f8ToV2f16Variant::E5m2,
+        }
+    }
+}
+
+impl V9Instr for OpV2F16ToV2F8 {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(
+            V2f16ToV2f8::get_info(self.format, arch),
+            src_map! {
+                src0: src,
+            },
+        )
+    }
+
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(V2f16ToV2f8 {
+            variant: self.format.into(),
+            dst: op_encode_dst(self, &self.dst),
+            src0: op_encode_src(self, &self.src, e.arch),
+            saturate: self.saturate.into(),
+            round: self.round.into(),
+        })
+    }
+}
+
+impl V9Instr for OpV2F8ToV2F16 {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(
+            V2f8ToV2f16::get_info(self.format, arch),
+            src_map! {
+                src0: src,
+            },
+        )
+    }
+
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(V2f8ToV2f16 {
+            variant: self.format.into(),
+            dst: op_encode_dst(self, &self.dst),
+            src0: op_encode_src(self, &self.src, e.arch),
+        })
+    }
+}
+
 impl From<FRound> for RoundIntegerM {
     fn from(round: FRound) -> Self {
         match round {
@@ -1195,6 +1254,7 @@ impl From<FRound> for RoundIntegerM {
             FRound::Down => RoundIntegerM::RoundDown,
             FRound::TowardsZero => RoundIntegerM::RoundZero,
             FRound::NearestValue => RoundIntegerM::RoundNa,
+            FRound::Odd => panic!("Invalid integer rounding"),
         }
     }
 }
@@ -2271,6 +2331,32 @@ impl V9Instr for OpLdPka {
     }
 }
 
+impl V9Instr for OpLdTensor {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(
+            LdTensor::get_info(self.width, arch),
+            src_map! {
+                sr_src: coords,
+                src0: handle,
+            },
+        )
+    }
+
+    fn src_supports_imm32(&self, src: &Src, _arch: u8, _imm: u32) -> bool {
+        std::ptr::eq(src, &self.oob)
+    }
+
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(LdTensor {
+            variant: self.width.try_into().unwrap(),
+            message_slot_index: e.get_msg_slot_idx().unwrap(),
+            sr_dst: op_encode_sr_write(self, &self.dst),
+            sr_src: op_encode_sr_read(self, &self.coords),
+            src0: op_encode_src(self, &self.handle, e.arch),
+        })
+    }
+}
+
 impl V9Instr for OpLdTex {
     fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
         V9InstrInfo::from_isa(
@@ -2686,6 +2772,39 @@ impl V9Instr for OpLeaBuf {
     }
 }
 
+impl V9Instr for OpRtTrace {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        let variant = if self.resume {
+            RtTraceVariant::Resume
+        } else {
+            RtTraceVariant::Begin
+        };
+        V9InstrInfo::from_isa(
+            RtTrace::get_info(variant, arch),
+            src_map! {
+                sr_src: data,
+                src0: state,
+                src1: root,
+            },
+        )
+    }
+
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(RtTrace {
+            variant: if self.resume {
+                RtTraceVariant::Resume
+            } else {
+                RtTraceVariant::Begin
+            },
+            message_slot_index: e.get_msg_slot_idx().unwrap(),
+            sr_dst: op_encode_sr_write(self, &self.dst),
+            sr_src: op_encode_sr_read(self, &self.data),
+            src0: op_encode_src(self, &self.state, e.arch),
+            src1: op_encode_src(self, &self.root, e.arch),
+        })
+    }
+}
+
 impl V9Instr for OpLeaPka {
     fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
         V9InstrInfo::from_isa(
@@ -2703,6 +2822,28 @@ impl V9Instr for OpLeaPka {
             sr_dst: op_encode_sr_write(self, &self.dst),
             src0: op_encode_src(self, &self.offset, e.arch),
             src1: op_encode_src(self, &self.handle, e.arch),
+        })
+    }
+}
+
+impl V9Instr for OpLeaTensor {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(
+            LeaTensor::get_info(self.width, arch),
+            src_map! {
+                sr_src: coords,
+                src0: handle,
+            },
+        )
+    }
+
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(LeaTensor {
+            variant: self.width.try_into().unwrap(),
+            message_slot_index: e.get_msg_slot_idx().unwrap(),
+            sr_dst: op_encode_sr_write(self, &self.dst),
+            sr_src: op_encode_sr_read(self, &self.coords),
+            src0: op_encode_src(self, &self.handle, e.arch),
         })
     }
 }
@@ -3210,6 +3351,32 @@ impl V9Instr for OpShiftLop {
     }
 }
 
+impl V9Instr for OpStChecked {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(
+            StChecked::get_info(self.width, arch),
+            src_map! {
+                sr_src: data,
+                src0: addr,
+                src1: check[0],
+                src2: check[1],
+            },
+        )
+    }
+
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(StChecked {
+            variant: self.width.try_into().unwrap(),
+            access: self.access.into(),
+            message_slot_index: e.get_msg_slot_idx().unwrap(),
+            sr_src: op_encode_sr_read_swizz(self, &self.data),
+            src0: op_encode_src(self, &self.addr, e.arch),
+            src1: op_encode_src(self, &self.check[0], e.arch),
+            src2: op_encode_src(self, &self.check[1], e.arch),
+        })
+    }
+}
+
 impl V9Instr for OpStCvt {
     fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
         V9InstrInfo::from_isa(
@@ -3628,6 +3795,7 @@ macro_rules! v9_op_match_else {
             Op::LdExp($x) => $y,
             Op::LdGClk($x) => $y,
             Op::LdPka($x) => $y,
+            Op::LdTensor($x) => $y,
             Op::LdTex($x) => $y,
             Op::LdTile($x) => $y,
             Op::LdVar($x) => $y,
@@ -3637,6 +3805,7 @@ macro_rules! v9_op_match_else {
             Op::LdVarSpecial($x) => $y,
             Op::LeaBuf($x) => $y,
             Op::LeaPka($x) => $y,
+            Op::LeaTensor($x) => $y,
             Op::LeaTex($x) => $y,
             Op::Load($x) => $y,
             Op::MkVecV2I8I16($x) => $y,
@@ -3648,7 +3817,9 @@ macro_rules! v9_op_match_else {
             Op::Mux($x) => $y,
             Op::Nop($x) => $y,
             Op::PopCount($x) => $y,
+            Op::RtTrace($x) => $y,
             Op::ShiftLop($x) => $y,
+            Op::StChecked($x) => $y,
             Op::StCvt($x) => $y,
             Op::Store($x) => $y,
             Op::StTile($x) => $y,
@@ -3656,7 +3827,9 @@ macro_rules! v9_op_match_else {
             Op::TexGather($x) => $y,
             Op::TexGradient($x) => $y,
             Op::TexSingle($x) => $y,
+            Op::V2F16ToV2F8($x) => $y,
             Op::V2F32ToV2F16($x) => $y,
+            Op::V2F8ToV2F16($x) => $y,
             Op::WMask($x) => $y,
             Op::ZSEmit($x) => $y,
             _ => $z,
@@ -3688,6 +3861,10 @@ pub fn v9_op_exec_time(op: &Op, arch: u8) -> Option<u8> {
 
 pub fn v9_op_is_message(op: &Op, arch: u8) -> bool {
     v9_op_info(op, arch).is_some_and(|info| info.isa_info.is_message)
+}
+
+pub fn v9_op_src_is_reg_only(op: &Op) -> bool {
+    matches!(op, Op::MMulF16(_) | Op::MMulF32(_) | Op::MMulI32(_))
 }
 
 pub fn v9_op_src_is_staging_reg(op: &Op, src: &Src, arch: u8) -> bool {

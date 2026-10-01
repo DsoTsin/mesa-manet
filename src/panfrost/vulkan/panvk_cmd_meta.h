@@ -32,6 +32,9 @@ struct panvk_cmd_meta_compute_save_ctx {
    struct panvk_push_constant_state push_constants;
    bool cond_render_enabled;
    bool cond_render_inherited;
+#if PAN_ARCH >= 10
+   struct panvk_shader_instrumentation *shader_instr;
+#endif
 };
 
 struct panvk_cmd_meta_graphics_save_ctx {
@@ -65,9 +68,24 @@ struct panvk_cmd_meta_graphics_save_ctx {
    struct panvk_occlusion_query_state occlusion_query;
    bool cond_render_enabled;
    bool cond_render_inherited;
+#if PAN_ARCH >= 10
+   struct panvk_shader_instrumentation *shader_instr;
+#endif
 };
 
 void panvk_per_arch(cmd_meta_resolve_attachments)(
    struct panvk_cmd_buffer *cmdbuf);
+
+void panvk_per_arch(cmd_meta_compute_start)(
+   struct panvk_cmd_buffer *cmdbuf,
+   struct panvk_cmd_meta_compute_save_ctx *save_ctx);
+
+void panvk_per_arch(cmd_meta_compute_end)(
+   struct panvk_cmd_buffer *cmdbuf,
+   const struct panvk_cmd_meta_compute_save_ctx *save_ctx);
+
+void panvk_per_arch(cmd_fill_buffer_addr)(VkCommandBuffer commandBuffer,
+                                          VkDeviceAddress addr,
+                                          VkDeviceSize size, uint32_t data);
 
 #endif

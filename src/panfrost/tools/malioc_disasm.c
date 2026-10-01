@@ -24,19 +24,26 @@ static const char library_sha256[] =
 
 struct stage {
    const char *name, *chunk;
-   uint32_t model;
+   uint32_t model, backend;
 };
 
 static const struct stage stages[] = {
-   {"vertex", "CVER", 0},
-   {"fragment", "CFRA", 4},
-   {"compute", "CCOM", 5},
+   {"vertex", "CVER", 0, 0},
+   {"fragment", "CFRA", 4, 4},
+   {"compute", "CCOM", 5, 5},
+   {"ray_generation", NULL, 5313, 7},
+   {"ray_intersection", NULL, 5314, 8},
+   {"ray_anyhit", NULL, 5315, 9},
+   {"ray_closest_hit", NULL, 5316, 10},
+   {"ray_miss", NULL, 5317, 11},
+   {"callable", NULL, 5318, 12},
 };
 
 struct arguments {
    const char *input, *prefix, *entrypoint, *library, *core, *revision;
    const struct stage *stage;
-   bool no_idvs, extract_only, mbs2, raw;
+   unsigned arch;
+   bool no_idvs, extract_only, mbs2, raw, instrument;
 };
 
 struct blob {
@@ -210,7 +217,7 @@ make_parents(const char *prefix)
 }
 
 static bool
-write_file(const char *path, const void *data, size_t size, bool disassemble)
+write_file(const char *path, const void *data, size_t size, unsigned disasm_arch)
 {
    if (!path)
       return fail("out of memory creating output path");
@@ -218,7 +225,7 @@ write_file(const char *path, const void *data, size_t size, bool disassemble)
    if (!file)
       return fail("cannot create %s: %s", path, strerror(errno));
    bool ok;
-   if (disassemble) {
+   if (disasm_arch) {
       uint8_t *padded = calloc(1, size + 8);
       if (!padded) {
          fail("out of memory disassembling %s", path);
@@ -226,7 +233,7 @@ write_file(const char *path, const void *data, size_t size, bool disassemble)
          return false;
       }
       memcpy(padded, data, size);
-      disassemble_valhall(file, padded, size, false);
+      disassemble_valhall(file, padded, size, disasm_arch, false);
       free(padded);
       ok = !ferror(file);
    } else {
@@ -464,6 +471,7 @@ struct compiler {
    int (*compile)(const struct compiler_input *, struct compiler_output *);
    int (*release)(struct compiler_output *);
    void (*init_options)(void *, uint32_t, uint32_t);
+   bool (*set_option)(void *, int, int);
    int (*backend)(void *, const void *, size_t, void *, void *, int, uint8_t,
                   uint32_t, void *, void *, struct compilation_result **);
    void (*free_result)(struct compilation_result *);
@@ -544,6 +552,7 @@ open_compiler(struct compiler *compiler, const struct arguments *args)
    BIND(compile, "malioc_compile");
    BIND(release, "malioc_release_outputs");
    BIND(init_options, "cmpbe_v2_init_options");
+   BIND(set_option, "cmpbe_v2_set_option_value");
    BIND(backend, "cmpbe_v2_compile_single_shader");
    BIND(free_result, "cmpbe_v2_free_compilation_result");
 #undef BIND
@@ -616,9 +625,11 @@ compile_shader(struct compiler *compiler, const struct arguments *args,
    memcpy(source_info.data, &args->entrypoint, sizeof(args->entrypoint));
    compiler->init_options(options.data, compiler->core_id, 0);
    options.data[0x2a] = options.data[0x2b] = 1;
+   if (args->instrument && !compiler->set_option(options.data, 24, 1))
+      return fail("cannot enable dynamic counters instrumentation");
    struct compilation_result *result = NULL;
    status = compiler->backend(context.data, source->data, source->size,
-                              source_info.data, options.data, args->stage->model,
+                              source_info.data, options.data, args->stage->backend,
                               7, 1, variant, NULL, &result);
    if (!result)
       return fail("backend compilation failed with status %d, no result", status);
@@ -666,20 +677,20 @@ write_outputs(const struct arguments *args, const struct blob *mbs2,
    if (!make_parents(args->prefix))
       return false;
    char *path = output_path(args->prefix, ".mbs2.bin");
-   bool ok = write_file(path, mbs2->data, mbs2->size, false);
+   bool ok = write_file(path, mbs2->data, mbs2->size, 0);
    free(path);
    if (!ok)
       return false;
    for (uint32_t i = 0; i < binaries->count; ++i) {
       const struct shader_binary *binary = &binaries->items[i];
       path = output_path(args->prefix, ".ebin%" PRIu32 ".objc", i);
-      ok = write_file(path, binary->code, binary->size, false);
+      ok = write_file(path, binary->code, binary->size, 0);
       free(path);
       if (!ok)
          return false;
       path = output_path(args->prefix, ".ebin%" PRIu32 ".isa.txt", i);
       if (!args->extract_only)
-         ok = write_file(path, binary->code, binary->size, true);
+         ok = write_file(path, binary->code, binary->size, args->arch);
       printf("%s EBIN %" PRIu32 ": %zu bytes\n", args->stage->name, i, binary->size);
       free(path);
       if (!ok)
@@ -773,7 +784,9 @@ usage(FILE *file)
          "  --library PATH              Analyzed malioc 2026.3 r56p0 DLL\n"
          "  -c, --core NAME              Default: Mali-G610\n"
          "  --revision REV              Default: r0p0\n"
+         "  --arch N                    Valhall ISA version for disassembly (default: 10)\n"
          "  --no-idvs                   Combine vertex Position/Varying variants\n"
+         "  --instrument                Enable dynamic counters instrumentation\n"
          "  --extract-only              Skip text ISA\n"
          "  --mbs2                      Read existing MBS2; requires --stage\n"
          "  --raw                       Disassemble raw OBJC to stdout\n"
@@ -786,6 +799,7 @@ parse_arguments(int argc, char **argv, struct arguments *args)
    args->entrypoint = "main";
    args->core = "Mali-G610";
    args->revision = "r0p0";
+   args->arch = 10;
    for (int i = 1; i < argc; ++i) {
       const char *option = argv[i];
       const char **value = NULL;
@@ -809,8 +823,16 @@ parse_arguments(int argc, char **argv, struct arguments *args)
          }
          if (!args->stage)
             return fail("unsupported stage: %s", argv[i]);
+      } else if (!strcmp(option, "--arch")) {
+         if (++i == argc)
+            return fail("--arch requires a value");
+         args->arch = (unsigned)strtoul(argv[i], NULL, 10);
+         if (args->arch < 9 || args->arch > 15)
+            return fail("unsupported Valhall arch: %s", argv[i]);
       } else if (!strcmp(option, "--no-idvs"))
          args->no_idvs = true;
+      else if (!strcmp(option, "--instrument"))
+         args->instrument = true;
       else if (!strcmp(option, "--extract-only"))
          args->extract_only = true;
       else if (!strcmp(option, "--mbs2"))
@@ -875,7 +897,7 @@ run(int argc, char **argv)
          goto done;
       }
 #endif
-      disassemble_valhall(stdout, source.data, source.size, false);
+      disassemble_valhall(stdout, source.data, source.size, args.arch, false);
       status = fflush(stdout) || ferror(stdout) ? 1 : 0;
       goto done;
    }

@@ -16,6 +16,9 @@
 #include "vk_common_entrypoints.h"
 #include "vk_drm_syncobj.h"
 
+#if PAN_ARCH >= 15
+#include "panvk_ray_tracing.h"
+#endif
 #include "panvk_buffer.h"
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
@@ -500,7 +503,18 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    device->vk.shader_ops = &panvk_per_arch(device_shader_ops);
    device->vk.check_status = panvk_device_check_status;
    device->vk.get_timestamp = panvk_device_get_timestamp;
-   device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+   if (vk_sync_type_is_drm_syncobj(&physical_device->drm_syncobj_type))
+      device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+
+   const VkDeviceQueueShaderCoreControlCreateInfoARM *core_ctrl =
+      vk_find_struct_const(pCreateInfo->pNext,
+                           DEVICE_QUEUE_SHADER_CORE_CONTROL_CREATE_INFO_ARM);
+   device->shader_core_count = core_ctrl ? core_ctrl->shaderCoreCount : 0;
+#if PAN_ARCH >= 15
+   panvk_per_arch(device_init_accel_struct)(device);
+#endif
+   simple_mtx_init(&device->ray_query.lock, mtx_plain);
+   util_dynarray_init(&device->ray_query.retired, NULL);
 
    device->kmod.allocator = (struct pan_kmod_allocator){
       .zalloc = panvk_kmod_zalloc,
@@ -739,6 +753,8 @@ err_destroy_kdev:
    pan_kmod_dev_destroy(device->kmod.dev);
 
 err_finish_dev:
+   util_dynarray_fini(&device->ray_query.retired);
+   simple_mtx_destroy(&device->ray_query.lock);
    vk_device_finish(&device->vk);
 
 err_free_dev:
@@ -771,6 +787,9 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
    panvk_priv_bo_unref(device->indirect_varying_buffer);
    panvk_priv_bo_unref(device->tiler_heap);
    panvk_priv_bo_unref(device->sample_positions);
+#if PAN_ARCH >= 15
+   panvk_per_arch(device_finish_ray_query)(device);
+#endif
    panvk_device_cleanup_mempools(device);
    vk_free(&device->vk.alloc, device->dump_region_size);
    pan_kmod_vm_destroy(device->kmod.vm);
@@ -781,6 +800,8 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
       pandecode_destroy_context(device->debug.decode_ctx);
 
    pan_kmod_dev_destroy(device->kmod.dev);
+   util_dynarray_fini(&device->ray_query.retired);
+   simple_mtx_destroy(&device->ray_query.lock);
    vk_device_finish(&device->vk);
    vk_free(&device->vk.alloc, device);
 }

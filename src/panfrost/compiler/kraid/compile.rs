@@ -92,6 +92,8 @@ fn nir_opts(arch: u8, merge_wg: bool) -> nir_shader_compiler_options {
         has_udot_4x8_sat: true,
         has_sdot_4x8: true,
         has_sdot_4x8_sat: true,
+        has_sudot_4x8: true,
+        has_sudot_4x8_sat: true,
 
         divergence_analysis_options: if merge_wg {
             nir_divergence_across_subgroups
@@ -229,6 +231,7 @@ fn encode_no_psiz_variant(
 
     // Patch it out, but preserve flow
     store.op = Op::Nop(OpNop {});
+    s.write_instrumentation_counts();
 
     let bin = model.encode_shader(s);
     dynarray_append_vec(binary, bin);
@@ -312,6 +315,7 @@ pub extern "C" fn kraid_compile_nir(
 
     let stats = if !s.is_empty() {
         let mut stats = s.get_stats();
+        s.write_instrumentation_counts();
         pass!(s.lower_blend_call());
 
         let bin = model.encode_shader(&s);

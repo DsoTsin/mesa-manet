@@ -165,9 +165,10 @@ panvk_image_can_use_mod(struct panvk_image *image,
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(image->vk.base.device->physical);
    unsigned arch = pan_arch(phys_dev->kmod.dev->props.gpu_id);
-   const bool forced_linear = PANVK_DEBUG(LINEAR) ||
-                              image->vk.tiling == VK_IMAGE_TILING_LINEAR ||
-                              image->vk.image_type == VK_IMAGE_TYPE_1D;
+   const bool forced_linear =
+      PANVK_DEBUG(LINEAR) || image->vk.tiling == VK_IMAGE_TILING_LINEAR ||
+      image->vk.image_type == VK_IMAGE_TYPE_1D ||
+      (image->vk.usage & VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM);
 
    /* If the image is meant to be linear, don't bother testing the
     * other cases. */
@@ -503,6 +504,8 @@ panvk_image_init_layouts(struct panvk_image *image,
             .offset_B = explicit_info->pPlaneLayouts[plane].offset,
             .wsi_row_pitch_B = explicit_info->pPlaneLayouts[plane].rowPitch,
             .wsi_array_pitch_B = explicit_info->pPlaneLayouts[plane].arrayPitch,
+            .afbc_body_align_B =
+               panvk_android_is_gralloc_image(pCreateInfo) ? 1024 : 0,
             .strict = use_strict_import,
          };
       }

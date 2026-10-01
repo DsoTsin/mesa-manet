@@ -433,7 +433,7 @@ impl WordCopies<'_> {
     fn try_prop_to_src(&self, instr: &mut Instr, src_idx: usize) {
         let src = &instr.srcs()[src_idx];
         let src_type = instr.src_type(src);
-        let is_sr = self.model.op_src_is_staging_reg(&instr.op, src);
+        let is_sr = self.model.op_src_is_reg_only(&instr.op, src);
 
         if is_sr {
             debug_assert!(src.src_mod.is_none());
@@ -748,7 +748,7 @@ impl ByteCopies<'_> {
 
     fn try_prop_to_src(&self, instr: &mut Instr, src_idx: usize) {
         let src = &instr.srcs()[src_idx];
-        let is_sr = self.model.op_src_is_staging_reg(&instr.op, src);
+        let is_sr = self.model.op_src_is_reg_only(&instr.op, src);
         let SrcRef::SSA(src_vec) = &src.src_ref else {
             return;
         };

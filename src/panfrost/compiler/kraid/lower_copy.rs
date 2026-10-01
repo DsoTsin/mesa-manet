@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::builder::*;
+use crate::data_type::*;
 use crate::ir::*;
 use crate::ops::*;
 
@@ -198,16 +199,45 @@ fn lower_copy(b: &mut impl Builder, copy: OpCopy) {
     }
 }
 
+fn init_ld_tensor_dst(b: &mut impl Builder, op: &mut OpLdTensor) {
+    let words = op.dst.dst_ref.bytes_written() / 4;
+    let oob = std::mem::replace(&mut op.oob, SrcRef::Zero.into());
+    for w in 0..words {
+        let src = if words == 1 {
+            oob.clone()
+        } else {
+            debug_assert!(oob.swizzle == Swizzle::NONE);
+            Src::from(oob.src_ref.clone().word(w))
+        };
+        lower_copy(
+            b,
+            OpCopy {
+                dst: op.dst.clone().word(w),
+                dst_type: DataType::I32,
+                src,
+            },
+        );
+    }
+}
+
 impl Shader<'_> {
     pub fn lower_copy(&mut self) {
         let model = self.model;
-        self.map_instrs(|instr, _| match instr.op {
-            Op::Copy(op) => {
+        self.map_instrs(|mut instr, _| {
+            if let Op::LdTensor(op) = &mut instr.op {
                 let mut b = InstrBuilder::new(model);
-                lower_copy(&mut b, *op);
-                b.into_mapped()
+                init_ld_tensor_dst(&mut b, op);
+                b.push_instr(instr);
+                return b.into_mapped();
             }
-            _ => [instr].into(),
+            match instr.op {
+                Op::Copy(op) => {
+                    let mut b = InstrBuilder::new(model);
+                    lower_copy(&mut b, *op);
+                    b.into_mapped()
+                }
+                _ => [instr].into(),
+            }
         })
     }
 }

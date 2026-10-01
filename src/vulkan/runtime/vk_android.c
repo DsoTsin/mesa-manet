@@ -208,6 +208,16 @@ vk_gralloc_to_drm_explicit_layout(
    return VK_SUCCESS;
 }
 
+static struct u_gralloc_buffer_handle
+vk_android_anb_gralloc_handle(const VkNativeBufferANDROID *anb)
+{
+   return (struct u_gralloc_buffer_handle){
+      .handle = anb->handle,
+      .hal_format = anb->format,
+      .pixel_stride = anb->stride,
+   };
+}
+
 VkResult
 vk_android_import_anb_memory(struct vk_device *device,
                              struct vk_image *image,
@@ -216,7 +226,15 @@ vk_android_import_anb_memory(struct vk_device *device,
 {
    assert(anb && anb->handle && anb->handle->numFds > 0);
 
-   int dma_buf_fd = anb->handle->data[0];
+   struct u_gralloc *u_gralloc = vk_android_get_ugralloc();
+   struct u_gralloc_buffer_handle gr_handle = vk_android_anb_gralloc_handle(anb);
+   struct u_gralloc_buffer_basic_info info;
+   if (!u_gralloc || u_gralloc_get_buffer_basic_info(u_gralloc, &gr_handle, &info) != 0) {
+      mesa_loge("u_gralloc_get_buffer_basic_info failed");
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+
+   int dma_buf_fd = info.fds[0];
 
    /* Query image memory requirements for size and supported memory types */
    VkMemoryRequirements mem_reqs;
@@ -311,11 +329,8 @@ vk_android_get_anb_layout(
    const VkNativeBufferANDROID *native_buffer =
       vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
 
-   struct u_gralloc_buffer_handle gr_handle = {
-      .handle = native_buffer->handle,
-      .hal_format = native_buffer->format,
-      .pixel_stride = native_buffer->stride,
-   };
+   struct u_gralloc_buffer_handle gr_handle =
+      vk_android_anb_gralloc_handle(native_buffer);
 
    return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
                                             out_layouts, max_planes);

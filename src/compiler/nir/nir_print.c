@@ -1224,6 +1224,8 @@ nir_descriptor_type_name(nir_descriptor_type type)
       return "SSBO";
    case nir_descriptor_type_acceleration_structure:
       return "accel-struct";
+   case nir_descriptor_type_tensor_arm:
+      return "tensor";
    default:
       return "unknown";
    }

@@ -74,6 +74,9 @@ struct kbase_kmod_dev {
    /* True for the CSF flavour of kbase (arch >= 10), false for JM. */
    bool is_csf;
 
+   bool mem_alloc_ex_1_9;
+   bool mem_import_legacy;
+
    /* CSF interface information (CSF only), queried from
     * KBASE_IOCTL_CS_GET_GLB_IFACE and stored in the panthor uAPI layout
     * so CSF-generic code can consume either backend. */
@@ -261,14 +264,13 @@ kbase_dev_query_props(struct kbase_kmod_dev *kbase_dev,
     * KBASE_GPUPROP_RAW_GPU_ID holds the complete 32-bit GPU_ID register.
     * If that property is absent (older drivers), fall back to reconstructing
     * from the individual fields. */
-   uint32_t raw_gpu_id = (uint32_t)kbase_gpuprop_get(
+   uint64_t raw_gpu_id = kbase_gpuprop_get(
       buf, buf_size, KBASE_GPUPROP_RAW_GPU_ID, 0);
 
    if (raw_gpu_id) {
-      /* gpu_id as used by pan_arch(): product_id (top 16 bits) << 16 |
-       * revision (bottom 16 bits). */
-      props->gpu_id = ((uint64_t)(raw_gpu_id & 0xffff0000u)) |
-                      (uint64_t)(raw_gpu_id & 0xffffu);
+      props->gpu_id = PAN_ARCH_MAJOR(raw_gpu_id) == PAN_ID64_COMPAT
+                         ? raw_gpu_id
+                         : (uint32_t)raw_gpu_id;
    } else {
       /* Fallback: reassemble from individual props (older kbase). */
       uint32_t product_id     = (uint32_t)kbase_gpuprop_get(
@@ -321,10 +323,15 @@ kbase_dev_query_props(struct kbase_kmod_dev *kbase_dev,
    props->max_threads_per_wg = (uint32_t)kbase_gpuprop_get(
       buf, buf_size, KBASE_GPUPROP_RAW_THREAD_MAX_WORKGROUP_SIZE, 0);
 
+   props->num_threads_active_granularity = (uint32_t)kbase_gpuprop_get(
+      buf, buf_size, KBASE_GPUPROP_THREAD_NUM_ACTIVE_GRANULARITY, 0);
+
    uint32_t thread_features = (uint32_t)kbase_gpuprop_get(
       buf, buf_size, KBASE_GPUPROP_RAW_THREAD_FEATURES, 0);
-   props->max_tasks_per_core = MAX2(thread_features >> 24, 1);
-   props->num_registers_per_core = thread_features & 0xffff;
+   props->max_tasks_per_core = MAX2((uint32_t)kbase_gpuprop_get(
+      buf, buf_size, KBASE_GPUPROP_MAX_TASK_QUEUE, thread_features >> 24), 1);
+   props->num_registers_per_core = (uint32_t)kbase_gpuprop_get(
+      buf, buf_size, KBASE_GPUPROP_MAX_REGISTERS, thread_features & 0xffff);
 
    props->max_tls_instance_per_core = (uint32_t)kbase_gpuprop_get(
       buf, buf_size, KBASE_GPUPROP_TLS_ALLOC, 0);
@@ -508,10 +515,11 @@ kbase_kmod_get_flush_id(const struct pan_kmod_dev *dev)
 
 int
 kbase_kmod_csf_group_create(struct pan_kmod_dev *dev, uint32_t cs_queue_count,
-                            bool tiler_oom_handler, uint32_t *group_handle)
+                            bool tiler_oom_handler, uint32_t max_cores,
+                            uint32_t *group_handle)
 {
    STATIC_ASSERT(sizeof(union kbase_ioctl_cs_queue_group_create_1_18) == 40);
-   STATIC_ASSERT(sizeof(union kbase_ioctl_cs_queue_group_create) == 112);
+   STATIC_ASSERT(sizeof(union kbase_ioctl_cs_queue_group_create) == 120);
 
    /* Heap growth is handled by the kernel until max_chunks is reached. The
     * kernel only permits the firmware to invoke our incremental-rendering
@@ -519,6 +527,7 @@ kbase_kmod_csf_group_create(struct pan_kmod_dev *dev, uint32_t cs_queue_count,
     * the CSF exception handler and heap operations emitted by the caller. */
    const uint8_t csi_handlers = tiler_oom_handler ?
       BASE_CSF_TILER_OOM_EXCEPTION_FLAG : 0;
+   const uint8_t core_max = max_cores ? MIN2(max_cores, 64) : 64;
 
    if (pan_kmod_driver_version_at_least(&dev->driver, 1, 25)) {
       union kbase_ioctl_cs_queue_group_create req = {
@@ -531,14 +540,19 @@ kbase_kmod_csf_group_create(struct pan_kmod_dev *dev, uint32_t cs_queue_count,
                               * Pixel kbase off-slot heap-reclaim shrinker cannot
                               * empty our tiler heaps under memory pressure. */
             .tiler_max = 1,
-            .fragment_max = 64,
-            .compute_max = 64,
+            .fragment_max = core_max,
+            .compute_max = core_max,
             .csi_handlers = csi_handlers,
             .cs_fault_report_enable = 1,
          },
       };
 
-      if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE, &req) == 0) {
+      unsigned long cmd =
+         pan_kmod_driver_version_at_least(&dev->driver, 1, 36)
+            ? KBASE_IOCTL_CS_QUEUE_GROUP_CREATE
+            : KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_19;
+
+      if (ioctl(dev->fd, cmd, &req) == 0) {
          *group_handle = req.out.group_handle;
          mesa_logd("kbase: created CSF group %u with CS fault reporting",
                    *group_handle);
@@ -561,8 +575,8 @@ kbase_kmod_csf_group_create(struct pan_kmod_dev *dev, uint32_t cs_queue_count,
             .cs_min = cs_queue_count,
             .priority = 0,
             .tiler_max = 1,
-            .fragment_max = 64,
-            .compute_max = 64,
+            .fragment_max = core_max,
+            .compute_max = core_max,
             .csi_handlers = csi_handlers,
          },
       };
@@ -594,8 +608,8 @@ kbase_kmod_csf_group_create(struct pan_kmod_dev *dev, uint32_t cs_queue_count,
                               * Pixel kbase off-slot heap-reclaim shrinker cannot
                               * empty our tiler heaps under memory pressure. */
          .tiler_max = 1,
-         .fragment_max = 64,
-         .compute_max = 64,
+         .fragment_max = core_max,
+         .compute_max = core_max,
       },
    };
 
@@ -720,10 +734,11 @@ kbase_kmod_csf_group_destroy(struct pan_kmod_dev *dev, uint32_t group_handle)
                 strerror(errno));
 }
 
-void *
+bool
 kbase_kmod_csf_queue_bind(struct pan_kmod_dev *dev, uint32_t group_handle,
                           uint32_t csi_index, uint64_t ringbuf_va,
-                          uint32_t ringbuf_size)
+                          uint32_t ringbuf_size,
+                          struct kbase_kmod_csf_user_io *io)
 {
    struct kbase_ioctl_cs_queue_register reg = {
       .buffer_gpu_addr = ringbuf_va,
@@ -736,7 +751,7 @@ kbase_kmod_csf_queue_bind(struct pan_kmod_dev *dev, uint32_t group_handle,
    if (ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_REGISTER, &reg)) {
       mesa_loge("kbase: KBASE_IOCTL_CS_QUEUE_REGISTER failed: %s",
                 strerror(errno));
-      return NULL;
+      return false;
    }
 
    union kbase_ioctl_cs_queue_bind bind = {
@@ -753,16 +768,25 @@ kbase_kmod_csf_queue_bind(struct pan_kmod_dev *dev, uint32_t group_handle,
       goto err_term_queue;
    }
 
-   void *user_io = mmap(NULL, BASEP_QUEUE_NR_MMAP_USER_PAGES * 4096,
-                        PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
-                        bind.out.mmap_handle);
-   if (user_io == MAP_FAILED) {
+   uint8_t *map = mmap(NULL, BASEP_QUEUE_NR_MMAP_USER_PAGES * 4096,
+                       PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd,
+                       bind.out.mmap_handle);
+   if (map == MAP_FAILED) {
       mesa_loge("kbase: mmap of CS USER_IO pages failed: %s",
                 strerror(errno));
       goto err_term_queue;
    }
 
-   return user_io;
+   uint32_t slot = pan_kmod_driver_version_at_least(&dev->driver, 1, 35)
+                      ? 16 * csi_index
+                      : 0;
+   *io = (struct kbase_kmod_csf_user_io){
+      .map = map,
+      .doorbell = map,
+      .input = map + 4096 + slot,
+      .output = map + 2 * 4096 + slot,
+   };
+   return true;
 
 err_term_queue:
    {
@@ -771,15 +795,16 @@ err_term_queue:
       };
       ioctl(dev->fd, KBASE_IOCTL_CS_QUEUE_TERMINATE, &term);
    }
-   return NULL;
+   return false;
 }
 
 void
 kbase_kmod_csf_queue_term(struct pan_kmod_dev *dev, uint64_t ringbuf_va,
-                          void *user_io)
+                          struct kbase_kmod_csf_user_io *io)
 {
-   if (user_io)
-      munmap(user_io, BASEP_QUEUE_NR_MMAP_USER_PAGES * 4096);
+   if (io->map)
+      munmap(io->map, BASEP_QUEUE_NR_MMAP_USER_PAGES * 4096);
+   *io = (struct kbase_kmod_csf_user_io){0};
 
    struct kbase_ioctl_cs_queue_terminate term = {
       .buffer_gpu_addr = ringbuf_va,
@@ -1604,7 +1629,8 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    uint64_t import_flags =
       BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
       BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
-      BASE_MEM_IMPORT_SHARED | BASE_MEM_COHERENT_SYSTEM;
+      BASE_MEM_IMPORT_SHARED |
+      (external_import ? BASE_MEM_COHERENT_LOCAL : BASE_MEM_COHERENT_SYSTEM);
 
    if (kmod_flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED)
       import_flags |= BASE_MEM_UNCACHED_GPU;
@@ -1620,7 +1646,15 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
       },
    };
 
-   if (ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req)) {
+   int ret = -1;
+   if (!kbase_dev->mem_import_legacy) {
+      ret = ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &req);
+      kbase_dev->mem_import_legacy = ret && errno == ENOTTY;
+   }
+   if (kbase_dev->mem_import_legacy)
+      ret = ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT_LEGACY, &req);
+
+   if (ret) {
       mesa_loge("kbase: KBASE_IOCTL_MEM_IMPORT failed: %s", strerror(errno));
       goto err_close_dmabuf;
    }
@@ -1753,7 +1787,15 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev,
          },
       };
 
-      if (ioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC_EX, &req)) {
+      int ret = -1;
+      if (!kbase_dev->mem_alloc_ex_1_9) {
+         ret = ioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC_EX, &req);
+         kbase_dev->mem_alloc_ex_1_9 = ret && errno == ENOTTY;
+      }
+      if (kbase_dev->mem_alloc_ex_1_9)
+         ret = ioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC_EX_1_9, &req);
+
+      if (ret) {
          mesa_loge("kbase: KBASE_IOCTL_MEM_ALLOC_EX failed: %s",
                    strerror(errno));
          goto err_free_bo;

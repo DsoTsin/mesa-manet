@@ -71,7 +71,20 @@ struct pan_compile_inputs {
       /* Whether the backend may promote immediates into the FAU */
       bool promote_immediates;
    } fau;
+
+   bool instrument;
+   uint32_t instrument_fau;
 };
+
+#define PAN_INSTRUMENTATION_METRICS      6
+#define PAN_INSTRUMENTATION_SLOT_SIZE    (PAN_INSTRUMENTATION_METRICS * 8)
+#define PAN_INSTRUMENTATION_TABLE_STRIDE 32
+
+static inline unsigned
+pan_instrumentation_slot(mesa_shader_stage stage)
+{
+   return stage == MESA_SHADER_FRAGMENT ? 1 : 0;
+}
 
 /* Every panfrost compilation pipeline should adhere to:
  * 1. Driver-specific early lowering
@@ -544,6 +557,8 @@ struct pan_shader_info {
 
    /* True if the shader contains a shader_clock instruction. */
    bool has_shader_clk_instr;
+
+   bool instrumented;
 
    unsigned sampler_count;
    unsigned texture_count;

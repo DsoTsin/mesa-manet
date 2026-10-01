@@ -757,6 +757,11 @@ typedef struct {
       };
 
       struct {
+         enum bi_sub_a sub_a;
+         enum bi_sub_b sub_b;
+      };
+
+      struct {
          bool z;       /* ZS_EMIT */
          bool stencil; /* ZS_EMIT */
       };
@@ -811,6 +816,27 @@ static inline bool
 bi_is_staging_src(const bi_instr *I, unsigned s)
 {
    return (s == 0 || s == 4) && bi_get_opcode_props(I)->sr_read;
+}
+
+static inline bool
+bi_is_mmul(enum bi_opcode op)
+{
+   switch (op) {
+   case BI_OPCODE_MMUL_F32:
+   case BI_OPCODE_MMUL_V2F16:
+   case BI_OPCODE_MMUL_F16:
+   case BI_OPCODE_MMUL_V4S8:
+   case BI_OPCODE_MMUL_V4U8:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static inline bool
+bi_is_register_only_src(const bi_instr *I, unsigned s)
+{
+   return bi_is_staging_src(I, s) || bi_is_mmul(I->op);
 }
 
 static inline bool

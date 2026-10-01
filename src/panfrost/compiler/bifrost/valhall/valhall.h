@@ -177,6 +177,13 @@ va_op_dest_modifier_does_convert(enum bi_opcode op)
    }
 }
 
+static inline bool
+va_op_dest_selects_half(enum bi_opcode op)
+{
+   return op == BI_OPCODE_V2F16_TO_V2F8_E4M3 ||
+          op == BI_OPCODE_V2F16_TO_V2F8_E5M2;
+}
+
 enum va_shader_output {
    /* Output position data */
    VA_SHADER_OUTPUT_POSITION,

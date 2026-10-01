@@ -134,7 +134,7 @@ pipeline_wls_instances(const struct panlib_dgc_execution_set_entry *pipeline,
    struct pan_compute_dim local = {
       cs->local_size[0], cs->local_size[1], cs->local_size[2],
    };
-   return pan_calc_wls_instances(&local, props, NULL);
+   return pan_calc_wls_instances(&local, props, NULL, cs->work_reg_count);
 }
 
 static VkResult
@@ -204,7 +204,8 @@ prepare_job(struct panvk_device *dev, struct panvk_dgc_submit *submit,
     * application arena can remain in use by fragments while later operations
     * prepare on the compute subqueue. */
    unsigned prepare_wls_instances = prepare->info.wls_size ?
-      pan_calc_wls_instances(&prepare->cs.local_size, props, NULL) : 0;
+      pan_calc_wls_instances(&prepare->cs.local_size, props, NULL,
+                             prepare->info.work_reg_count) : 0;
    uint64_t app_tls_offset = 0;
    uint64_t app_wls_offset = ALIGN_POT(
       stack_allocation_size(tls_size, props), 4096);

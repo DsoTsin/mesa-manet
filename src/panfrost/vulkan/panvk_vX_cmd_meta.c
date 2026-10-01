@@ -8,6 +8,7 @@
 #include "panvk_cmd_meta.h"
 #include "panvk_entrypoints.h"
 #include "panvk_meta.h"
+#include "panvk_tensor.h"
 #include "panvk_tracepoints.h"
 #if PAN_ARCH >= 10
 #include "csf/panvk_instr.h"
@@ -74,9 +75,10 @@ copy_image_touches_crc(const struct panvk_image *dst_img,
 }
 #endif /* PAN_ARCH >= 10 */
 
-static void
-meta_compute_start(struct panvk_cmd_buffer *cmdbuf,
-                   struct panvk_cmd_meta_compute_save_ctx *save_ctx)
+void
+panvk_per_arch(cmd_meta_compute_start)(
+   struct panvk_cmd_buffer *cmdbuf,
+   struct panvk_cmd_meta_compute_save_ctx *save_ctx)
 {
    const struct panvk_descriptor_set *set0 =
       cmdbuf->state.compute.desc_state.sets[0];
@@ -97,6 +99,8 @@ meta_compute_start(struct panvk_cmd_buffer *cmdbuf,
    save_ctx->cs.shader = cmdbuf->state.compute.shader;
    save_ctx->cs.desc = cmdbuf->state.compute.cs.desc;
 #if PAN_ARCH >= 10
+   save_ctx->shader_instr = cmdbuf->state.shader_instr;
+   cmdbuf->state.shader_instr = NULL;
    save_ctx->cond_render_enabled = cmdbuf->state.cond_render.enabled;
    save_ctx->cond_render_inherited = cmdbuf->state.cond_render.inherited;
    cmdbuf->state.cond_render.enabled = false;
@@ -109,9 +113,10 @@ meta_compute_start(struct panvk_cmd_buffer *cmdbuf,
 #endif
 }
 
-static void
-meta_compute_end(struct panvk_cmd_buffer *cmdbuf,
-                 const struct panvk_cmd_meta_compute_save_ctx *save_ctx)
+void
+panvk_per_arch(cmd_meta_compute_end)(
+   struct panvk_cmd_buffer *cmdbuf,
+   const struct panvk_cmd_meta_compute_save_ctx *save_ctx)
 {
    struct panvk_descriptor_set *push_set0 =
       cmdbuf->state.compute.desc_state.push_sets[0];
@@ -142,6 +147,7 @@ meta_compute_end(struct panvk_cmd_buffer *cmdbuf,
    cmdbuf->state.compute.shader = save_ctx->cs.shader;
    cmdbuf->state.compute.cs.desc = save_ctx->cs.desc;
 #if PAN_ARCH >= 10
+   cmdbuf->state.shader_instr = save_ctx->shader_instr;
    cmdbuf->state.cond_render.enabled = save_ctx->cond_render_enabled;
    cmdbuf->state.cond_render.inherited = save_ctx->cond_render_inherited;
 #endif
@@ -187,6 +193,8 @@ meta_gfx_start(struct panvk_cmd_buffer *cmdbuf,
 
    cmdbuf->state.gfx.vk_meta = true;
 #if PAN_ARCH >= 10
+   save_ctx->shader_instr = cmdbuf->state.shader_instr;
+   cmdbuf->state.shader_instr = NULL;
    save_ctx->cond_render_enabled = cmdbuf->state.cond_render.enabled;
    save_ctx->cond_render_inherited = cmdbuf->state.cond_render.inherited;
    cmdbuf->state.cond_render.enabled = false;
@@ -269,6 +277,7 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
 
    cmdbuf->state.gfx.vk_meta = false;
 #if PAN_ARCH >= 10
+   cmdbuf->state.shader_instr = save_ctx->shader_instr;
    cmdbuf->state.cond_render.enabled = save_ctx->cond_render_enabled;
    cmdbuf->state.cond_render.inherited = save_ctx->cond_render_inherited;
 #endif
@@ -393,9 +402,9 @@ panvk_per_arch(CmdCopyMemoryKHR)(VkCommandBuffer commandBuffer,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct panvk_cmd_meta_compute_save_ctx save = {0};
 
-   meta_compute_start(cmdbuf, &save);
+   panvk_per_arch(cmd_meta_compute_start)(cmdbuf, &save);
    vk_meta_copy_memory(&cmdbuf->vk, &dev->meta, pCopyMemoryInfo);
-   meta_compute_end(cmdbuf, &save);
+   panvk_per_arch(cmd_meta_compute_end)(cmdbuf, &save);
 }
 
 static bool
@@ -500,7 +509,7 @@ panvk_per_arch(CmdCopyMemoryToImageKHR)(
    } else {
       struct panvk_cmd_meta_compute_save_ctx save = {0};
 
-      meta_compute_start(cmdbuf, &save);
+      panvk_per_arch(cmd_meta_compute_start)(cmdbuf, &save);
 #if PAN_ARCH >= 10
       if (copy_buffer_to_image_touches_crc(img, pCopyMemoryInfo)) {
          struct cs_builder *b =
@@ -513,7 +522,7 @@ panvk_per_arch(CmdCopyMemoryToImageKHR)(
       vk_meta_copy_memory_to_image(&cmdbuf->vk, &dev->meta,
                                    pCopyMemoryInfo, &img_props,
                                    VK_PIPELINE_BIND_POINT_COMPUTE);
-      meta_compute_end(cmdbuf, &save);
+      panvk_per_arch(cmd_meta_compute_end)(cmdbuf, &save);
    }
 }
 
@@ -529,24 +538,22 @@ panvk_per_arch(CmdCopyImageToMemoryKHR)(
       panvk_meta_copy_get_image_properties(img, false, false);
    struct panvk_cmd_meta_compute_save_ctx save = {0};
 
-   meta_compute_start(cmdbuf, &save);
+   panvk_per_arch(cmd_meta_compute_start)(cmdbuf, &save);
    vk_meta_copy_image_to_memory(&cmdbuf->vk, &dev->meta, pCopyMemoryInfo,
                                 &img_props);
-   meta_compute_end(cmdbuf, &save);
+   panvk_per_arch(cmd_meta_compute_end)(cmdbuf, &save);
 }
 
-VKAPI_ATTR void VKAPI_CALL
-panvk_per_arch(CmdFillBuffer)(VkCommandBuffer commandBuffer, VkBuffer dstBuffer,
-                              VkDeviceSize dstOffset, VkDeviceSize fillSize,
-                              uint32_t data)
+void
+panvk_per_arch(cmd_fill_buffer_addr)(VkCommandBuffer commandBuffer,
+                                     VkDeviceAddress addr, VkDeviceSize size,
+                                     uint32_t data)
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
-   VK_FROM_HANDLE(panvk_buffer, buffer, dstBuffer);
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(cmdbuf->vk.base.device->physical);
 
-   uint64_t addr = panvk_buffer_gpu_ptr(buffer, dstOffset);
-   uint64_t range = panvk_buffer_range(buffer, dstOffset, fillSize) & ~3ULL;
+   uint64_t range = size & ~3ULL;
    if (!range)
       return;
 
@@ -586,6 +593,35 @@ panvk_per_arch(CmdFillBuffer)(VkCommandBuffer commandBuffer, VkBuffer dstBuffer,
    }
 }
 
+#if PAN_ARCH >= 15
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdCopyTensorARM)(VkCommandBuffer commandBuffer,
+                                 const VkCopyTensorInfoARM *pCopyTensorInfo)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   struct panvk_cmd_meta_compute_save_ctx save = {0};
+
+   if (pCopyTensorInfo->srcTensor == pCopyTensorInfo->dstTensor)
+      return;
+
+   panvk_per_arch(cmd_meta_compute_start)(cmdbuf, &save);
+   panvk_per_arch(meta_copy_tensor)(cmdbuf, pCopyTensorInfo);
+   panvk_per_arch(cmd_meta_compute_end)(cmdbuf, &save);
+}
+#endif
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdFillBuffer)(VkCommandBuffer commandBuffer, VkBuffer dstBuffer,
+                              VkDeviceSize dstOffset, VkDeviceSize fillSize,
+                              uint32_t data)
+{
+   VK_FROM_HANDLE(panvk_buffer, buffer, dstBuffer);
+
+   panvk_per_arch(cmd_fill_buffer_addr)(
+      commandBuffer, panvk_buffer_gpu_ptr(buffer, dstOffset),
+      panvk_buffer_range(buffer, dstOffset, fillSize), data);
+}
+
 VKAPI_ATTR void VKAPI_CALL
 panvk_per_arch(CmdUpdateBuffer)(VkCommandBuffer commandBuffer,
                                 VkBuffer dstBuffer, VkDeviceSize dstOffset,
@@ -595,10 +631,10 @@ panvk_per_arch(CmdUpdateBuffer)(VkCommandBuffer commandBuffer,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct panvk_cmd_meta_compute_save_ctx save = {0};
 
-   meta_compute_start(cmdbuf, &save);
+   panvk_per_arch(cmd_meta_compute_start)(cmdbuf, &save);
    vk_meta_update_buffer(&cmdbuf->vk, &dev->meta, dstBuffer, dstOffset,
                          dataSize, pData);
-   meta_compute_end(cmdbuf, &save);
+   panvk_per_arch(cmd_meta_compute_end)(cmdbuf, &save);
 }
 
 static bool
@@ -704,7 +740,7 @@ panvk_per_arch(CmdCopyImage2)(VkCommandBuffer commandBuffer,
    } else {
       struct panvk_cmd_meta_compute_save_ctx save = {0};
 
-      meta_compute_start(cmdbuf, &save);
+      panvk_per_arch(cmd_meta_compute_start)(cmdbuf, &save);
 #if PAN_ARCH >= 10
       if (copy_image_touches_crc(dst_img, pCopyImageInfo)) {
          struct cs_builder *b =
@@ -717,7 +753,7 @@ panvk_per_arch(CmdCopyImage2)(VkCommandBuffer commandBuffer,
       vk_meta_copy_image(&cmdbuf->vk, &dev->meta, pCopyImageInfo,
                          &src_img_props, &dst_img_props,
                          VK_PIPELINE_BIND_POINT_COMPUTE);
-      meta_compute_end(cmdbuf, &save);
+      panvk_per_arch(cmd_meta_compute_end)(cmdbuf, &save);
    }
 }
 

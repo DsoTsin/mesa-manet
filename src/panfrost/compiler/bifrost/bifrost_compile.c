@@ -1962,16 +1962,24 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       bi_index a = bi_src_index(&instr->src[0]);
       bi_index b_mat = bi_src_index(&instr->src[1]);
       bi_index c = bi_src_index(&instr->src[2]);
+      const unsigned flags = nir_intrinsic_flags(instr);
+      const enum bi_sub_a sub_a = (flags & 1) ? BI_SUB_A_F1 : BI_SUB_A_F0;
+      const enum bi_sub_b sub_b = (flags & 2) ? BI_SUB_B_F1 : BI_SUB_B_F0;
 
       switch (nir_intrinsic_src_type(instr)) {
       case nir_type_float32:
-         bi_mmul_f32_to(b, dst, a, b_mat, c);
+         if (b->shader->arch >= 15)
+            bi_mmul_f32_to(b, dst, a, b_mat, c, BI_SUB_A_NONE, BI_SUB_B_NONE);
+         else
+            bi_mmul_f32_to(b, dst, a, b_mat, c, BI_SUB_A_F0, BI_SUB_B_F0);
          break;
       case nir_type_float16:
-         if (b->shader->arch >= 15)
-            bi_mmul_f32_to(b, dst, a, b_mat, c);
+         if (nir_intrinsic_dest_type(instr) == nir_type_float16)
+            bi_mmul_f16_to(b, dst, a, b_mat, c, sub_a, BI_SUB_B_NONE);
+         else if (b->shader->arch >= 15)
+            bi_mmul_f32_to(b, dst, a, b_mat, c, sub_a, sub_b);
          else
-            bi_mmul_v2f16_to(b, dst, a, b_mat, c);
+            bi_mmul_v2f16_to(b, dst, a, b_mat, c, sub_a, sub_b);
          break;
       case nir_type_int8:
          bi_mmul_v4s8_to(b, dst, a, b_mat, c);
@@ -2301,6 +2309,72 @@ bi_swiz_b01(bi_index idx)
 
    idx.swizzle = swizzle;
    return idx;
+}
+
+static bool
+bi_fp8_is_e5m2(nir_op op)
+{
+   switch (op) {
+   case nir_op_f2e5m2:
+   case nir_op_f2e5m2_sat:
+   case nir_op_f2e5m2_rtz:
+   case nir_op_f2e5m2_ru:
+   case nir_op_f2e5m2_rd:
+   case nir_op_f2e5m2_sat_rtz:
+   case nir_op_f2e5m2_sat_ru:
+   case nir_op_f2e5m2_sat_rd:
+   case nir_op_f162e5m2_pan:
+   case nir_op_f162e5m2_sat_pan:
+   case nir_op_e5m22f:
+   case nir_op_e5m22f16_pan:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static bool
+bi_fp8_saturate(nir_op op)
+{
+   switch (op) {
+   case nir_op_f2e4m3fn_sat:
+   case nir_op_f2e4m3fn_sat_rtz:
+   case nir_op_f2e4m3fn_sat_ru:
+   case nir_op_f2e4m3fn_sat_rd:
+   case nir_op_f162e4m3fn_sat_pan:
+   case nir_op_f2e5m2_sat:
+   case nir_op_f2e5m2_sat_rtz:
+   case nir_op_f2e5m2_sat_ru:
+   case nir_op_f2e5m2_sat_rd:
+   case nir_op_f162e5m2_sat_pan:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static enum bi_round
+bi_fp8_round(nir_op op)
+{
+   switch (op) {
+   case nir_op_f2e4m3fn_rtz:
+   case nir_op_f2e4m3fn_sat_rtz:
+   case nir_op_f2e5m2_rtz:
+   case nir_op_f2e5m2_sat_rtz:
+      return BI_ROUND_RTZ;
+   case nir_op_f2e4m3fn_ru:
+   case nir_op_f2e4m3fn_sat_ru:
+   case nir_op_f2e5m2_ru:
+   case nir_op_f2e5m2_sat_ru:
+      return BI_ROUND_RTP;
+   case nir_op_f2e4m3fn_rd:
+   case nir_op_f2e4m3fn_sat_rd:
+   case nir_op_f2e5m2_rd:
+   case nir_op_f2e5m2_sat_rd:
+      return BI_ROUND_RTN;
+   default:
+      return BI_ROUND_NONE;
+   }
 }
 
 static enum bi_round
@@ -3105,6 +3179,64 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
    case nir_op_f2f32:
       bi_f16_to_f32_to(b, dst, s0);
       break;
+
+   case nir_op_f2e4m3fn:
+   case nir_op_f2e4m3fn_sat:
+   case nir_op_f2e4m3fn_rtz:
+   case nir_op_f2e4m3fn_ru:
+   case nir_op_f2e4m3fn_rd:
+   case nir_op_f2e4m3fn_sat_rtz:
+   case nir_op_f2e4m3fn_sat_ru:
+   case nir_op_f2e4m3fn_sat_rd:
+   case nir_op_f162e4m3fn_pan:
+   case nir_op_f162e4m3fn_sat_pan:
+   case nir_op_f2e5m2:
+   case nir_op_f2e5m2_sat:
+   case nir_op_f2e5m2_rtz:
+   case nir_op_f2e5m2_ru:
+   case nir_op_f2e5m2_rd:
+   case nir_op_f2e5m2_sat_rtz:
+   case nir_op_f2e5m2_sat_ru:
+   case nir_op_f2e5m2_sat_rd:
+   case nir_op_f162e5m2_pan:
+   case nir_op_f162e5m2_sat_pan: {
+      bi_index src = s0;
+
+      if (src_sz == 32) {
+         assert(comps == 1);
+         bi_index zero = nir_alu_instr_is_signed_zero_preserve(instr)
+                            ? bi_negzero()
+                            : bi_zero();
+         bi_instr *f16 =
+            bi_fadd_f32_to(b, bi_half(bi_temp(b->shader), false), s0, zero);
+         f16->round = BI_ROUND_RTO;
+         src = f16->dest[0];
+      }
+
+      bi_instr *I = bi_fp8_is_e5m2(instr->op)
+         ? bi_v2f16_to_v2f8_e5m2_to(b, bi_half(dst, false), src,
+                                    bi_fp8_saturate(instr->op))
+         : bi_v2f16_to_v2f8_e4m3_to(b, bi_half(dst, false), src,
+                                    bi_fp8_saturate(instr->op));
+      I->round = bi_fp8_round(instr->op);
+      break;
+   }
+
+   case nir_op_e4m3fn2f:
+   case nir_op_e5m22f:
+   case nir_op_e4m3fn2f16_pan:
+   case nir_op_e5m22f16_pan: {
+      bi_index half = sz == 32 ? bi_temp(b->shader) : dst;
+
+      if (bi_fp8_is_e5m2(instr->op))
+         bi_v2f8_to_v2f16_e5m2_to(b, half, bi_swiz_b01(s0));
+      else
+         bi_v2f8_to_v2f16_e4m3_to(b, half, bi_swiz_b01(s0));
+
+      if (sz == 32)
+         bi_f16_to_f32_to(b, dst, bi_half(half, false));
+      break;
+   }
 
    case nir_op_fquantize2f16: {
       bi_instr *f16 =

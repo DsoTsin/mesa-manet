@@ -4489,7 +4489,7 @@
     <field name="widen1" pos="26" width="2" type="widen_m" exact="none" default="none"/>
     <field name="widen0" pos="28" width="2" type="widen_m" exact="none" default="none"/>
     <field name="clamp" pos="30" width="2" type="clamp_m" default="none"/>
-    <field name="round" pos="32" width="3" type="round_extended_m" default="none" restrict="none round_up round_down round_zero"/>
+    <field name="round" pos="32" width="3" type="round_extended_m" default="none" restrict="none round_up round_down round_zero round_odd"/>
     <reserved pos="35" width="1" type="zero"/>
     <field name="neg1" pos="36" width="1" type="neg_m">
       <expression operator="if">
@@ -6765,6 +6765,212 @@
     <reserved pos="34" width="4" type="zero"/>
     <field name="neg0" pos="38" width="1" type="neg_m" default="none"/>
     <field name="abs0" pos="39" width="1" type="abs_m" default="none"/>
+    <field name="dest_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="imm_opcode" pos="49" width="4" type="R01_opcode_imm_t" exact="NON_WIDE_IMM"/>
+    <field name="dest_width" pos="53" width="2" type="dest_width_m"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="dst32_operands01"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+    <reserved pos="8" width="8" type="zero"/>
+  </instruction>
+  <instruction name="V2F16_TO_V2F8" variant="e4m3" exec_unit="cvt" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="flow"/>
+        <modifier name="round"/>
+        <modifier name="saturate"/>
+      </name>
+      <dest>
+        <modifier name="dest_width"/>
+      </dest>
+      <src name="src0">
+        <modifier name="swz0"/>
+      </src>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <field name="opcode2" pos="16" width="5" type="R1_float_opcode2_t" exact="V2F16_TO_V2F8"/>
+    <field name="opcode1" pos="21" width="4" type="R01_opcode1_t" exact="FLOAT"/>
+    <field name="saturate" pos="25" width="1" type="saturate_m" default="none"/>
+    <field name="fp8_format" pos="26" width="1" type="uint" exact="0"/>
+    <reserved pos="27" width="1" type="zero"/>
+    <field name="swz0" pos="28" width="2" type="swiz_m" default="h01"/>
+    <reserved pos="30" width="2" type="zero"/>
+    <field name="round" pos="32" width="2" type="round_m" default="none"/>
+    <reserved pos="34" width="6" type="zero"/>
+    <field name="dest_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="imm_opcode" pos="49" width="4" type="R01_opcode_imm_t" exact="NON_WIDE_IMM"/>
+    <field name="dest_width" pos="53" width="2" type="dest_width_m"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="dst32_operands01"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+    <reserved pos="8" width="8" type="zero"/>
+  </instruction>
+  <instruction name="V2F16_TO_V2F8" variant="e5m2" exec_unit="cvt" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="flow"/>
+        <modifier name="round"/>
+        <modifier name="saturate"/>
+      </name>
+      <dest>
+        <modifier name="dest_width"/>
+      </dest>
+      <src name="src0">
+        <modifier name="swz0"/>
+      </src>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <field name="opcode2" pos="16" width="5" type="R1_float_opcode2_t" exact="V2F16_TO_V2F8"/>
+    <field name="opcode1" pos="21" width="4" type="R01_opcode1_t" exact="FLOAT"/>
+    <field name="saturate" pos="25" width="1" type="saturate_m" default="none"/>
+    <field name="fp8_format" pos="26" width="1" type="uint" exact="1"/>
+    <reserved pos="27" width="1" type="zero"/>
+    <field name="swz0" pos="28" width="2" type="swiz_m" default="h01"/>
+    <reserved pos="30" width="2" type="zero"/>
+    <field name="round" pos="32" width="2" type="round_m" default="none"/>
+    <reserved pos="34" width="6" type="zero"/>
+    <field name="dest_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="imm_opcode" pos="49" width="4" type="R01_opcode_imm_t" exact="NON_WIDE_IMM"/>
+    <field name="dest_width" pos="53" width="2" type="dest_width_m"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="dst32_operands01"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+    <reserved pos="8" width="8" type="zero"/>
+  </instruction>
+  <instruction name="V2F8_TO_V2F16" variant="e4m3" exec_unit="cvt" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="flow"/>
+      </name>
+      <dest>
+        <modifier name="dest_width"/>
+      </dest>
+      <src name="src0">
+        <modifier name="swz0"/>
+      </src>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <field name="opcode2" pos="16" width="5" type="R1_float_opcode2_t" exact="V2F8_TO_V2F16"/>
+    <field name="opcode1" pos="21" width="4" type="R01_opcode1_t" exact="FLOAT"/>
+    <reserved pos="25" width="1" type="zero"/>
+    <field name="fp8_format" pos="26" width="1" type="uint" exact="0"/>
+    <reserved pos="27" width="9" type="zero"/>
+    <field name="swz0" pos="36" width="4" type="swiz8_2_full_m" default="b01"/>
+    <field name="dest_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="imm_opcode" pos="49" width="4" type="R01_opcode_imm_t" exact="NON_WIDE_IMM"/>
+    <field name="dest_width" pos="53" width="2" type="dest_width_m"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="dst32_operands01"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+    <reserved pos="8" width="8" type="zero"/>
+  </instruction>
+  <instruction name="V2F8_TO_V2F16" variant="e5m2" exec_unit="cvt" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="flow"/>
+      </name>
+      <dest>
+        <modifier name="dest_width"/>
+      </dest>
+      <src name="src0">
+        <modifier name="swz0"/>
+      </src>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <field name="opcode2" pos="16" width="5" type="R1_float_opcode2_t" exact="V2F8_TO_V2F16"/>
+    <field name="opcode1" pos="21" width="4" type="R01_opcode1_t" exact="FLOAT"/>
+    <reserved pos="25" width="1" type="zero"/>
+    <field name="fp8_format" pos="26" width="1" type="uint" exact="1"/>
+    <reserved pos="27" width="9" type="zero"/>
+    <field name="swz0" pos="36" width="4" type="swiz8_2_full_m" default="b01"/>
     <field name="dest_register_index" pos="40" width="8" type="uint" max="127"/>
     <field name="src0_hi" pos="48" width="1">
       <expression operator="slice">
@@ -22519,6 +22725,148 @@
     <field name="fau_page_index" pos="62" width="2" type="uint"/>
     <reserved pos="8" width="8" type="zero"/>
   </instruction>
+  <instruction name="RT_TRACE" variant="begin" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+      <src name="src1"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding64">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <virtual name="src1" type="SourceEncoding64">
+      <expression operator="bitwise_or">
+        <expression identifier="src1_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src1_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src1_lo" pos="8" width="8">
+      <expression operator="slice">
+        <expression identifier="src1"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <field name="rt_operation" pos="24" width="6" type="rt_operation_t" exact="begin"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count2"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write2"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="src1_hi" pos="49" width="1">
+      <expression operator="slice">
+        <expression identifier="src1"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="opcode1" pos="50" width="4" type="MW2_opcode1_t" exact="RT_TRACE"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_b_subclass_t" exact="msg_operands2"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_b"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="RT_TRACE" variant="resume" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+      <src name="src1"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding64">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <virtual name="src1" type="SourceEncoding64">
+      <expression operator="bitwise_or">
+        <expression identifier="src1_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src1_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src1_lo" pos="8" width="8">
+      <expression operator="slice">
+        <expression identifier="src1"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <field name="rt_operation" pos="24" width="6" type="rt_operation_t" exact="resume"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count6"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write2"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="src1_hi" pos="49" width="1">
+      <expression operator="slice">
+        <expression identifier="src1"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="opcode1" pos="50" width="4" type="MW2_opcode1_t" exact="RT_TRACE"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_b_subclass_t" exact="msg_operands2"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_b"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
   <instruction name="RROT" variant="i32" alias="RROT_OR" alias_variant="i32" exec_unit="sfu" since="15" until="15">
     <syntax>
       <name>
@@ -31025,6 +31373,7 @@
     <value name="LD_PKA" canonical="1" value="2"/>
     <value name="LEA_PKA" canonical="1" value="3"/>
     <value name="LEA_BUF" canonical="1" value="6"/>
+    <value name="RT_TRACE" canonical="1" value="15"/>
   </enum>
   <enum name="MW2_src02_opcode1_t" since="15" until="15">
     <value name="LD_CHECKED_IMM" canonical="1" value="0"/>
@@ -31103,6 +31452,8 @@
   <enum name="R1_float_opcode2_t" since="15" until="15">
     <value name="FLUSH_F32" canonical="1" value="0"/>
     <value name="FLUSH_V2F16" canonical="1" value="1"/>
+    <value name="V2F16_TO_V2F8" canonical="1" value="8"/>
+    <value name="V2F8_TO_V2F16" canonical="1" value="9"/>
   </enum>
   <enum name="R1_frcbrt_opcode2_t" since="15" until="15">
     <value name="FRCBRT_APPROX_A" canonical="1" value="0"/>
@@ -31869,6 +32220,10 @@
     <value name="k0f4f" canonical="1" value="29" bit_pattern="0x44000000"/>
     <value name="k0f8f" canonical="1" value="30" bit_pattern="0x48000000"/>
     <value name="k0fpif" canonical="1" value="31" bit_pattern="0x42480000"/>
+  </enum>
+  <enum name="rt_operation_t" since="15" until="15">
+    <value name="begin" canonical="1" value="0"/>
+    <value name="resume" canonical="1" value="1"/>
   </enum>
   <enum name="sr_count_t" since="15" until="15">
     <value name="count0" canonical="1" value="0"/>

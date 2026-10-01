@@ -63,8 +63,12 @@ libpanvk_files = files(
   'panvk_mempool.c',
   'panvk_nir_lower_cooperative_matrix.c',
   'panvk_nir_lower_tile_image.c',
+  'panvk_perf_counters_by_region.c',
   'panvk_physical_device.c',
   'panvk_priv_bo.c',
+  'panvk_rt_shader_group.c',
+  'panvk_shader_instrumentation.c',
+  'panvk_tensor.c',
   'panvk_utrace.c',
   'panvk_wsi.c',
 )
@@ -87,6 +91,11 @@ valhall_files = []
 fifthgen_archs = [12, 13, 14, 15]
 fifthgen_inc_dir = ['fifthgen']
 fifthgen_files = []
+
+tensor_archs = [15]
+tensor_files = [
+  'panvk_vX_tensor.c',
+]
 
 jm_archs = [6, 7]
 jm_inc_dir = ['jm']
@@ -113,6 +122,7 @@ csf_files = [
   'csf/panvk_vX_cmd_xfb.c',
   'csf/panvk_vX_cmd_query.c',
   'csf/panvk_vX_cmd_precomp.c',
+  'csf/panvk_vX_cmd_shader_instrumentation.c',
   'csf/panvk_vX_dgc.c',
   'csf/panvk_vX_dgc_submit.c',
   'csf/panvk_vX_event.c',
@@ -120,6 +130,20 @@ csf_files = [
   'csf/panvk_vX_gpu_queue.c',
   'csf/panvk_vX_instr.c',
   'csf/panvk_vX_utrace.c',
+]
+
+subdir('bvh')
+
+rt_archs = [15]
+rt_files = [
+  'panvk_vX_acceleration_structure.c',
+  'panvk_vX_nir_lower_ray_queries.c',
+  'panvk_vX_nir_rt_traversal.c',
+  'panvk_vX_nir_rt_pipeline.c',
+  'panvk_vX_rt_pipeline.c',
+  'panvk_vX_rt_pipeline_binary.c',
+  'csf/panvk_vX_cmd_ray_tracing.c',
+  panvk_bvh_spv,
 ]
 
 common_per_arch_files = [
@@ -161,6 +185,14 @@ foreach arch : [6, 7, 10, 11, 12, 13, 14, 15]
   elif arch in fifthgen_archs
     inc_panvk_per_arch += fifthgen_inc_dir
     per_arch_files += fifthgen_files
+  endif
+
+  if arch in tensor_archs
+    per_arch_files += tensor_files
+  endif
+
+  if arch in rt_archs
+    per_arch_files += rt_files
   endif
 
   if arch in jm_archs

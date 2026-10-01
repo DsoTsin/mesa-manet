@@ -286,8 +286,7 @@ get_afbc_att_mem_props(struct pan_image_plane_ref pref, unsigned mip_level,
                                 : plane->layout.array_stride_B;
 
    *row_stride = slayout->afbc.header.row_stride_B;
-   *body_offset = pan_afbc_body_offset(PAN_ARCH, image->props.modifier,
-                                       slayout->afbc.header.surface_size_B);
+   *body_offset = slayout->afbc.body_offset_B;
    *header = plane->base + slayout->offset_B + (stride_B * layer_or_z_slice);
 }
 
@@ -798,8 +797,7 @@ GENX(pan_emit_afbc_color_attachment)(const struct pan_attachment_info *att,
          &plane->layout.slices[iview->first_level];
 
       cfg.body_size = slayout->afbc.surface_stride_B -
-                      pan_afbc_body_offset(PAN_ARCH, image->props.modifier,
-                                           slayout->afbc.header.surface_size_B);
+                      slayout->afbc.body_offset_B;
       cfg.chunk_size = 9;
       cfg.sparse = true;
 #endif
