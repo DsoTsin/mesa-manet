@@ -545,9 +545,15 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
          "INVALID",
       };
 
-      fprintf(fp, "FLUSH_CACHE2.%s_l2.%s_lsc.%s%s r%u, #%x, #%u",
+      fprintf(fp, "FLUSH_CACHE2.%s_l2.%s_lsc.%s",
               mode[I.l2_flush_mode], mode[I.lsc_flush_mode],
-              other_mode[I.other_flush_mode], defer_mode_str(I),
+              other_mode[I.other_flush_mode]);
+#if PAN_ARCH >= 15
+      fprintf(fp, "%s", I.neural_flush_mode == MALI_CS_NEURAL_FLUSH_MODE_INVALIDATE
+                          ? ".invalidate_neural"
+                          : ".nop_neural");
+#endif
+      fprintf(fp, "%s r%u, #%x, #%u", defer_mode_str(I),
               I.latest_flush_id, I.wait_mask, I.signal_slot);
       break;
    }

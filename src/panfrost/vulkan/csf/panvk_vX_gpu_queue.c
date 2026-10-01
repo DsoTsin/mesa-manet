@@ -635,14 +635,12 @@ kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
    }
 
    if (stream_size) {
-      /* Make CPU-written command-stream/descriptor memory visible to the
-       * GPU before calling into it (0x233 flush, same as the panthor
-       * kernel: clean+invalidate L2/LSC, invalidate other caches). */
       cs_move32_to(&b, val32, flush_id);
-      cs_flush_caches(&b, MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE,
-                      MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE,
-                      MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, val32,
-                      cs_defer(0, SB_ID(IMM_FLUSH)));
+      cs_flush_caches_with_neural(
+         &b, MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE,
+         MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE,
+         MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, PAN_ARCH >= 15, val32,
+         cs_defer(0, SB_ID(IMM_FLUSH)));
       cs_wait_slot(&b, SB_ID(IMM_FLUSH));
 
       cs_move64_to(&b, addr64, stream_addr);
@@ -671,6 +669,14 @@ kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
     * cannot be clobbered while the deferred operation is in flight. */
    cs_move64_to(&b, addr64, seqno_addr);
    cs_wait_slots(&b, dev->csf.sb.all_mask);
+#if PAN_ARCH >= 15
+   cs_move32_to(&b, val32, 0);
+   cs_flush_caches_with_neural(
+      &b, MALI_CS_FLUSH_MODE_CLEAN, MALI_CS_FLUSH_MODE_CLEAN,
+      MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, true, val32,
+      cs_defer(0, SB_ID(IMM_FLUSH)));
+   cs_wait_slot(&b, SB_ID(IMM_FLUSH));
+#endif
    if (PANVK_DEBUG(KBASE_DIAG)) {
       cs_move64_to(&b, val64, KBASE_SEQNO_MARK_POST_WAIT | target_seqno);
       cs_store64(&b, val64, addr64, KBASE_SEQNO_MARK_POST_WAIT_OFFSET);

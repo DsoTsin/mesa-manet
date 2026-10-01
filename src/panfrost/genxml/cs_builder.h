@@ -1569,13 +1569,14 @@ cs_run_idvs2(struct cs_builder *b, uint32_t flags_override, bool malloc_enable,
 
    cs_emit(b, RUN_IDVS2, I) {
       I.flags_override = flags_override;
-      I.malloc_enable = malloc_enable;
+      I.malloc_enable = malloc_enable ? MALI_CS_MEMORY_ALLOCATION_ENABLE_MALLOC
+                                      : MALI_CS_MEMORY_ALLOCATION_ENABLE_NO_MALLOC;
       I.vertex_shading_mode = vertex_shading_mode;
 
       if (draw_id.type == CS_INDEX_UNDEF) {
-         I.draw_id_register_enable = false;
+         I.draw_id_register_enable = MALI_CS_DRAW_ID_REGISTER_ENABLE_NO_DRAWID;
       } else {
-         I.draw_id_register_enable = true;
+         I.draw_id_register_enable = MALI_CS_DRAW_ID_REGISTER_ENABLE_DRAWID;
          I.draw_id = cs_src32(b, draw_id);
       }
    }
@@ -2290,18 +2291,35 @@ cs_req_res(struct cs_builder *b, uint32_t res_mask)
 }
 
 static inline void
+cs_flush_caches_with_neural(struct cs_builder *b, enum mali_cs_flush_mode l2,
+                           enum mali_cs_flush_mode lsc,
+                           enum mali_cs_other_flush_mode others, bool neural,
+                           struct cs_index flush_id, struct cs_async_op async)
+{
+#if PAN_ARCH < 15
+   assert(!neural);
+#endif
+
+   cs_emit(b, FLUSH_CACHE2, I) {
+      I.l2_flush_mode = l2;
+      I.lsc_flush_mode = lsc;
+      I.other_flush_mode = others;
+#if PAN_ARCH >= 15
+      I.neural_flush_mode = neural ? MALI_CS_NEURAL_FLUSH_MODE_INVALIDATE
+                                   : MALI_CS_NEURAL_FLUSH_MODE_NONE;
+#endif
+      I.latest_flush_id = cs_src32(b, flush_id);
+      cs_apply_async(I, async);
+   }
+}
+
+static inline void
 cs_flush_caches(struct cs_builder *b, enum mali_cs_flush_mode l2,
                 enum mali_cs_flush_mode lsc,
                 enum mali_cs_other_flush_mode others, struct cs_index flush_id,
                 struct cs_async_op async)
 {
-   cs_emit(b, FLUSH_CACHE2, I) {
-      I.l2_flush_mode = l2;
-      I.lsc_flush_mode = lsc;
-      I.other_flush_mode = others;
-      I.latest_flush_id = cs_src32(b, flush_id);
-      cs_apply_async(I, async);
-   }
+   cs_flush_caches_with_neural(b, l2, lsc, others, false, flush_id, async);
 }
 
 #define CS_SYNC_OPS(__cnt_width)                                               \

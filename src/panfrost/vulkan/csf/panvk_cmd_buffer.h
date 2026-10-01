@@ -252,6 +252,7 @@ struct panvk_cache_flush_info {
    enum mali_cs_flush_mode l2;
    enum mali_cs_flush_mode lsc;
    enum mali_cs_other_flush_mode others;
+   bool neural;
 };
 
 /* Execute CRC state updates on a destination subqueue when possible.
@@ -761,7 +762,8 @@ panvk_cache_flush_is_nop(const struct panvk_cache_flush_info *cache_flush)
 {
    return cache_flush->l2 == MALI_CS_FLUSH_MODE_NONE &&
           cache_flush->lsc == MALI_CS_FLUSH_MODE_NONE &&
-          cache_flush->others == MALI_CS_OTHER_FLUSH_MODE_NONE;
+          cache_flush->others == MALI_CS_OTHER_FLUSH_MODE_NONE &&
+          !cache_flush->neural;
 }
 
 extern const struct vk_command_buffer_ops panvk_per_arch(cmd_buffer_ops);

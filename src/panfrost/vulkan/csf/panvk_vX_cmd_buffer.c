@@ -428,12 +428,12 @@ add_memory_dependency(struct panvk_cache_flush_info *cache_flush,
       VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
       VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-      VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+      VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT |
+      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 
    /* visibility op */
    if (dst_access & ro_l1_access)
       cache_flush->others |= MALI_CS_OTHER_FLUSH_MODE_INVALIDATE;
-
 
    /* host-to-device domain op */
    if (src_access & VK_ACCESS_2_HOST_WRITE_BIT) {
@@ -959,8 +959,10 @@ emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
          panvk_per_arch(panvk_instr_begin_work)(
             i, cmdbuf, PANVK_INSTR_WORK_TYPE_FLUSH_CACHE);
          cs_move32_to(b, flush_id, 0);
-         cs_flush_caches(b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
-                         flush_id, cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+         cs_flush_caches_with_neural(
+            b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
+            cache_flush.neural, flush_id,
+            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
          cs_wait_slot(b, SB_ID(IMM_FLUSH));
          struct panvk_instr_end_args instr_info_flush = {
             .flush_cache = {

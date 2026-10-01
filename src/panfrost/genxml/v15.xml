@@ -512,6 +512,11 @@
     <value name="Invalidate" value="2"/>
   </enum>
 
+  <enum name="CS Neural Flush Mode">
+    <value name="None" value="0"/>
+    <value name="Invalidate" value="1"/>
+  </enum>
+
   <enum name="CS Sync Scope">
     <value name="System" value="0"/>
     <value name="CSG" value="2"/>
@@ -948,6 +953,7 @@
     <field name="L2 Flush Mode" size="4" start="0" type="CS Flush Mode"/>
     <field name="LSC Flush Mode" size="4" start="4" type="CS Flush Mode"/>
     <field name="Other Flush Mode" size="4" start="8" type="CS Other Flush Mode"/>
+    <field name="Neural Flush Mode" size="1" start="15" type="CS Neural Flush Mode" default="None"/>
     <field name="Wait Mask" size="16" start="16" type="hex"/>
     <field name="Latest Flush ID" size="8" start="40" type="uint"/>
     <field name="Signal slot" size="4" start="48" type="uint"/>
