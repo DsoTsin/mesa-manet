@@ -1596,27 +1596,23 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 
    if (u_trace_submission_data) {
       mtx_lock(&queue->device->kgsl_profiling_mutex);
-      tu_suballoc_bo_alloc(&u_trace_submission_data->kgsl_timestamp_bo,
-                           &queue->device->kgsl_profiling_suballoc,
-                           sizeof(struct kgsl_cmdbatch_profiling_buffer), 4);
+      result =
+         tu_suballoc_bo_alloc(&u_trace_submission_data->kgsl_timestamp_bo, &queue->device->kgsl_profiling_suballoc,
+                              sizeof(struct kgsl_cmdbatch_profiling_buffer), 4);
       mtx_unlock(&queue->device->kgsl_profiling_mutex);
+      if (result != VK_SUCCESS) {
+         kgsl_syncobj_destroy(&wait_sync);
+         return result;
+      }
    }
 
-   uint32_t obj_count = 0;
-   if (u_trace_submission_data)
-      obj_count++;
-
-   struct kgsl_command_object *objs = (struct kgsl_command_object *)
-      vk_alloc(&queue->device->vk.alloc, sizeof(*objs) * obj_count,
-               alignof(struct kgsl_command_object),
-               VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   struct kgsl_command_object profile_obj = { 0 };
 
    struct kgsl_cmdbatch_profiling_buffer *profiling_buffer = NULL;
-   uint32_t obj_idx = 0;
    if (u_trace_submission_data) {
       struct tu_suballoc_bo *bo = &u_trace_submission_data->kgsl_timestamp_bo;
 
-      objs[obj_idx++] = (struct kgsl_command_object) {
+      profile_obj = (struct kgsl_command_object) {
          .offset = bo->iova - bo->bo->iova,
          .gpuaddr = bo->bo->iova,
          .size = sizeof(struct kgsl_cmdbatch_profiling_buffer),
@@ -1676,11 +1672,11 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          .context_id = queue->msm_queue_id,
       };
 
-      if (obj_idx) {
+      if (profiling_buffer) {
          req.flags |= KGSL_CMDBATCH_PROFILING;
-         req.objlist = (uintptr_t) objs;
-         req.objsize = sizeof(struct kgsl_command_object);
-         req.numobjs = obj_idx;
+         req.objlist = (uintptr_t) &profile_obj;
+         req.objsize = sizeof(profile_obj);
+         req.numobjs = 1;
       }
 
       ret = safe_ioctl(queue->device->physical_device->local_fd,
