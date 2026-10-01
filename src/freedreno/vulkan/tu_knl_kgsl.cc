@@ -750,6 +750,18 @@ kgsl_syncobj_destroy(struct kgsl_syncobj *s)
    kgsl_syncobj_reset(s);
 }
 
+static VkResult
+kgsl_sync_error(struct tu_device *device, const char *operation, int error)
+{
+   VkResult result = VK_ERROR_UNKNOWN;
+   if (error == ENOMEM)
+      result = VK_ERROR_OUT_OF_HOST_MEMORY;
+   else if (error == EMFILE || error == ENFILE)
+      result = VK_ERROR_TOO_MANY_OBJECTS;
+
+   return vk_errorf(device, result, "KGSL %s failed: %s", operation, strerror(error));
+}
+
 static struct kgsl_syncobj
 kgsl_syncobj_dup(struct kgsl_syncobj *s)
 {
@@ -1086,7 +1098,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
 }
 
 static VkResult
-kgsl_syncobj_export(struct kgsl_syncobj *s, int *pFd)
+kgsl_syncobj_export(struct tu_device *device, struct kgsl_syncobj *s, int *pFd)
 {
    if (!pFd)
       return VK_SUCCESS;
@@ -1098,16 +1110,21 @@ kgsl_syncobj_export(struct kgsl_syncobj *s, int *pFd)
       *pFd = -1;
       return VK_SUCCESS;
 
-   case KGSL_SYNCOBJ_STATE_FD:
-      if (s->fd < 0)
-         *pFd = -1;
-      else
-         *pFd = os_dupfd_cloexec(s->fd);
+   case KGSL_SYNCOBJ_STATE_FD: {
+      int fd = os_dupfd_cloexec(s->fd);
+      if (fd < 0)
+         return kgsl_sync_error(device, "sync FD export", errno);
+      *pFd = fd;
       return VK_SUCCESS;
+   }
 
-   case KGSL_SYNCOBJ_STATE_TS:
-      *pFd = kgsl_syncobj_ts_to_fd(s);
+   case KGSL_SYNCOBJ_STATE_TS: {
+      int fd = kgsl_syncobj_ts_to_fd(s);
+      if (fd < 0)
+         return kgsl_sync_error(device, "timestamp fence export", errno);
+      *pFd = fd;
       return VK_SUCCESS;
+   }
 
    default:
       UNREACHABLE("Invalid syncobj state");
@@ -1326,7 +1343,7 @@ vk_kgsl_sync_export_sync_file(struct vk_device *device,
                               int *pFd)
 {
    struct vk_kgsl_syncobj *s = container_of(sync, struct vk_kgsl_syncobj, vk);
-   return kgsl_syncobj_export(&s->syncobj, pFd);
+   return kgsl_syncobj_export(container_of(device, struct tu_device, vk), &s->syncobj, pFd);
 }
 
 const struct vk_sync_type vk_kgsl_sync_type = {
