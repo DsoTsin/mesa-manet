@@ -1026,10 +1026,17 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
    if (convert_ts_to_fd || num_fds > 0)
       u_vector_init(&poll_fds, 4, sizeof(struct pollfd));
 
+   uint32_t owned_fds = 0;
+
    if (convert_ts_to_fd) {
       kgsl_syncobj_foreach_state(syncobjs, KGSL_SYNCOBJ_STATE_TS) {
          struct pollfd *poll_fd = (struct pollfd *) u_vector_add(&poll_fds);
          poll_fd->fd = timestamp_to_fd(sync->queue, sync->timestamp);
+         if (poll_fd->fd < 0) {
+            result = kgsl_sync_error(device, "timestamp fence creation", errno);
+            goto finish;
+         }
+         owned_fds++;
          poll_fd->events = POLLIN;
       }
    } else {
@@ -1042,9 +1049,14 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
          }
       }
 
-      if (num_fds) {
+      if (num_fds && queue) {
          struct pollfd *poll_fd = (struct pollfd *) u_vector_add(&poll_fds);
          poll_fd->fd = timestamp_to_fd(queue, lowest_timestamp);
+         if (poll_fd->fd < 0) {
+            result = kgsl_sync_error(device, "timestamp fence creation", errno);
+            goto finish;
+         }
+         owned_fds++;
          poll_fd->events = POLLIN;
       }
    }
@@ -1082,9 +1094,6 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
       } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
 
       const int error = errno;
-      for (uint32_t i = 0; i < fds_count - num_fds; i++)
-         close(fds[i].fd);
-
       if (ret > 0) {
          result = VK_SUCCESS;
       } else if (ret == 0) {
@@ -1095,6 +1104,9 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
       }
    }
 
+finish:
+   for (uint32_t i = 0; i < owned_fds; i++)
+      close(((struct pollfd *) poll_fds.data)[i].fd);
    u_vector_finish(&poll_fds);
    return result;
 }
