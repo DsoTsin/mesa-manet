@@ -1579,6 +1579,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    }
 
    VkResult result = VK_SUCCESS;
+   bool profiling_submitted = false;
 
    if (submit->bind_cmds.size != 0)
       kgsl_bind_finalize(submit);
@@ -1682,6 +1683,14 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
 
+      const int error = errno;
+      /* EPROTO - Device faulted since the last check. */
+      profiling_submitted = profiling_buffer && (ret == 0 || error == EPROTO);
+      if (ret) {
+         kgsl_syncobj_destroy(&wait_sync);
+         result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n", strerror(error));
+         goto fail_submit;
+      }
       timestamp = req.timestamp;
    } else {
       /* kgsl doesn't support multiple bind commands at once */
@@ -1714,9 +1723,9 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
-            result = vk_device_set_lost(&queue->device->vk,
-                                        "bind submit failed: %s\n",
-                                        strerror(errno));
+            const int error = errno;
+            kgsl_syncobj_destroy(&wait_sync);
+            result = vk_device_set_lost(&queue->device->vk, "bind submit failed: %s\n", strerror(error));
             goto fail_submit;
          }
 
@@ -1727,6 +1736,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 
 #if HAVE_PERFETTO
    if (profiling_buffer) {
+      struct tu_perfetto_clocks clocks = { 0 };
       /* We need to wait for KGSL to queue the GPU command before we can read
        * the timestamp. Since this is just for profiling and doesn't take too
        * long, we can just busy-wait for it.
@@ -1738,26 +1748,18 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          .countable = 0,
          .value = 0
       };
-
       struct kgsl_perfcounter_read req = {
          .reads = &perf,
          .count = 1,
       };
-
-      ret = safe_ioctl(queue->device->fd, IOCTL_KGSL_PERFCOUNTER_READ, &req);
-      /* Older KGSL has some kind of garbage in upper 32 bits */
-      uint64_t offseted_gpu_ts = perf.value & 0xffffffff;
-
-      gpu_offset = tu_device_ticks_to_ns(
-         queue->device, offseted_gpu_ts - profiling_buffer->gpu_ticks_queued);
-
-      struct tu_perfetto_clocks clocks = {
-         .cpu = profiling_buffer->wall_clock_ns,
-         .gpu_ts = tu_device_ticks_to_ns(queue->device,
-                                         profiling_buffer->gpu_ticks_queued),
-         .gpu_ts_offset = gpu_offset,
-      };
-
+      if (safe_ioctl(queue->device->fd, IOCTL_KGSL_PERFCOUNTER_READ, &req) == 0) {
+         /* Older KGSL has some kind of garbage in upper 32 bits */
+         uint64_t offseted_gpu_ts = perf.value & 0xffffffff;
+         gpu_offset = tu_device_ticks_to_ns(queue->device, offseted_gpu_ts - profiling_buffer->gpu_ticks_queued);
+         clocks.cpu = profiling_buffer->wall_clock_ns;
+         clocks.gpu_ts = tu_device_ticks_to_ns(queue->device, profiling_buffer->gpu_ticks_queued);
+         clocks.gpu_ts_offset = gpu_offset;
+      }
       clocks = tu_perfetto_end_submit(queue, queue->device->submit_count,
                                       start_ts, &clocks);
       gpu_offset = clocks.gpu_ts_offset;
@@ -1765,12 +1767,6 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 #endif
 
    kgsl_syncobj_destroy(&wait_sync);
-
-   if (ret) {
-      result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n",
-                                  strerror(errno));
-      goto fail_submit;
-   }
 
    p_atomic_set(&queue->fence, timestamp);
 
@@ -1792,10 +1788,11 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    }
 
 fail_submit:
-   if (result != VK_SUCCESS && u_trace_submission_data) {
+   if (result != VK_SUCCESS && u_trace_submission_data && !profiling_submitted) {
       mtx_lock(&queue->device->kgsl_profiling_mutex);
       tu_suballoc_bo_free(&queue->device->kgsl_profiling_suballoc,
                           &u_trace_submission_data->kgsl_timestamp_bo);
+      u_trace_submission_data->kgsl_timestamp_bo = {};
       mtx_unlock(&queue->device->kgsl_profiling_mutex);
    }
 
