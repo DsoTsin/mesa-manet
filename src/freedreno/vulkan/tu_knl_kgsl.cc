@@ -762,15 +762,17 @@ kgsl_sync_error(struct tu_device *device, const char *operation, int error)
    return vk_errorf(device, result, "KGSL %s failed: %s", operation, strerror(error));
 }
 
-static struct kgsl_syncobj
-kgsl_syncobj_dup(struct kgsl_syncobj *s)
+static VkResult
+kgsl_syncobj_dup(struct tu_device *device, const struct kgsl_syncobj *s, struct kgsl_syncobj *out)
 {
-   struct kgsl_syncobj dups = *s;
-   if (s->state == KGSL_SYNCOBJ_STATE_FD && s->fd >= 0) {
-      dups.fd = dup(s->fd);
-      assert(dups.fd >= 0);
+   struct kgsl_syncobj copy = *s;
+   if (s->state == KGSL_SYNCOBJ_STATE_FD) {
+      copy.fd = os_dupfd_cloexec(s->fd);
+      if (copy.fd < 0)
+         return kgsl_sync_error(device, "sync FD duplication", errno);
    }
-   return dups;
+   *out = copy;
+   return VK_SUCCESS;
 }
 
 static int
@@ -1524,8 +1526,8 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 
       wait_semaphores[wait_count] = &last_submit_sync;
 
-      struct kgsl_syncobj wait_sync =
-         kgsl_syncobj_merge(wait_semaphores, wait_count + 1);
+      struct kgsl_syncobj wait_sync = kgsl_syncobj_merge(wait_semaphores, wait_count + 1);
+      VkResult result = VK_SUCCESS;
       assert(wait_sync.state !=
              KGSL_SYNCOBJ_STATE_UNSIGNALED); // Would wait forever
 
@@ -1540,15 +1542,23 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          kgsl_syncobj_reset(signal_sync);
          *signal_sync = wait_sync;
       } else {
+         struct kgsl_syncobj copies[signal_count];
+         for (uint32_t i = 0; i < signal_count; i++) {
+            result = kgsl_syncobj_dup(queue->device, &wait_sync, &copies[i]);
+            if (result != VK_SUCCESS) {
+               for (uint32_t j = 0; j < i; j++)
+                  kgsl_syncobj_destroy(&copies[j]);
+               kgsl_syncobj_destroy(&wait_sync);
+               return result;
+            }
+         }
          for (uint32_t i = 0; i < signal_count; i++) {
             struct kgsl_syncobj *signal_sync =
                &container_of(signals[i].sync, struct vk_kgsl_syncobj, vk)
                    ->syncobj;
-
             kgsl_syncobj_reset(signal_sync);
-            *signal_sync = kgsl_syncobj_dup(&wait_sync);
+            *signal_sync = copies[i];
          }
-
          kgsl_syncobj_destroy(&wait_sync);
       }
 
