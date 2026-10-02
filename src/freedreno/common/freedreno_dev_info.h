@@ -84,7 +84,6 @@ struct fd_dev_info {
    struct {
       uint32_t RB_DBG_ECO_CNTL;
       uint32_t RB_DBG_ECO_CNTL_blit;
-      uint32_t RB_RBP_CNTL;
    } magic;
 
    struct {

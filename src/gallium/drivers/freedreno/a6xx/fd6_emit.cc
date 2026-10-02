@@ -958,11 +958,6 @@ fd6_emit_static_context_regs(struct fd_context *ctx, fd_cs &cs)
    crb.add(SP_GFX_USIZE(CHIP));
    crb.add(A6XX_TPL1_PS_ROTATION_CNTL());
 
-   /* gen8 moves magic reg programming to KMD and blocks access for UMD: */
-   if (CHIP < A8XX) {
-      crb.add(A6XX_RB_RBP_CNTL(.dword = screen->info->magic.RB_RBP_CNTL));
-   }
-
    crb.add(A6XX_SP_UNKNOWN_A9A8());
 
    crb.add(A6XX_VFD_MODE_CNTL(.vertex = true, .instance = true));
