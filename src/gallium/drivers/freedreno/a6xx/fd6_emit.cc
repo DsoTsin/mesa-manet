@@ -851,7 +851,7 @@ fd6_emit_static_non_context_regs(struct fd_context *ctx, fd_cs &cs)
 {
    struct fd_screen *screen = ctx->screen;
 
-   fd_ncrb<CHIP> ncrb(cs, 29 + ARRAY_SIZE(screen->info->magic_raw));
+   fd_ncrb<CHIP> ncrb(cs, 28 + ARRAY_SIZE(screen->info->magic_raw));
 
    if (CHIP == A7XX) {
       /* On A7XX, RB_CCU_CNTL was broken into two registers, RB_CCU_CNTL which has
@@ -899,7 +899,6 @@ fd6_emit_static_non_context_regs(struct fd_context *ctx, fd_cs &cs)
    /* gen8 moves magic reg setup to KMD and blocks access from UMD:
     */
    if (CHIP < A8XX) {
-      ncrb.add(A6XX_RB_DBG_ECO_CNTL(.dword = screen->info->magic.RB_DBG_ECO_CNTL));
       ncrb.add(A6XX_SP_NC_MODE_CNTL_2(.f16_no_inf = false));
       ncrb.add(VPC_LB_MODE_CNTL(CHIP));
       ncrb.add(PC_CONTEXT_SWITCH_GFX_PREEMPTION_MODE(CHIP));

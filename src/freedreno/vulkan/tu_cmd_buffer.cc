@@ -2315,8 +2315,6 @@ tu6_init_static_regs(struct tu_device *dev, struct tu_cs *cs)
       if (CHIP == A7XX)
          tu_cond_exec_start(cs, CP_COND_REG_EXEC_0_MODE(THREAD_MODE) |
                               CP_COND_REG_EXEC_0_BR);
-      tu_cs_emit_write_reg(cs, REG_A6XX_RB_DBG_ECO_CNTL,
-                           phys_dev->info->magic.RB_DBG_ECO_CNTL);
       if (CHIP == A7XX) {
          tu_cs_emit_regs(cs, RB_UNKNOWN_8E09(CHIP, 0x7));
          tu_cond_exec_end(cs);

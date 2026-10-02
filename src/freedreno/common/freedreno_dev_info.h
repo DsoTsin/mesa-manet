@@ -82,7 +82,7 @@ struct fd_dev_info {
    uint32_t num_slices;    /* gen8+ */
 
    struct {
-      uint32_t RB_DBG_ECO_CNTL;
+      int dummy;
    } magic;
 
    struct {
