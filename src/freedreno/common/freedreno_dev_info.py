@@ -154,7 +154,7 @@ class A6xxGPUInfo(GPUInfo):
     def __init__(self, chip, template, num_ccu,
                  tile_align_w, tile_align_h, tile_max_w, tile_max_h, num_vsc_pipes,
                  cs_shared_mem_size, wave_granularity, fibers_per_sp,
-                 magic_regs, raw_magic_regs = None, highest_bank_bit = 15,
+                 raw_magic_regs = None, highest_bank_bit = 15,
                  ubwc_swizzle = 0x6, macrotile_mode = 1,
                  threadsize_base = 64, max_waves = 16, num_slices = 0):
         if chip == CHIP.A6XX:
@@ -186,10 +186,6 @@ class A6xxGPUInfo(GPUInfo):
 
         self.props = Struct()
         self.quirks = Struct()
-        self.magic = Struct()
-
-        for name, val in magic_regs.items():
-            setattr(self.magic, name, val)
 
         raw_magic_regs_set = set()
         if raw_magic_regs:

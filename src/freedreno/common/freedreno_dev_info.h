@@ -82,10 +82,6 @@ struct fd_dev_info {
    uint32_t num_slices;    /* gen8+ */
 
    struct {
-      int dummy;
-   } magic;
-
-   struct {
          uint32_t reg;
          uint32_t value;
    } magic_raw[64];
