@@ -5809,12 +5809,16 @@ panvk_per_arch(cmd_fb_barrier)(struct panvk_cmd_buffer *cmdbuf)
       cfg.flags_0.allow_forward_pixel_to_be_killed = false;
       cfg.flags_0.primitive_barrier = true;
       cfg.flags_0.occlusion_query = MALI_OCCLUSION_MODE_DISABLED;
+#if PAN_ARCH >= 12
+      cfg.flags_0.disable_vrs_clamp_2x2 = true;
+#endif
+      cfg.flags_1.sample_mask = 0xffff;
 
       cfg.flags_2.read_mask = 0;
       cfg.flags_2.write_mask = 0;
 #if PAN_ARCH >= 11
-      cfg.flags_2.no_shader_depth_read = true;
-      cfg.flags_2.no_shader_stencil_read = true;
+      cfg.flags_2.no_shader_depth_read = false;
+      cfg.flags_2.no_shader_stencil_read = false;
 #endif
 
       cfg.depth_stencil = zsd.gpu;
