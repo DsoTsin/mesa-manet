@@ -279,7 +279,6 @@ a6xx_gen4 = GPUProps(
 
 a6xx_gen1_low_magic_regs = dict(
         RB_DBG_ECO_CNTL = 0x04100000,
-        RB_DBG_ECO_CNTL_blit = 0x04100000,
     )
 
 a6xx_gen1_low_raw_magic_regs = [
@@ -362,7 +361,6 @@ add_gpus([
         macrotile_mode = 0,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -395,7 +393,6 @@ add_gpus([
         fibers_per_sp = 128 * 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -429,7 +426,6 @@ add_gpus([
         fibers_per_sp = 128 * 2 * 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -451,7 +447,9 @@ add_gpus([
         GPUId(630),
     ], A6xxGPUInfo(
         CHIP.A6XX,
-        [a6xx_base, a6xx_gen1],
+        [a6xx_base, a6xx_gen1, GPUProps(
+            QCTDD04536579 = True,
+        )],
         num_ccu = 2,
         tile_align_w = 32,
         tile_align_h = 16,
@@ -465,7 +463,6 @@ add_gpus([
         macrotile_mode = 0,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x05100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -500,7 +497,6 @@ add_gpus([
         macrotile_mode = 0,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -535,7 +531,6 @@ add_gpus([
         macrotile_mode = 0,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -569,7 +564,6 @@ add_gpus([
         highest_bank_bit = 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -610,7 +604,6 @@ add_gpus([
         highest_bank_bit = 14,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -644,7 +637,6 @@ add_gpus([
         highest_bank_bit = 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -678,7 +670,6 @@ add_gpus([
         fibers_per_sp = 128 * 4 * 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x04100000,
-            RB_DBG_ECO_CNTL_blit = 0x04100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
@@ -713,7 +704,6 @@ add_gpus([
         highest_bank_bit = 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x100000,
-            RB_DBG_ECO_CNTL_blit = 0x00100000,  # ???
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_SP_UNKNOWN_AAF2, 0x00c00000],
@@ -766,7 +756,6 @@ add_gpus([
         # has_early_preamble = True,  # for VS/FS but not CS?
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x100000,
-            RB_DBG_ECO_CNTL_blit = 0x100000,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0xf],
@@ -919,7 +908,6 @@ a7xx_gen3 = GPUProps(
 
 a730_magic_regs = dict(
         RB_DBG_ECO_CNTL = 0x00000000,
-        RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
     )
 
 a730_raw_magic_regs = [
@@ -968,7 +956,6 @@ a730_raw_magic_regs = [
 
 a740_magic_regs = dict(
         RB_DBG_ECO_CNTL = 0x00000000,
-        RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
     )
 
 a740_raw_magic_regs = [
@@ -1233,7 +1220,6 @@ add_gpus([
         fibers_per_sp = 128 * 2 * 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x00000001,
-            RB_DBG_ECO_CNTL_blit = 0x00000001,  # is it even needed?
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_UCHE_CACHE_WAYS, 0x00000000],
@@ -1381,7 +1367,6 @@ add_gpus([
         fibers_per_sp = 128 * 2 * 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x00000001,
-            RB_DBG_ECO_CNTL_blit = 0x00000000,  # is it even needed?
         ),
         raw_magic_regs = a740_raw_magic_regs,
     ))
@@ -1406,7 +1391,6 @@ add_gpus([
         highest_bank_bit = 16,
         magic_regs = dict(
             RB_DBG_ECO_CNTL = 0x00000001,
-            RB_DBG_ECO_CNTL_blit = 0x00000001,
         ),
         raw_magic_regs = [
             [A6XXRegs.REG_A6XX_UCHE_CACHE_WAYS, 0x00000000],

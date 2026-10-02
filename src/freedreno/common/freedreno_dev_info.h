@@ -83,7 +83,6 @@ struct fd_dev_info {
 
    struct {
       uint32_t RB_DBG_ECO_CNTL;
-      uint32_t RB_DBG_ECO_CNTL_blit;
    } magic;
 
    struct {
@@ -495,6 +494,9 @@ struct fd_dev_info {
 
 #define FD_QUIRK(info, name) (info)->quirks.name
    struct {
+      /* Set RB_DBG_ECO_CNTL b24 for 2d blits
+       */
+      bool QCTDD04536579 : 1;
       /* movs performs half->full conversion if src_type is half, regardless
        * of dst_type
        */
