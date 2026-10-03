@@ -299,8 +299,8 @@ bool pan_nir_lower_divergent_scratch(nir_shader *shader, unsigned arch);
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_bi_tex_flags {
-   bool skip : 1;
-   bool explicit_lod : 1;
+   unsigned skip : 1;
+   unsigned explicit_lod : 1;
    unsigned _pad : 14;
    unsigned sampler_idx : 8;
    unsigned texture_idx : 8;
@@ -320,22 +320,22 @@ nir_intrinsic_pan_bi_tex_flags(const nir_intrinsic_instr *instr)
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_va_tex_flags {
-   bool skip : 1;
-   bool wide_indices : 1;
-   bool array_enable : 1;
-   bool texel_offset : 1;
-   bool compare_enable : 1;
+   unsigned skip : 1;
+   unsigned wide_indices : 1;
+   unsigned array_enable : 1;
+   unsigned texel_offset : 1;
+   unsigned compare_enable : 1;
    unsigned lod_mode : 3;
-   bool derivative_enable : 1;
-   bool force_delta_enable : 1;
-   bool lod_bias_disable : 1;
-   bool lod_clamp_disable : 1;
+   unsigned derivative_enable : 1;
+   unsigned force_delta_enable : 1;
+   unsigned lod_bias_disable : 1;
+   unsigned lod_clamp_disable : 1;
    /* For 1D, 2D and 3D textures, this makes the hardware read an extra q
     * coordinate and divide the other coordinates by it. For cube maps, it
     * instead makes the hardware build the cube map descriptor internally
     * from the raw direction vector.
     */
-   bool projection_enable : 1;
+   unsigned projection_enable : 1;
    unsigned _pad : 19;
 };
 PRAGMA_DIAGNOSTIC_POP
@@ -357,8 +357,8 @@ enum pan_bi_varying_name {
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_bi_var_special_flags {
-   enum pan_bi_varying_name name : 2;
-   enum pan_bi_sample_loc sample_loc : 2;
+   unsigned name : 2;
+   unsigned sample_loc : 2;
    unsigned _pad : 28;
 };
 PRAGMA_DIAGNOSTIC_POP

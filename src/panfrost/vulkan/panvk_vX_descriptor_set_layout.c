@@ -6,10 +6,8 @@
  */
 
 #include <assert.h>
-#include <fcntl.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "util/macros.h"
 #include "util/mesa-blake3.h"
@@ -26,9 +24,14 @@
 #include "genxml/gen_macros.h"
 
 #include "panvk_descriptor_set_layout.h"
+#ifdef PANVK_OFFLINE_ONLY
+#include "tools/kraidoc_context.h"
+#include "panvk_image_formats.h"
+#else
 #include "panvk_device.h"
 #include "panvk_entrypoints.h"
 #include "panvk_image.h"
+#endif
 #include "panvk_macros.h"
 #include "panvk_sampler.h"
 

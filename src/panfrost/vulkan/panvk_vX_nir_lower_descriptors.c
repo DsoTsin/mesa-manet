@@ -8,8 +8,13 @@
  * SPDX-License-Identifier: MIT
  */
 
+#ifdef PANVK_OFFLINE_ONLY
+#include "tools/kraidoc_context.h"
+#include "panvk_image_formats.h"
+#else
 #include "panvk_device.h"
 #include "panvk_image.h"
+#endif
 #include "panvk_sampler.h"
 #include "panvk_shader.h"
 

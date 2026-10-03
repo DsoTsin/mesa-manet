@@ -12,19 +12,37 @@
 
 #include "compiler/pan_compiler.h"
 
+#include "pan_compute.h"
+#ifndef PANVK_OFFLINE_ONLY
 #include "pan_desc.h"
+#endif
 #include "pan_earlyzs.h"
+
+#include "vk_shader.h"
+#include "panvk_macros.h"
 
 #include "panvk_cmd_push_constant.h"
 #include "panvk_descriptor_set.h"
-#include "panvk_macros.h"
+#ifdef PANVK_OFFLINE_ONLY
+struct panvk_priv_mem {
+   uintptr_t bo;
+   unsigned offset;
+};
+#else
 #include "panvk_mempool.h"
+#endif
 
 #include "vk_pipeline_layout.h"
 
-#include "vk_shader.h"
-
 extern const struct vk_device_shader_ops panvk_per_arch(device_shader_ops);
+
+struct panvk_device;
+
+extern const struct vk_device_shader_ops panvk_per_arch(offline_shader_ops);
+
+VkResult panvk_per_arch(compile_shader_offline)(
+   struct panvk_device *dev, struct vk_shader_compile_info *info,
+   bool enable_preamble, struct vk_shader **shader_out);
 
 #define MAX_RTS 8
 #define MAX_VS_ATTRIBS 16
@@ -581,11 +599,13 @@ panvk_shader_xfb_variant(const struct panvk_shader *shader)
    return &shader->variants[PANVK_VS_VARIANT_XFB];
 }
 
+#ifndef PANVK_OFFLINE_ONLY
 static inline uint64_t
 panvk_shader_variant_get_dev_addr(const struct panvk_shader_variant *shader)
 {
    return shader != NULL ? panvk_priv_mem_dev_addr(shader->code_mem) : 0;
 }
+#endif
 
 #define panvk_shader_foreach_variant(__shader, __var)                          \
    for (struct panvk_shader_variant *__var = (__shader)->variants;             \

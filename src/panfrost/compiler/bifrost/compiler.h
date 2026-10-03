@@ -296,27 +296,27 @@ typedef struct {
    /* modifiers, should only be set if applicable for a given instruction.
     * For *IDP.v4i8, abs plays the role of sign. For bitwise ops where
     * applicable, neg plays the role of not */
-   bool abs : 1;
-   bool neg : 1;
+   unsigned abs : 1;
+   unsigned neg : 1;
 
    /* The last use of a value, should be purged from the register cache.
     * Set by liveness analysis. */
-   bool discard : 1;
+   unsigned discard : 1;
 
    /* For a source, the swizzle. For a destination, acts a bit like a
     * write mask. Identity for the full 32-bit, H00 for only caring about
     * the lower half, other values unused. */
-   enum bi_swizzle swizzle : 5;
+   unsigned swizzle : 5;
    uint32_t offset         : 3;
-   enum bi_index_type type : 3;
+   unsigned type : 3;
 
    /* Last use of an SSA value; similar to discard, but applies to the
     * SSA analysis and does not have any HW restrictions (discard gets
     * sent to the hardware eventually. */
-   bool kill_ssa : 1;
+   unsigned kill_ssa : 1;
 
    /* Register class */
-   bool memory : 1;
+   unsigned memory : 1;
 
    /* Must be zeroed so we can hash the whole 64-bits at a time */
    unsigned padding : (32 - 16);

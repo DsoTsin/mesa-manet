@@ -265,14 +265,14 @@ enum pan_varying_section {
 
 struct pan_varying_slot {
    /* GLSL/SPIR-V location of the varying slot */
-   gl_varying_slot location : 7;
+   unsigned location : 7;
 
    /* Format of the varying slot in memory
     * (really nir_alu_type, but the compiler screams at you if you don't lie) */
    unsigned alu_type : 8;
    unsigned ncomps : 3;
 
-   enum pan_varying_section section : 2;
+   unsigned section : 2;
 
    /* Offset of the varying slot in the specified section of the varying
     * buffer.  For special VS outputs (see PAN_ATTRIB_VARYING_BITS), this is
@@ -321,7 +321,7 @@ PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_varying_layout {
    uint8_t count;
-   enum pan_varying_knowledge known;
+   uint8_t known;
    /* Size of the generic section, in bytes */
    uint16_t generic_size_B;
 

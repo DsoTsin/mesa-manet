@@ -74,7 +74,7 @@ endif
 if with_wayland_bind_display
   subdir('egl/wayland/wayland-drm')
 endif
-if with_any_vk or with_gallium_zink
+if with_any_vk or with_gallium_zink or with_kraidoc
   subdir('vulkan')
 endif
 if with_virtio_vk

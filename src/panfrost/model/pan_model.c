@@ -135,6 +135,8 @@ const struct pan_model pan_model_list[] = {
 };
 /* clang-format on */
 
+const unsigned pan_model_count = ARRAY_SIZE(pan_model_list);
+
 #undef GPU_REV
 #undef GPU_REV_NONE
 #undef GPU_REV_ALL

@@ -102,6 +102,9 @@ struct pan_model {
 
 const struct pan_model *pan_get_model(uint64_t gpu_id, uint32_t gpu_variant);
 
+extern const struct pan_model pan_model_list[];
+extern const unsigned pan_model_count;
+
 /* Conservative fallback for GPUs missing from the model table; NULL if the
  * architecture itself is unknown. */
 const struct pan_model *pan_get_fallback_model(uint64_t gpu_id);

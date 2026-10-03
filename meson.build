@@ -948,7 +948,8 @@ endif
 
 _rtti = get_option('cpp_rtti')
 
-with_panfrost_rust = (with_gallium_panfrost or with_panfrost_vk) and get_option('panfrost-rust')
+with_kraidoc = with_tools.contains('panfrost') and get_option('panfrost-rust')
+with_panfrost_rust = (with_gallium_panfrost or with_panfrost_vk or with_kraidoc) and get_option('panfrost-rust')
 
 with_gallium_rusticl = get_option('gallium-rusticl')
 if with_gallium_rusticl
@@ -1094,6 +1095,7 @@ endif
 with_gfx_compute = [
   with_any_opengl,
   with_any_vk,
+  with_kraidoc,
   with_clc,
   with_gallium_va and with_video_encode,
   with_gallium_mediafoundation and with_video_encode,
@@ -1312,6 +1314,11 @@ _attributes = [
 foreach a : cc.get_supported_function_attributes(_attributes)
   pre_args += '-DHAVE_FUNC_ATTRIBUTE_@0@'.format(a.to_upper())
 endforeach
+if cc.get_id() == 'clang-cl' and cc.compiles(
+    'struct p { char c; int i; } __attribute__((packed)); _Static_assert(sizeof(struct p) == 5, "packed struct");',
+    name : 'packed structs with clang-cl')
+  pre_args += '-DHAVE_FUNC_ATTRIBUTE_PACKED'
+endif
 if cc.has_function_attribute('visibility:hidden')
   pre_args += '-DHAVE_FUNC_ATTRIBUTE_VISIBILITY'
 endif
@@ -2115,13 +2122,20 @@ else
 endif
 
 with_spirv_tools = get_option('spirv-tools') \
-    .enable_if(with_clc, error_message : 'CLC requires SPIRV-Tools')
+    .enable_if(with_clc or with_kraidoc, error_message : 'CLC and kraidoc require SPIRV-Tools')
 
+spirv_tools_sdk = meson.get_external_property('vulkan-sdk', '')
 dep_spirv_tools = dependency(
   'SPIRV-Tools',
-  required : with_spirv_tools,
+  required : with_spirv_tools.enabled() and spirv_tools_sdk == '',
   version : '>= 2024.1',
 )
+if not dep_spirv_tools.found() and spirv_tools_sdk != ''
+  dep_spirv_tools = declare_dependency(
+    dependencies : cc.find_library('SPIRV-Tools', dirs : join_paths(spirv_tools_sdk, 'Lib')),
+    include_directories : include_directories(join_paths(spirv_tools_sdk, 'Include')),
+  )
+endif
 if dep_spirv_tools.found()
   pre_args += '-DHAVE_SPIRV_TOOLS'
 endif

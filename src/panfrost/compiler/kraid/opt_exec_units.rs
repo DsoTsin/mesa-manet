@@ -3,7 +3,7 @@
 
 use crate::data_type::NumericType;
 use crate::ir::*;
-use crate::ops::{CmpAccumOp, CmpOp, CmpResultType, LogicOp, MuxOp,
+use crate::ops::{BranchCombineOp, CmpAccumOp, CmpOp, CmpResultType, LogicOp, MuxOp,
                  OpCSel, OpFCmp, OpICmp, OpMux, OpShiftLop, ShiftOp};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -168,6 +168,82 @@ fn accum_inputs(op: &OpShiftLop) -> Option<[(&Src, &Src); 2]> {
     Some([(&op.src0, &op.src2), (&op.src2, &op.src0)])
 }
 
+fn boolean_alias(instr: &Instr, masks: &BooleanMasks) -> Option<(SSAValue, Src, bool)> {
+    if instr.flow != FlowCtrl::NONE {
+        return None;
+    }
+    let dsts = instr.dsts();
+    if dsts.len() != 1 || dsts[0].lanes != DstLanes::All {
+        return None;
+    }
+    let vec = dsts[0].dst_ref.as_ssa()?;
+    if vec.comps() != 1 || vec[0].bits() != 32 {
+        return None;
+    }
+    let (src, mut invert) = match &instr.op {
+        Op::Copy(op) if op.dst_type.total_bits() == 32 => (&op.src, false),
+        Op::ShiftLop(op) if op.dst_type == DataType::U32
+            && op.shift_op == ShiftOp::None => {
+            let (src, invert) = [(&op.src0, &op.src2), (&op.src2, &op.src0)]
+                .into_iter().find_map(|(src, constant)| {
+                    let value = constant.resolve_imm(DataType::U32)?;
+                    let invert = match (op.logic_op, value) {
+                        (LogicOp::And, 0xffffffff) | (LogicOp::Or, 0)
+                        | (LogicOp::Xor, 0) => false,
+                        (LogicOp::Xor, 0xffffffff) => true,
+                        _ => return None,
+                    };
+                    Some((src, invert ^ op.not_result))
+                })?;
+            (src, invert)
+        }
+        Op::ICmp(op) if matches!(op.src_type, DataType::S32 | DataType::U32)
+            && op.res_type == CmpResultType::M1
+            && op.accum_op == CmpAccumOp::None
+            && matches!(op.cmp_op, CmpOp::Eq | CmpOp::Ne) => {
+            let (src, invert) = [(&op.srcs[0], &op.srcs[1]), (&op.srcs[1], &op.srcs[0])]
+                .into_iter().find_map(|(src, constant)| {
+                    let value = constant.resolve_imm(DataType::U32)?;
+                    if value != 0 && value != 0xffffffff {
+                        return None;
+                    }
+                    Some((src, (op.cmp_op == CmpOp::Eq) ^ (value == 0xffffffff)))
+                })?;
+            (src, invert)
+        }
+        _ => return None,
+    };
+    if !masks.contains(src) {
+        return None;
+    }
+    let mut src = src.clone();
+    invert ^= src.src_mod == SrcMod::BNot;
+    src.src_mod = SrcMod::None;
+    Some((vec[0], src, invert))
+}
+
+fn fold_branch_condition(op: &mut crate::ops::OpBranch,
+                         aliases: &FxHashMap<SSAValue, (Src, bool)>,
+                         masks: &BooleanMasks) -> bool {
+    if op.combine_op != BranchCombineOp::None || !masks.contains(&op.cond) {
+        return false;
+    }
+    let mut progress = false;
+    if op.cond.src_mod == SrcMod::BNot {
+        op.cond.src_mod = SrcMod::None;
+        op.not = !op.not;
+        progress = true;
+    }
+    for _ in 0..aliases.len() {
+        let Some(ssa) = plain_scalar_ssa(&op.cond) else { break; };
+        let Some((src, invert)) = aliases.get(&ssa) else { break; };
+        op.cond = src.clone();
+        op.not ^= invert;
+        progress = true;
+    }
+    progress
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +322,106 @@ mod tests {
         op.not_result = false;
         op.shift_op = ShiftOp::LShift;
         assert!(accum_inputs(&op).is_none());
+    }
+
+    #[test]
+    fn branch_aliases_preserve_predicate_polarity() {
+        let mut alloc = SSAValueAllocator::default();
+        let predicate = alloc.alloc_ref(32);
+        let result = alloc.alloc_ref(32);
+        let mut masks = BooleanMasks::default();
+        masks.values.insert(predicate[0]);
+        masks.values.insert(result[0]);
+        for cmp_op in [CmpOp::Eq, CmpOp::Ne] {
+            for constant in [0_u32, u32::MAX] {
+                for reverse in [false, true] {
+                    let mut srcs = [predicate.clone().into(), constant.into()];
+                    if reverse {
+                        srcs.swap(0, 1);
+                    }
+                    let instr: Instr = OpICmp {
+                        dst: result.clone().into(), src_type: DataType::U32,
+                        res_type: CmpResultType::M1, cmp_op, srcs,
+                        accum: 0_u32.into(), accum_op: CmpAccumOp::None,
+                    }.into();
+                    let (ssa, src, invert) = boolean_alias(&instr, &masks).unwrap();
+                    let aliases = FxHashMap::from_iter([(ssa, (src, invert))]);
+                    for not in [false, true] {
+                        let mut branch = crate::ops::OpBranch {
+                            not, cond: result.clone().into(),
+                            combine_op: BranchCombineOp::None,
+                            label: LabelAllocator::default().alloc(),
+                        };
+                        assert!(fold_branch_condition(&mut branch, &aliases, &masks));
+                        assert_eq!(plain_scalar_ssa(&branch.cond), Some(predicate[0]));
+                        for value in [0_u32, u32::MAX] {
+                            let compared = cmp_op.fold_data(DataType::U32,
+                                value.into(), constant.into());
+                            assert_eq!(compared ^ not, (value != 0) ^ branch.not);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn branch_aliases_reject_nonboolean_and_partial_tests() {
+        let mut alloc = SSAValueAllocator::default();
+        let input = alloc.alloc_ref(32);
+        let output = alloc.alloc_ref(32);
+        let mut masks = BooleanMasks::default();
+        let mut instr: Instr = OpCopy {
+            dst: output.clone().into(), dst_type: DataType::I32,
+            src: Src::from(input.clone()).bnot(),
+        }.into();
+        assert!(boolean_alias(&instr, &masks).is_none());
+        masks.values.insert(input[0]);
+        masks.values.insert(output[0]);
+        let (ssa, src, invert) = boolean_alias(&instr, &masks).unwrap();
+        let aliases = FxHashMap::from_iter([(ssa, (src, invert))]);
+        for combine_op in [BranchCombineOp::H0, BranchCombineOp::H1,
+                           BranchCombineOp::And, BranchCombineOp::LowBits] {
+            let mut branch = crate::ops::OpBranch {
+                not: false, cond: output.clone().into(), combine_op,
+                label: LabelAllocator::default().alloc(),
+            };
+            assert!(!fold_branch_condition(&mut branch, &aliases, &masks));
+        }
+        instr.flow.set_end_shader();
+        assert!(boolean_alias(&instr, &masks).is_none());
+    }
+
+    #[test]
+    fn branch_negation_keeps_nan_comparison() {
+        let model = model_for_gpu_id(0xa0000000, 0).unwrap();
+        let mut alloc = SSAValueAllocator::default();
+        let predicate = alloc.alloc_ref(32);
+        let negated = alloc.alloc_ref(32);
+        let mut invert = logic(negated.clone().into(), predicate.clone().into(),
+                               0_u32.into(), LogicOp::Or);
+        invert.not_result = true;
+        let instrs = vec![OpFCmp {
+            dst: predicate.clone().into(), src_type: DataType::F32,
+            res_type: CmpResultType::M1, cmp_op: CmpOp::Lt,
+            srcs: [f32::NAN.into(), 0_f32.into()], accum: 0_u32.into(),
+            accum_op: CmpAccumOp::None,
+        }.into(), invert.into(), crate::ops::OpBranch {
+            not: true, cond: negated.into(), combine_op: BranchCombineOp::None,
+            label: LabelAllocator::default().alloc(),
+        }.into()];
+        let mut cfg: CFGBuilder<usize, BasicBlock, FxBuildHasher> = CFGBuilder::new();
+        cfg.add_node(0, BasicBlock { label: LabelAllocator::default().alloc(), instrs });
+        let mut s = Shader { model: model.as_ref(), ssa_alloc: alloc,
+            phi_alloc: Default::default(), blocks: cfg.as_cfg(false),
+            info: ShaderInfo::default(), constant_pool: None };
+        s.opt_exec_units();
+        assert_eq!(s.blocks[0].instrs.len(), 2);
+        let Op::FCmp(cmp) = &s.blocks[0].instrs[0].op else { panic!(); };
+        assert!(cmp.cmp_op == CmpOp::Lt);
+        let Op::Branch(branch) = &s.blocks[0].instrs[1].op else { panic!(); };
+        assert!(!branch.not);
+        assert_eq!(plain_scalar_ssa(&branch.cond), Some(predicate[0]));
     }
 
     #[test]
@@ -456,11 +632,18 @@ impl Shader<'_> {
         }
         let model = self.model;
         let masks = BooleanMasks::for_shader(self);
+        let aliases: FxHashMap<_, _> = self.blocks.iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instr| boolean_alias(instr, &masks))
+            .map(|(ssa, src, invert)| (ssa, (src, invert))).collect();
         let mut progress = false;
         for block in self.blocks.iter_mut() {
             let mut comparisons = FxHashMap::default();
             for instr in &mut block.instrs {
                 translate_instr(instr);
+                if let Op::Branch(op) = &mut instr.op {
+                    progress |= fold_branch_condition(op, &aliases, &masks);
+                }
                 if let Op::CSel(op) = &instr.op {
                     if let Some(ssa) = select_predicate(op) {
                         if let Some(cmp) = comparisons.get(&ssa) {

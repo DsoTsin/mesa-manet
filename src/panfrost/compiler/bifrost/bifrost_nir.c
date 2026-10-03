@@ -10,6 +10,7 @@
 #include "panfrost/compiler/pan_compiler.h"
 #include "panfrost/compiler/pan_nir.h"
 #include "util/perf/cpu_trace.h"
+#include "util/u_string.h"
 
 #include "panfrost/model/pan_model.h"
 #include "valhall/valhall.h"
@@ -395,6 +396,11 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
    /* We need to cleanup after each iteration of late algebraic
     * optimizations, since otherwise NIR can produce weird edge cases
     * (like fneg of a constant) which we don't handle */
+   if (bi_use_kraid(nir, gpu_id) &&
+       (nir->info.stage != MESA_SHADER_VERTEX ||
+        nir->info.next_stage == MESA_SHADER_FRAGMENT))
+      NIR_PASS(_, nir, nir_opt_reassociate_for_fma);
+
    bool late_algebraic = true;
    while (late_algebraic) {
       late_algebraic = false;
@@ -498,9 +504,33 @@ static bool
 bi_lower_subgroups_filter(const nir_intrinsic_instr *intr,
                           UNUSED const void *data)
 {
-   return intr->intrinsic != nir_intrinsic_shuffle_xor ||
-          intr->def.num_components != 1 || intr->def.bit_size != 32 ||
-          !nir_src_is_const(intr->src[1]);
+   if (intr->def.num_components != 1 || intr->def.bit_size != 32)
+      return true;
+
+   switch (intr->intrinsic) {
+   case nir_intrinsic_shuffle:
+      return false;
+   case nir_intrinsic_shuffle_xor:
+      return !nir_src_is_const(intr->src[1]);
+   case nir_intrinsic_shuffle_up:
+   case nir_intrinsic_shuffle_down:
+      return !nir_src_is_const(intr->src[1]) ||
+             nir_src_as_uint(intr->src[1]) > INT8_MAX;
+   default:
+      return true;
+   }
+}
+
+static bool
+bi_lower_divergent_shuffle_filter(const nir_intrinsic_instr *intr,
+                                 UNUSED const void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_shuffle)
+      return bi_lower_subgroups_filter(intr, data);
+
+   return intr->def.num_components != 1 || intr->def.bit_size != 32 ||
+          nir_def_is_divergent_at_use_block(intr->src[1].ssa,
+                                            intr->instr.block);
 }
 
 static bool
@@ -1081,7 +1111,7 @@ bifrost_postprocess_nir(nir_shader *nir,
       .lower_read_first_invocation = true,
       .lower_subgroup_masks = true,
       .lower_relative_shuffle = true,
-      .lower_shuffle = true,
+      .lower_shuffle = !bi_use_kraid(nir, gpu_id),
       .lower_quad = !bi_use_kraid(nir, gpu_id),
       .lower_quad_broadcast_dynamic = true,
       .lower_quad_vote = true,
@@ -1099,6 +1129,17 @@ bifrost_postprocess_nir(nir_shader *nir,
    /* lower_subgroups creates vars, clean them up before lower_64bit_phis */
    if (lower_subgroups_progress)
       NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+
+   if (bi_use_kraid(nir, gpu_id)) {
+      nir_divergence_analysis(nir);
+      nir_lower_subgroups_options shuffle_opts = lower_subgroup_opts;
+      shuffle_opts.filter = bi_lower_divergent_shuffle_filter;
+      shuffle_opts.lower_shuffle = true;
+      bool shuffle_progress = false;
+      NIR_PASS(shuffle_progress, nir, nir_lower_subgroups, &shuffle_opts);
+      if (shuffle_progress)
+         NIR_PASS(_, nir, nir_lower_vars_to_ssa);
+   }
 
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, bi_lower_subgroups,
             nir_metadata_control_flow, (void *) &gpu_id);
@@ -1448,12 +1489,13 @@ bifrost_dump_shader(nir_shader *nir, struct util_dynarray *binary,
    _mesa_blake3_format(blake3_str, nir->info.source_blake3);
    id = &blake3_str[0];
 
-   char path[PATH_MAX + 1] = {0};
-   snprintf(path, sizeof(path), "%s/%s.%s%s.bin", dump_dir, id,
-            _mesa_shader_stage_to_file_ext(nir->info.stage),
-            idvs_variant_suffix(idvs));
+   char *path;
+   if (asprintf(&path, "%s/%s.%s%s.bin", dump_dir, id,
+                _mesa_shader_stage_to_file_ext(nir->info.stage),
+                idvs_variant_suffix(idvs)) < 0)
+      return;
 
-   FILE *dump_stream = fopen(path, "w");
+   FILE *dump_stream = fopen(path, "wb");
 
    unsigned written = 0;
    if (dump_stream) {
@@ -1471,6 +1513,7 @@ bifrost_dump_shader(nir_shader *nir, struct util_dynarray *binary,
 
    if (dump_stream)
       fclose(dump_stream);
+   free(path);
 }
 
 static void

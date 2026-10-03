@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#ifndef PANVK_OFFLINE_ONLY
 #include "panvk_device.h"
+#endif
 #include "panvk_nir.h"
 
 #include "vk_limits.h"

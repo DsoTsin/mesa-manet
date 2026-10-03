@@ -4,14 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <err.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #include "compiler/glsl/glsl_to_nir.h"
 #include "compiler/glsl_types.h"

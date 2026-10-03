@@ -99,7 +99,7 @@ impl ALUType {
         assert!(
             base.is_base_type() || bit_size == 0 || bit_size == base.bit_size()
         );
-        Self(base.0 | bit_size)
+        Self(base.0 | (bit_size as nir_alu_type))
     }
 
     pub fn is_base_type(&self) -> bool {
@@ -107,11 +107,11 @@ impl ALUType {
     }
 
     pub fn bit_size(&self) -> u8 {
-        self.0 & (NIR_ALU_TYPE_SIZE_MASK as u8)
+        (self.0 & (NIR_ALU_TYPE_SIZE_MASK as nir_alu_type)) as u8
     }
 
     pub fn base_type(&self) -> Self {
-        Self(self.0 & (NIR_ALU_TYPE_BASE_TYPE_MASK as u8))
+        Self(self.0 & (NIR_ALU_TYPE_BASE_TYPE_MASK as nir_alu_type))
     }
 }
 
@@ -287,7 +287,7 @@ impl nir_intrinsic_instr {
         &self.srcs_as_slice()[idx]
     }
 
-    pub fn get_const_index(&self, name: u32) -> u32 {
+    pub fn get_const_index(&self, name: nir_intrinsic_index_flag) -> u32 {
         let name: usize = name.try_into().unwrap();
         let idx = self.info().index_map[name];
         assert!(idx > 0);
@@ -295,7 +295,10 @@ impl nir_intrinsic_instr {
     }
 
     /// Reads a multi-word index (`size > 1` in nir_intrinsics.py) into an array
-    pub fn get_const_index_words<const N: usize>(&self, name: u32) -> [u32; N] {
+    pub fn get_const_index_words<const N: usize>(
+        &self,
+        name: nir_intrinsic_index_flag,
+    ) -> [u32; N] {
         let name: usize = name.try_into().unwrap();
         let idx = self.info().index_map[name];
         assert!(idx > 0);
@@ -375,19 +378,19 @@ impl nir_intrinsic_instr {
     }
 
     pub fn execution_scope(&self) -> mesa_scope {
-        self.get_const_index(NIR_INTRINSIC_EXECUTION_SCOPE)
+        self.get_const_index(NIR_INTRINSIC_EXECUTION_SCOPE) as mesa_scope
     }
 
     pub fn memory_scope(&self) -> mesa_scope {
-        self.get_const_index(NIR_INTRINSIC_MEMORY_SCOPE)
+        self.get_const_index(NIR_INTRINSIC_MEMORY_SCOPE) as mesa_scope
     }
 
     pub fn memory_semantics(&self) -> nir_memory_semantics {
-        self.get_const_index(NIR_INTRINSIC_MEMORY_SEMANTICS)
+        self.get_const_index(NIR_INTRINSIC_MEMORY_SEMANTICS) as nir_memory_semantics
     }
 
     pub fn memory_modes(&self) -> nir_variable_mode {
-        self.get_const_index(NIR_INTRINSIC_MEMORY_MODES)
+        self.get_const_index(NIR_INTRINSIC_MEMORY_MODES) as nir_variable_mode
     }
 
     pub fn io_semantics(&self) -> nir_io_semantics {

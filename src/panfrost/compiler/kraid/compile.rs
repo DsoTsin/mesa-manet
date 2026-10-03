@@ -179,7 +179,7 @@ fn write_back_info(
                     NumericType::Float => nir_type_float,
                     _ => panic!("Invalid color data type"),
                 };
-                num_type | dt.bits()
+                num_type | (dt.bits() as nir_alu_type)
             };
 
             for (i, btype) in src.blend_types.iter().enumerate() {

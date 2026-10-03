@@ -92,7 +92,7 @@ impl From<ALUType> for NumericType {
     }
 }
 
-fn sample_position_from_pan(n: u32) -> SamplePosition {
+fn sample_position_from_pan(n: pan_bi_sample_loc) -> SamplePosition {
     match n {
         PAN_SAMPLE_LOC_CENTER => SamplePosition::Center,
         PAN_SAMPLE_LOC_CENTROID => SamplePosition::Centroid,
@@ -122,7 +122,7 @@ impl<'a> ShaderFromNir<'a> {
         nir: &'a nir_shader,
         inputs: &pan_compile_inputs,
     ) -> Self {
-        let fc = nir.info.float_controls_execution_mode;
+        let fc = nir.info.float_controls_execution_mode as float_controls;
         let rtz_fp16 = (fc & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP16) != 0;
         let rtz_fp32 = (fc & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP32) != 0;
         let ftz_fp32 = (fc & FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP32) != 0;
@@ -743,7 +743,7 @@ impl<'a> ShaderFromNir<'a> {
                 let src = if alu.get_src(0).bit_size() == 32 {
                     assert!(alu.def.num_components == 1);
                     let half = b.alloc_ssa(16);
-                    if alu.fp_math_ctrl() & nir_fp_preserve_signed_zero != 0 {
+                    if alu.fp_math_ctrl() & (nir_fp_preserve_signed_zero as u32) != 0 {
                         b.push_op(OpF32ToF16 {
                             dst: half.into(),
                             src: srcs(0),
@@ -1600,12 +1600,12 @@ impl<'a> ShaderFromNir<'a> {
 
         let flags: pan_va_tex_flags =
             unsafe { std::mem::transmute(tex.backend_flags) };
-        let skip = flags.skip();
-        let wide_indices = flags.wide_indices();
-        let array_enable = flags.array_enable();
-        let texel_offset = flags.texel_offset();
-        let compare_enable = flags.compare_enable();
-        let projection_enable = flags.projection_enable();
+        let skip = flags.skip() != 0;
+        let wide_indices = flags.wide_indices() != 0;
+        let array_enable = flags.array_enable() != 0;
+        let texel_offset = flags.texel_offset() != 0;
+        let compare_enable = flags.compare_enable() != 0;
+        let projection_enable = flags.projection_enable() != 0;
 
         let dim = match tex.sampler_dim.into() {
             GLSL_SAMPLER_DIM_1D | GLSL_SAMPLER_DIM_BUF => TexDim::Tex1D,
@@ -1619,7 +1619,7 @@ impl<'a> ShaderFromNir<'a> {
             GLSL_SAMPLER_DIM_CUBE => TexDim::Cube,
             _ => panic!("Unknown glsl_sampler_dim"),
         };
-        let lod_mode = match flags.lod_mode() {
+        let lod_mode = match flags.lod_mode() as bi_va_lod_mode {
             BI_VA_LOD_MODE_ZERO_LOD => TexLodMode::None,
             BI_VA_LOD_MODE_COMPUTED_LOD => TexLodMode::Computed,
             BI_VA_LOD_MODE_EXPLICIT => TexLodMode::Explicit,
@@ -1695,10 +1695,10 @@ impl<'a> ShaderFromNir<'a> {
                 });
             }
             nir_texop_gradient_pan => {
-                let coord_mode = if flags.force_delta_enable() {
-                    assert!(!flags.derivative_enable());
+                let coord_mode = if flags.force_delta_enable() != 0 {
+                    assert_eq!(flags.derivative_enable(), 0);
                     TexGradientCoordMode::ForceDelta
-                } else if flags.derivative_enable() {
+                } else if flags.derivative_enable() != 0 {
                     TexGradientCoordMode::Derivative
                 } else {
                     TexGradientCoordMode::Coords
@@ -1712,8 +1712,8 @@ impl<'a> ShaderFromNir<'a> {
                     write_mask,
                     wide_indices,
                     coord_mode,
-                    lod_bias_disable: flags.lod_bias_disable(),
-                    lod_clamp_disable: flags.lod_clamp_disable(),
+                    lod_bias_disable: flags.lod_bias_disable() != 0,
+                    lod_clamp_disable: flags.lod_clamp_disable() != 0,
                     data: sr.into(),
                     handle: tex_h.into(),
                 });
@@ -2016,7 +2016,7 @@ impl<'a> ShaderFromNir<'a> {
                 let is_resource =
                     intrin.intrinsic == nir_intrinsic_load_tile_res_pan;
                 let z_stencil = matches!(
-                    intrin.io_semantics().location(),
+                    intrin.io_semantics().location() as gl_frag_result,
                     FRAG_RESULT_DEPTH | FRAG_RESULT_STENCIL
                 );
 
@@ -2262,7 +2262,7 @@ impl<'a> ShaderFromNir<'a> {
                     handle,
                 });
             }
-            nir_intrinsic_read_invocation => {
+            nir_intrinsic_read_invocation | nir_intrinsic_shuffle => {
                 assert_eq!(intrin.def.bit_size * intrin.def.num_components, 32);
                 let data = self.get_src(&srcs[0]);
                 let lane = self.get_src(&srcs[1]).byte(0);
@@ -2281,6 +2281,8 @@ impl<'a> ShaderFromNir<'a> {
             | nir_intrinsic_quad_swap_horizontal
             | nir_intrinsic_quad_swap_vertical
             | nir_intrinsic_quad_swap_diagonal
+            | nir_intrinsic_shuffle_up
+            | nir_intrinsic_shuffle_down
             | nir_intrinsic_shuffle_xor => {
                 assert_eq!(intrin.def.bit_size * intrin.def.num_components, 32);
                 let data = self.get_src(&srcs[0]);
@@ -2297,9 +2299,21 @@ impl<'a> ShaderFromNir<'a> {
                     nir_intrinsic_quad_swap_diagonal => {
                         (ClperLaneOp::Xor, Src::from(3_u32))
                     }
+                    nir_intrinsic_shuffle_up | nir_intrinsic_shuffle_down => {
+                        let delta = srcs[1].as_uint().unwrap();
+                        assert!(delta <= i8::MAX as u64);
+                        let delta = if intrin.intrinsic == nir_intrinsic_shuffle_up {
+                            -(delta as i32)
+                        } else {
+                            delta as i32
+                        };
+                        (ClperLaneOp::Shift, Src::from(delta as u32).byte(0))
+                    }
                     _ => (ClperLaneOp::Xor, self.get_src(&srcs[1]).byte(0)),
                 };
-                let subgroup = if intrin.intrinsic == nir_intrinsic_shuffle_xor {
+                let subgroup = if matches!(intrin.intrinsic,
+                    nir_intrinsic_shuffle_xor | nir_intrinsic_shuffle_up |
+                    nir_intrinsic_shuffle_down) {
                     self.model.subgroup_size().try_into().unwrap()
                 } else {
                     SubgroupSize::Subgroup4
@@ -2606,7 +2620,9 @@ impl<'a> ShaderFromNir<'a> {
                     dst_type,
                     src,
                     handle,
-                    sample_position: sample_position_from_pan(intrin.flags()),
+                    sample_position: sample_position_from_pan(
+                        intrin.flags() as pan_bi_sample_loc,
+                    ),
                     update: VaryingUpdateMode::Store,
                 });
             }
@@ -2651,7 +2667,9 @@ impl<'a> ShaderFromNir<'a> {
                     src: self.get_src(&srcs[1]),
                     offset: self.get_src(&srcs[0]),
                     mem_type: DataType::f(intrin.src_type().bit_size()),
-                    sample_position: sample_position_from_pan(intrin.flags()),
+                    sample_position: sample_position_from_pan(
+                        intrin.flags() as pan_bi_sample_loc,
+                    ),
                     update: VaryingUpdateMode::Store,
                 });
             }
@@ -2703,7 +2721,7 @@ impl<'a> ShaderFromNir<'a> {
                     src: self.get_src(&srcs[0]),
                     name,
                     sample_position: sample_position_from_pan(
-                        flags.sample_loc(),
+                        flags.sample_loc() as pan_bi_sample_loc,
                     ),
                     update,
                 });
@@ -2761,7 +2779,7 @@ impl<'a> ShaderFromNir<'a> {
                     srcs[2].bit_size(),
                 );
 
-                let loc = intrin.io_semantics().location();
+                let loc = intrin.io_semantics().location() as gl_frag_result;
                 assert!((FRAG_RESULT_DATA0..=FRAG_RESULT_DATA7).contains(&loc));
                 let render_target_idx =
                     (loc - FRAG_RESULT_DATA0).try_into().unwrap();

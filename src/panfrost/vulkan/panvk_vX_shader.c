@@ -11,13 +11,18 @@
 
 #include "genxml/gen_macros.h"
 
+#ifdef PANVK_OFFLINE_ONLY
+#include "tools/kraidoc_context.h"
+#else
 #include "panvk_cmd_buffer.h"
-#include "panvk_descriptor_set_layout.h"
 #include "panvk_device.h"
 #include "panvk_instance.h"
 #include "panvk_mempool.h"
-#include "panvk_nir.h"
 #include "panvk_physical_device.h"
+#endif
+#include "panvk_descriptor_set_layout.h"
+#include "panvk_image_formats.h"
+#include "panvk_nir.h"
 #if PAN_ARCH >= 15
 #include "panvk_ray_tracing.h"
 #include "panvk_rt_pipeline.h"
@@ -1425,6 +1430,7 @@ shader_ftz_mode(struct panvk_shader_variant *shader)
 }
 #endif
 
+#ifndef PANVK_OFFLINE_ONLY
 static VkResult
 panvk_shader_upload(struct panvk_device *dev,
                     struct panvk_shader_variant *shader,
@@ -1608,6 +1614,8 @@ panvk_shader_upload(struct panvk_device *dev,
    return VK_SUCCESS;
 }
 
+#endif
+
 static void
 panvk_shader_variant_destroy(struct panvk_shader_variant *shader)
 {
@@ -1618,6 +1626,7 @@ panvk_shader_variant_destroy(struct panvk_shader_variant *shader)
    free((void *)shader->asm_str);
    ralloc_free((void *)shader->nir_str);
 
+#ifndef PANVK_OFFLINE_ONLY
    panvk_pool_free_mem(&shader->code_mem);
 
 #if PAN_ARCH < 9
@@ -1636,6 +1645,8 @@ panvk_shader_variant_destroy(struct panvk_shader_variant *shader)
       panvk_pool_free_mem(&shader->spds.pos_triangles);
 #endif
    }
+#endif
+
 #endif
 
 #if PAN_ARCH < 9
@@ -1676,7 +1687,8 @@ panvk_compile_shader_impl(struct panvk_device *dev,
                      const struct pan_varying_layout *vs_varying_layout,
                      const uint32_t *noperspective_varyings,
                      const VkAllocationCallbacks *pAllocator,
-                     struct vk_shader **shader_out, bool allow_preamble)
+                     struct vk_shader **shader_out, bool allow_preamble,
+                     bool upload)
 {
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
@@ -1709,6 +1721,7 @@ panvk_compile_shader_impl(struct panvk_device *dev,
 
    switch (info->stage) {
    case MESA_SHADER_VERTEX: {
+#ifndef PANVK_OFFLINE_ONLY
       /*
        * Software VS feeding libpoly TCS.
        *
@@ -1847,6 +1860,7 @@ panvk_compile_shader_impl(struct panvk_device *dev,
          break;
       }
 
+#endif
       const enum panvk_vs_variant compile_order[] = {
          PANVK_VS_VARIANT_XFB,
          PANVK_VS_VARIANT_HW,
@@ -1959,6 +1973,7 @@ panvk_compile_shader_impl(struct panvk_device *dev,
       break;
    }
 
+#ifndef PANVK_OFFLINE_ONLY
    case MESA_SHADER_TESS_CTRL: {
       struct panvk_shader_variant *variant =
          (struct panvk_shader_variant *)panvk_shader_only_variant(shader);
@@ -2180,6 +2195,8 @@ panvk_compile_shader_impl(struct panvk_device *dev,
       break;
    }
 
+#endif
+
    case MESA_SHADER_FRAGMENT: {
       struct panvk_shader_variant *variant =
          (struct panvk_shader_variant *)panvk_shader_only_variant(shader);
@@ -2286,13 +2303,18 @@ panvk_compile_shader_impl(struct panvk_device *dev,
       UNREACHABLE("Unknown shader stage");
    }
 
-   panvk_shader_foreach_variant(shader, variant) {
-      result = panvk_shader_upload(dev, variant, pAllocator);
-      if (result != VK_SUCCESS) {
-         panvk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
-         return result;
+#ifndef PANVK_OFFLINE_ONLY
+   if (upload) {
+      panvk_shader_foreach_variant(shader, variant) {
+         result = panvk_shader_upload(dev, variant, pAllocator);
+         if (result != VK_SUCCESS) {
+            panvk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
+            return result;
+         }
       }
    }
+
+#endif
 
    *shader_out = &shader->vk;
 
@@ -2300,15 +2322,16 @@ panvk_compile_shader_impl(struct panvk_device *dev,
 }
 
 static VkResult
-panvk_compile_shader(struct panvk_device *dev,
+panvk_compile_shader_with_upload(struct panvk_device *dev,
                      struct vk_shader_compile_info *info,
                      const struct vk_graphics_pipeline_state *state,
                      const struct pan_varying_layout *vs_varying_layout,
                      const uint32_t *noperspective_varyings,
                      const VkAllocationCallbacks *pAllocator,
-                     struct vk_shader **shader_out)
+                     struct vk_shader **shader_out, bool upload,
+                     bool enable_preamble)
 {
-   bool eligible = PAN_ARCH >= 10 && PAN_ARCH <= 11 &&
+   bool eligible = enable_preamble && PAN_ARCH >= 10 && PAN_ARCH <= 11 &&
       !info->nir->info.internal &&
       !(info->flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
       (info->stage == MESA_SHADER_COMPUTE ||
@@ -2321,7 +2344,7 @@ panvk_compile_shader(struct panvk_device *dev,
    fallback_info.nir = eligible ? nir_shader_clone(NULL, info->nir) : NULL;
    VkResult result = panvk_compile_shader_impl(
       dev, info, state, vs_varying_layout, noperspective_varyings,
-      pAllocator, shader_out, eligible);
+      pAllocator, shader_out, eligible, upload);
    if (result == VK_SUCCESS && eligible) {
       struct panvk_shader *shader =
          container_of(*shader_out, struct panvk_shader, vk);
@@ -2332,10 +2355,28 @@ panvk_compile_shader(struct panvk_device *dev,
          struct vk_shader *fallback = NULL;
          result = panvk_compile_shader_impl(
             dev, &fallback_info, state, vs_varying_layout,
-            noperspective_varyings, pAllocator, &fallback, false);
+            noperspective_varyings, pAllocator, &fallback, false, upload);
          if (result == VK_SUCCESS) {
-            shader->no_preamble =
+            struct panvk_shader *plain =
                container_of(fallback, struct panvk_shader, vk);
+            bool regresses = false;
+            panvk_shader_foreach_variant(shader, variant) {
+               unsigned index = variant - shader->variants;
+               const struct pan_shader_info *optimized = &variant->info;
+               const struct pan_shader_info *baseline = &plain->variants[index].info;
+               regresses |= optimized->stats.valhall.spills > baseline->stats.valhall.spills ||
+                            optimized->stats.valhall.fills > baseline->stats.valhall.fills ||
+                            optimized->stats_idvs_varying.valhall.spills >
+                               baseline->stats_idvs_varying.valhall.spills ||
+                            optimized->stats_idvs_varying.valhall.fills >
+                               baseline->stats_idvs_varying.valhall.fills;
+            }
+            if (regresses) {
+               panvk_shader_destroy(&dev->vk, *shader_out, pAllocator);
+               *shader_out = fallback;
+            } else {
+               shader->no_preamble = plain;
+            }
          } else {
             panvk_shader_destroy(&dev->vk, *shader_out, pAllocator);
             *shader_out = NULL;
@@ -2346,6 +2387,34 @@ panvk_compile_shader(struct panvk_device *dev,
    return result;
 }
 
+#ifndef PANVK_OFFLINE_ONLY
+static VkResult
+panvk_compile_shader(struct panvk_device *dev,
+                     struct vk_shader_compile_info *info,
+                     const struct vk_graphics_pipeline_state *state,
+                     const struct pan_varying_layout *vs_varying_layout,
+                     const uint32_t *noperspective_varyings,
+                     const VkAllocationCallbacks *pAllocator,
+                     struct vk_shader **shader_out)
+{
+   return panvk_compile_shader_with_upload(
+      dev, info, state, vs_varying_layout, noperspective_varyings,
+      pAllocator, shader_out, true, true);
+}
+
+#endif
+
+VkResult
+panvk_per_arch(compile_shader_offline)(struct panvk_device *dev,
+                                      struct vk_shader_compile_info *info,
+                                      bool enable_preamble,
+                                      struct vk_shader **shader_out)
+{
+   return panvk_compile_shader_with_upload(
+      dev, info, NULL, NULL, NULL, NULL, shader_out, false, enable_preamble);
+}
+
+#ifndef PANVK_OFFLINE_ONLY
 VkResult
 panvk_per_arch(create_shader_from_binary)(struct panvk_device *dev,
                                           const struct pan_shader_info *info,
@@ -3353,6 +3422,13 @@ panvk_cmd_bind_shaders(struct vk_command_buffer *vk_cmd, uint32_t stage_count,
    }
 }
 
+const struct vk_device_shader_ops panvk_per_arch(offline_shader_ops) = {
+   .get_nir_options = panvk_get_nir_options,
+   .get_spirv_options = panvk_get_spirv_options,
+   .preprocess_nir = panvk_preprocess_nir,
+};
+
+#ifndef PANVK_OFFLINE_ONLY
 const struct vk_device_shader_ops panvk_per_arch(device_shader_ops) = {
    .get_nir_options = panvk_get_nir_options,
    .get_spirv_options = panvk_get_spirv_options,
@@ -3363,6 +3439,7 @@ const struct vk_device_shader_ops panvk_per_arch(device_shader_ops) = {
    .cmd_set_dynamic_graphics_state = vk_cmd_set_dynamic_graphics_state,
    .cmd_bind_shaders = panvk_cmd_bind_shaders,
 };
+#endif
 
 static void
 panvk_internal_shader_destroy(struct vk_device *vk_dev,
@@ -3492,4 +3569,16 @@ panvk_per_arch(rt_compile_nir)(
       *shader_out = container_of(shader, struct panvk_shader, vk);
    return result;
 }
+#endif
+
+#else
+static const struct vk_shader_ops panvk_shader_ops = {
+   .destroy = panvk_shader_destroy,
+};
+
+const struct vk_device_shader_ops panvk_per_arch(offline_shader_ops) = {
+   .get_nir_options = panvk_get_nir_options,
+   .get_spirv_options = panvk_get_spirv_options,
+   .preprocess_nir = panvk_preprocess_nir,
+};
 #endif

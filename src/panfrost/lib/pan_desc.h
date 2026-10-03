@@ -7,6 +7,7 @@
 #define __PAN_DESC_H
 
 #include "genxml/gen_macros.h"
+#include "pan_compute.h"
 
 #include "kmod/pan_kmod.h"
 #include "pan_image.h"
@@ -20,10 +21,6 @@ struct pan_buffer_view {
    } astc;
    unsigned width_el;
    uint64_t base;
-};
-
-struct pan_compute_dim {
-   uint32_t x, y, z;
 };
 
 struct pan_crc_state {
