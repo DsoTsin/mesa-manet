@@ -2125,16 +2125,20 @@ with_spirv_tools = get_option('spirv-tools') \
     .enable_if(with_clc or with_kraidoc, error_message : 'CLC and kraidoc require SPIRV-Tools')
 
 spirv_tools_sdk = meson.get_external_property('vulkan-sdk', '')
-dep_spirv_tools = dependency(
-  'SPIRV-Tools',
-  required : with_spirv_tools.enabled() and spirv_tools_sdk == '',
-  version : '>= 2024.1',
-)
-if not dep_spirv_tools.found() and spirv_tools_sdk != ''
-  dep_spirv_tools = declare_dependency(
-    dependencies : cc.find_library('SPIRV-Tools', dirs : join_paths(spirv_tools_sdk, 'Lib')),
-    include_directories : include_directories(join_paths(spirv_tools_sdk, 'Include')),
+if with_spirv_tools.disabled()
+  dep_spirv_tools = dependency('', required : false)
+else
+  dep_spirv_tools = dependency(
+    'SPIRV-Tools',
+    required : with_spirv_tools.enabled() and spirv_tools_sdk == '',
+    version : '>= 2024.1',
   )
+  if not dep_spirv_tools.found() and spirv_tools_sdk != ''
+    dep_spirv_tools = declare_dependency(
+      dependencies : cc.find_library('SPIRV-Tools', dirs : join_paths(spirv_tools_sdk, 'Lib')),
+      include_directories : include_directories(join_paths(spirv_tools_sdk, 'Include')),
+    )
+  endif
 endif
 if dep_spirv_tools.found()
   pre_args += '-DHAVE_SPIRV_TOOLS'

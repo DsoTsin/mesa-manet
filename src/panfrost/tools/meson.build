@@ -66,7 +66,7 @@ if with_kraidoc
   endforeach
   kraidoc = executable(
     'kraidoc',
-    [files('kraidoc.c'), sha1_h],
+    [files('kraidoc.c', 'kraidoc_report.c'), sha1_h],
     include_directories : [inc_include, inc_src, inc_panfrost,
                            include_directories('../vulkan')],
     dependencies : [dep_m, dep_thread, idep_nir, idep_pan_packers, idep_vulkan_util,

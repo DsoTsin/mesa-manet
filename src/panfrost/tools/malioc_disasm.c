@@ -20,7 +20,7 @@
 #include "valhall/disassemble.h"
 
 static const char library_sha256[] =
-   "eb9ffee5d4e10d7eded438aa8648b76ffcb5f91e31ecc9b4da014c36c096fc3a";
+   "23f5873642b6794f2754d926b652bf43b2f4e22aa71f3c4980580e54cbfbb0fd";
 
 struct stage {
    const char *name, *chunk;
@@ -527,7 +527,7 @@ open_compiler(struct compiler *compiler, const struct arguments *args)
    if (!verified)
       return false;
    if (strcmp(hash, library_sha256))
-      return fail("unsupported compiler DLL: expected the analyzed malioc 2026.3 r56p0 binary");
+      return fail("unsupported compiler DLL: expected the analyzed malioc 2026.5 r56p1 binary");
    wchar_t *path = wide_path(args->library);
    DWORD length = path ? GetFullPathNameW(path, 0, NULL, NULL) : 0;
    wchar_t *absolute = length ? malloc((size_t)length * sizeof(*absolute)) : NULL;
@@ -781,7 +781,7 @@ usage(FILE *file)
          "  -o, --output-prefix PREFIX   Output MBS2, OBJC, ISA and JSON files\n"
          "  -n, --entrypoint NAME        Entry point (default: main)\n"
          "  --stage vertex|fragment|compute  Default: infer from OpEntryPoint\n"
-         "  --library PATH              Analyzed malioc 2026.3 r56p0 DLL\n"
+         "  --library PATH              Analyzed malioc 2026.5 r56p1 DLL\n"
          "  -c, --core NAME              Default: Mali-G610\n"
          "  --revision REV              Default: r0p0\n"
          "  --arch N                    Valhall ISA version for disassembly (default: 10)\n"
@@ -911,7 +911,7 @@ run(int argc, char **argv)
       if (!args.library) {
          const char *program_files = getenv("ProgramFiles");
          default_library = output_path(program_files ? program_files : "C:/Program Files",
-            "/Arm/Arm Performance Studio 2026.3/mali_offline_compiler/graphics/Mali-Gxx_r56p0-00rel0.dll");
+            "/Arm/Arm Performance Studio 2026.5/mali_offline_compiler/graphics/Mali-Gxx_r56p1-00rel0.dll");
          args.library = default_library;
       }
       if (!args.library) {

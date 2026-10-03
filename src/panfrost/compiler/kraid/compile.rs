@@ -314,7 +314,7 @@ pub extern "C" fn kraid_compile_nir(
     pass!(s.opt_flow());
 
     let stats = if !s.is_empty() {
-        let mut stats = s.get_stats();
+        let mut stats = s.get_stats(nir.scratch_size);
         s.write_instrumentation_counts();
         pass!(s.lower_blend_call());
 

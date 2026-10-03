@@ -13,6 +13,7 @@
 
 struct panvk_cmd_buffer;
 struct panvk_shader_variant;
+struct pan_ptr;
 
 #define MAX_PUSH_CONSTANTS_SIZE 256
 

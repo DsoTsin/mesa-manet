@@ -8,6 +8,9 @@ import tempfile
 
 
 tool, glslang = sys.argv[1:3]
+tool = str(Path(tool).resolve())
+if Path(glslang).is_file():
+    glslang = str(Path(glslang).resolve())
 env = dict(os.environ, PAN_USE_KRAID="all")
 
 
@@ -29,7 +32,8 @@ def fixture(root, name, source):
 
 def compile_shader(root, spv, name, *args):
     prefix = root / name
-    result = run(spv, "-o", prefix, "--format", "json", *args)
+    result = run(spv, "-o", prefix, "--format", "json",
+                 "--report-format", "kraid", *args)
     report = json.loads(result.stdout)
     assert report == json.loads(Path(str(prefix) + ".report.json").read_text())
     assert report["compiler"] == "Kraid"
@@ -86,6 +90,10 @@ layout(location=0) in vec2 uv;
 layout(location=0) out vec4 result;
 void main() { result=texture(sampler2D(image,image_sampler),uv); }
 """)
+    frag_coord = fixture(root, "fragcoord.frag", """#version 450
+layout(location=0) out vec4 result;
+void main() { result=vec4(gl_FragCoord.z,gl_FragCoord.w,gl_PointCoord); }
+""")
     targets = ["Mali-G57", "Mali-G68", "Mali-G610", "Mali-G710",
                "Mali-G310v1", "Mali-G310v5", "Mali-G615", "Mali-G715"]
     for target in targets:
@@ -114,10 +122,84 @@ void main() { result=texture(sampler2D(image,image_sampler),uv); }
     separated = compile_shader(root, separate_texture, "separate")["bindings"]
     assert {(b["set"], b["binding"], b["type"]) for b in separated} == {
         (0, 7, 2), (1, 9, 0)}
+    special = compile_shader(root, frag_coord, "fragcoord")
+    special_isa = Path(str(root / "fragcoord") + ".0.main.isa.txt").read_text()
+    assert special["programs"] and "LD_VAR_SPECIAL" in special_isa
     overridden = compile_shader(root, compute, "layout", "--binding",
                                 "0:1:storage-buffer:8")
     assert overridden["bindings"][0]["source"] == "argument"
     assert overridden["bindings"][0]["count"] == 8
+    for spv, selector, stage in [(compute, "-C", "Compute"),
+                                 (vertex, "-v", "Vertex"),
+                                 (fragment, "-f", "Fragment")]:
+        report_path = root / (stage + ".json")
+        isa_prefix = root / (stage + "-stats")
+        result = run("--vulkan", "--spirv", selector, "--name", "main",
+                     "--format=json", "-cMali-G610", "-d", "-o", report_path,
+                     "--isa-prefix", isa_prefix, spv)
+        assert result.stdout == ""
+        report = json.loads(report_path.read_text())
+        assert report["schema"] == {"name": "performance", "version": 2}
+        assert report["producer"]["name"] == "kraidoc"
+        shader = report["shaders"][0]
+        assert shader["shader"] == {"api": "Vulkan", "type": stage}
+        assert shader["hardware"]["core"] == "Mali-G610"
+        assert shader["kraid"]["original_pipeline_state"] is False
+        legacy = json.loads(Path(str(isa_prefix) + ".report.json").read_text())
+        assert len(shader["variants"]) == len(legacy["programs"])
+        for variant, program in zip(shader["variants"], legacy["programs"]):
+            props = {p["name"]: p["value"] for p in variant["properties"]}
+            assert props["instructions"] == program["instructions"]
+            assert 0 < props["work_registers_used"] <= program["work_reg_count"]
+            assert props["thread_occupancy"] in [50, 100]
+            assert props["stack_size"] == props["stack_alloca_bytes"] + props["stack_spill_bytes"]
+            perf = variant["performance"]
+            assert len(perf["pipelines"]) == len(perf["total_cycles"]["cycle_count"])
+            assert all(v >= 0 for v in perf["total_cycles"]["cycle_count"])
+            assert set(perf["total_cycles"]["bound_pipelines"]) <= set(perf["pipelines"])
+            assert perf["shortest_path_cycles"] is None
+            assert perf["longest_path_cycles"] is None
+    typed = compile_shader(root, compute, "typed", "-S3=99")
+    assert typed["programs"] == specialized["programs"]
+    typed_types = fixture(root, "typed-types.comp", """#version 450
+layout(local_size_x=1) in;
+layout(constant_id=4) const int signed_value=-7;
+layout(constant_id=5) const float float_value=1.0;
+layout(constant_id=6) const bool bool_value=true;
+layout(set=0,binding=0) buffer Data { float data[]; } output_data;
+void main() {
+  output_data.data[gl_GlobalInvocationID.x]=
+    bool_value ? float(signed_value)+float_value : float_value;
+}
+""")
+    typed_values = compile_shader(root, typed_types, "typed-values",
+                                  "--sconst", "4=-23", "-S5=1.5", "-S6=false")
+    raw_values = compile_shader(root, typed_types, "raw-values",
+                                "--spec", "4:4:0xffffffe9",
+                                "--spec", "5:4:0x3fc00000", "--spec", "6:4:0")
+    assert typed_values["programs"] == raw_values["programs"]
+    assert typed_values["specialization"] == raw_values["specialization"]
+    for value in ["4=2147483648", "4=-2147483649", "5=invalid", "6=2"]:
+        run(typed_types, "-S", value, success=False)
+    assert "Work registers:" in run("-C", compute).stdout
+    assert "Total instruction cycles:" in run("--compute", "--detailed", compute).stdout
+    stdout_report = json.loads(run("-C", "--format", "json", compute).stdout)
+    assert stdout_report["shaders"][0]["shader"]["type"] == "Compute"
+    stdin_report = subprocess.run([tool, "-C", "--format", "json", "-"],
+                                  input=compute.read_bytes(), env=env,
+                                  capture_output=True, check=True)
+    assert json.loads(stdin_report.stdout)["shaders"][0]["filename"] == "-"
+    listed = json.loads(run("-l", "--format", "json").stdout)
+    assert "Mali-G610" in [c["core"] for c in listed["cores"]]
+    info = json.loads(run("-i", "-c", "Mali-G610", "--format", "json").stdout)
+    assert info["schema"]["name"] == "info"
+    assert info["hardware"]["architecture"] == "Valhall"
+    assert info["apis"]["vulkan"]["max_version"] == 1.6
+    for args in [("-S", "3=-1"), ("-S", "3=4294967296"),
+                 ("-S", "99=1"), ("-S3=1", "-S3=2"),
+                 ("--spec", "3:4:1", "-S3=2"), ("--opengles",),
+                 ("--geometry",), ("-C", "-v")]:
+        run(compute, *args, success=False)
     for args in [("--stage", "vertex"), ("-n", "missing"),
                  ("--gpu-id", "0xc8000000"), ("-c", "Mali-G52"),
                  ("--shader-cores", "0"), ("--spec", "3:4:0x100000000"),

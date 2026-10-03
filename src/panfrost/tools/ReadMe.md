@@ -4,7 +4,7 @@
 
 ## 支持范围
 
-- 编译：Windows x64、Arm Performance Studio 2026.3 的 `Mali-Gxx_r56p0-00rel0.dll`。
+- 编译：Windows x64、Arm Performance Studio 2026.5 的 `Mali-Gxx_r56p1-00rel0.dll`。
 - 输入：Vulkan SPIR-V 二进制；支持 fragment、compute、vertex，通过所选 `OpEntryPoint` 自动识别阶段，不依赖扩展名。
 - ISA：Valhall；默认目标为 `Mali-G610 r0p0`。`--core` 和 `--revision` 选择 DLL 核心表中的目标，程序检查报告中的架构。
 - Vertex 默认请求 IDVS，保留 Position、Varying 和编译器实际生成的 pilot；`--no-idvs` 请求合并的 vertex shader。
@@ -13,13 +13,13 @@
 默认 DLL 路径：
 
 ```text
-C:/Program Files/Arm/Arm Performance Studio 2026.3/mali_offline_compiler/graphics/Mali-Gxx_r56p0-00rel0.dll
+C:/Program Files/Arm/Arm Performance Studio 2026.5/mali_offline_compiler/graphics/Mali-Gxx_r56p1-00rel0.dll
 ```
 
 DLL ABI 依据 IDA 分析确认。程序加载前检查以下 SHA256，其他版本需要先分析和适配：
 
 ```text
-eb9ffee5d4e10d7eded438aa8648b76ffcb5f91e31ecc9b4da014c36c096fc3a
+23f5873642b6794f2754d926b652bf43b2f4e22aa71f3c4980580e54cbfbb0fd
 ```
 
 当前不接入 GLSL 源码、OpenCL kernel、Bifrost/Midgard ISA 和下表中的其他阶段。DLL 接受某个阶段名称，并不代表当前 GPU 或导出工具支持该阶段。工具通过动态加载调用已安装的 DLL，构建时不需要 Arm SDK、导入库或复制 DLL。
@@ -108,7 +108,7 @@ meson compile -C build malioc_disasm
 选择其他 DLL 路径或 GPU：
 
 ```powershell
-& build/malioc-isa/malioc_disasm.exe shader.comp.spv --library "D:/ArmCompiler/Mali-Gxx_r56p0-00rel0.dll" -c Mali-G610 --revision r0p0 -o build/isa/compute
+& build/malioc-isa/malioc_disasm.exe shader.comp.spv --library "D:/ArmCompiler/Mali-Gxx_r56p1-00rel0.dll" -c Mali-G610 --revision r0p0 -o build/isa/compute
 ```
 
 `--library` 只改变加载路径，仍要求文件 SHA256 与已分析版本一致。
@@ -168,7 +168,7 @@ build/isa/compute.json
 
 该模式解析版本 54 的容器，检查 chunk 边界及每个 EBIN 内的 OBJC，不通过扫描标签寻找代码。其 JSON 包含阶段和二进制信息；已有容器无法提供新的 DLL 编译统计，`variants` 和 `warnings` 为空。
 
-## r56p0 阶段枚举
+## r56p1 阶段枚举
 
 以下是该 DLL 的 `malioc_compile` 将 `shader_type` 转换为后端阶段值的实际映射。IDA 地址基于 ImageBase `0x180000000`，对应 `0x1800A456B..0x1800A46DD`。
 
@@ -202,7 +202,7 @@ python -B src/panfrost/tools/test_malioc_disasm.py build/malioc-isa/malioc_disas
 使用 Arm 安装包附带的真实样例测试完整编译流程：
 
 ```powershell
-$maliocSamples = 'C:/Program Files/Arm/Arm Performance Studio 2026.3/mali_offline_compiler/samples/vulkan'
+$maliocSamples = 'C:/Program Files/Arm/Arm Performance Studio 2026.5/mali_offline_compiler/samples/vulkan'
 & build/malioc-isa/malioc_disasm.exe "$maliocSamples/shader.frag.spv" -o build/isa/build-test/fragment
 & build/malioc-isa/malioc_disasm.exe "$maliocSamples/shader.comp.spv" -o build/isa/build-test/compute
 & build/malioc-isa/malioc_disasm.exe "$maliocSamples/shader.vert.spv" -o build/isa/build-test/vertex

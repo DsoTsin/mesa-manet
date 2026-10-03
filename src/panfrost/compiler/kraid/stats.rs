@@ -220,6 +220,7 @@ impl VaStatCount {
         s: &Shader,
         instrs: usize,
         loops: usize,
+        alloca_bytes: u32,
     ) -> valhall_stats {
         let Self { fma, cvt, sfu, .. } = self;
 
@@ -250,6 +251,8 @@ impl VaStatCount {
             spill_cost: self.spill_cost,
             registers_used: self.regs.len().try_into().unwrap(),
             uniforms_used: self.fau_used.into(),
+            stack_alloca_bytes: alloca_bytes,
+            stack_spill_bytes: s.info.tls_size.saturating_sub(alloca_bytes),
         }
     }
 }
@@ -276,7 +279,7 @@ fn report_stats_per_instr(s: &Shader) {
     )
 }
 
-fn get_va_stats(s: &Shader) -> valhall_stats {
+fn get_va_stats(s: &Shader, alloca_bytes: u32) -> valhall_stats {
     let mut stats = VaStatCount::default();
     let mut instrs = 0usize;
     let mut loops = 0usize;
@@ -294,11 +297,11 @@ fn get_va_stats(s: &Shader) -> valhall_stats {
     }
 
     stats.normalize(s.model);
-    stats.into_c_stats(s, instrs, loops)
+    stats.into_c_stats(s, instrs, loops, alloca_bytes)
 }
 
 impl Shader<'_> {
-    pub fn get_stats(&self) -> pan_stats {
+    pub fn get_stats(&self, alloca_bytes: u32) -> pan_stats {
         if DEBUG.contains(DebugFlags::PRINT) {
             report_stats_per_instr(self);
         }
@@ -307,7 +310,7 @@ impl Shader<'_> {
             pan_stats {
                 isa: PAN_STAT_VALHALL,
                 __bindgen_anon_1: pan_stats__bindgen_ty_1 {
-                    valhall: get_va_stats(self),
+                    valhall: get_va_stats(self, alloca_bytes),
                 },
             }
         } else {

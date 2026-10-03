@@ -427,7 +427,7 @@ static inline bi_index
 bi_byte(bi_index idx, unsigned lane)
 {
    unsigned bytes[4];
-   bi_swizzle_to_byte_channels(idx.swizzle, bytes);
+   bi_swizzle_to_byte_channels((enum bi_swizzle)idx.swizzle, bytes);
 
    assert(lane < 4);
    idx.swizzle = (enum bi_swizzle)(BI_SWIZZLE_B0 + bytes[lane]);
@@ -563,8 +563,8 @@ static inline bool
 bi_is_value_equiv(bi_index left, bi_index right)
 {
    if (left.type == BI_INDEX_CONSTANT && right.type == BI_INDEX_CONSTANT) {
-      return (bi_apply_swizzle(left.value, left.swizzle) ==
-              bi_apply_swizzle(right.value, right.swizzle)) &&
+      return (bi_apply_swizzle(left.value, (enum bi_swizzle)left.swizzle) ==
+              bi_apply_swizzle(right.value, (enum bi_swizzle)right.swizzle)) &&
              (left.abs == right.abs) && (left.neg == right.neg);
    } else {
       return (left.value == right.value) && (left.abs == right.abs) &&
