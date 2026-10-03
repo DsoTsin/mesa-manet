@@ -12,6 +12,7 @@ test(
       'test-lower-isel.cpp',
       'test-lower-constants.cpp',
       'test-nir-push-ubo.cpp',
+      'test-nir-preamble.cpp',
       'test-mark-last.cpp',
       'test-merge-flow.cpp',
       'test-packing.cpp',

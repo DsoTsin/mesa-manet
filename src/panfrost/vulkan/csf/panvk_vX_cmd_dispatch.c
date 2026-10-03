@@ -329,6 +329,18 @@ panvk_per_arch(cmd_dispatch_shader)(
 
    panvk_cond_render(cmdbuf, b)
    {
+      if (cs->preamble) {
+         struct cs_index count = cs_scratch_reg32(b, 0);
+         cs_umin32(b, count, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
+                   cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y));
+         cs_umin32(b, count, count, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z));
+         cs_if(b, MALI_CS_CONDITION_NEQUAL, count) {
+            panvk_per_arch(cmd_emit_preamble)(
+               cmdbuf, PANVK_SUBQUEUE_COMPUTE, cs,
+               cs_reg64(b, PANVK_COMPUTE_FAU),
+               cs_reg64(b, PANVK_COMPUTE_SRT));
+         }
+      }
       if (indirect) {
          /* Use run_compute with a set task axis instead of
           * run_compute_indirect as run_compute_indirect has been found to

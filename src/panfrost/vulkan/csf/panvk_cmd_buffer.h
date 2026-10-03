@@ -55,6 +55,12 @@ struct panvk_cs_sync32 {
    uint32_t error;
 };
 
+struct panvk_preamble_dispatch {
+   const struct panvk_shader_variant *shader;
+   uint64_t fau;
+   uint64_t srt;
+};
+
 struct panvk_cs_sync64 {
    uint64_t seqno;
    uint32_t error;
@@ -638,6 +644,7 @@ struct panvk_cmd_buffer {
       struct util_dynarray vs, fs;
       bool fs_after_tiling;
    } fau_copies;
+   struct util_dynarray fs_preambles;
 
    struct {
       struct u_trace uts[PANVK_SUBQUEUE_COUNT];
@@ -1040,6 +1047,11 @@ void panvk_per_arch(cs_emit_fau_copies)(struct cs_builder *b,
                                         const struct util_dynarray *copies);
 
 void panvk_per_arch(cmd_flush_fs_fau_copies)(struct panvk_cmd_buffer *cmdbuf);
+
+void panvk_per_arch(cmd_emit_preamble)(
+   struct panvk_cmd_buffer *cmdbuf, enum panvk_subqueue_id subqueue,
+   const struct panvk_shader_variant *shader, struct cs_index fau,
+   struct cs_index srt);
 
 static VkPipelineStageFlags2
 panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)

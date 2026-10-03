@@ -1519,6 +1519,7 @@ kraid_compile_variant(nir_shader *nir,
    }
 
 #ifdef WITH_PANFROST_RUST
+      nir_index_blocks(nir_shader_get_entrypoint(nir));
       kraid_compile_nir(nir, inputs, binary, info, idvs);
 #else
       UNREACHABLE("Must have rust enabled");
@@ -1552,6 +1553,18 @@ bifrost_compile_shader_nir(nir_shader *nir,
    }
 
    bi_optimize_late(nir, inputs->gpu_id, info);
+
+   nir_shader *preamble = NULL, *preamble_main = NULL;
+   struct pan_compile_inputs main_inputs = *inputs;
+   if (inputs->preamble && bi_use_kraid(nir, inputs->gpu_id) &&
+       !(pan_get_compiler_flags(pan_arch(inputs->gpu_id)) & (1u << 28))) {
+      preamble_main = pan_nir_opt_preamble(nir, inputs, &preamble,
+                                           &main_inputs.fau.reserved);
+      if (preamble_main) {
+         nir = preamble_main;
+         inputs = &main_inputs;
+      }
+   }
 
    /* Lower constants to scalar but then immediately fold so we get minimum-
     * width vectors instead of scalars
@@ -1614,4 +1627,20 @@ bifrost_compile_shader_nir(nir_shader *nir,
    }
 
    info->ubo_mask &= (1 << nir->info.num_ubos) - 1;
+
+   if (preamble) {
+      struct pan_compile_inputs pilot_inputs = *inputs;
+      pilot_inputs.preamble = NULL;
+      pilot_inputs.instrument = false;
+      pilot_inputs.no_idvs = true;
+      pilot_inputs.fau.reserved = 2;
+      pilot_inputs.fau.pushable_ubos = 0;
+      pilot_inputs.fau.push_ubo_handles = false;
+      pilot_inputs.fau.promote_immediates = false;
+      bifrost_compile_shader_nir(preamble, &pilot_inputs,
+                                 &inputs->preamble->binary,
+                                 &inputs->preamble->info);
+      ralloc_free(preamble);
+      ralloc_free(preamble_main);
+   }
 }

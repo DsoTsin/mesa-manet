@@ -1629,8 +1629,8 @@ kbase_kmod_import_dmabuf(struct pan_kmod_dev *dev,
    uint64_t import_flags =
       BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
       BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
-      BASE_MEM_IMPORT_SHARED |
-      (external_import ? BASE_MEM_COHERENT_LOCAL : BASE_MEM_COHERENT_SYSTEM);
+      BASE_MEM_IMPORT_SHARED | BASE_MEM_COHERENT_LOCAL |
+      (external_import ? 0 : BASE_MEM_COHERENT_SYSTEM);
 
    if (kmod_flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED)
       import_flags |= BASE_MEM_UNCACHED_GPU;

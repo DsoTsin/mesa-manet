@@ -1232,8 +1232,53 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
    }
 #endif
 
+   struct pan_compile_preamble preamble = {
+      .binary = UTIL_DYNARRAY_INIT,
+   };
+#if PAN_ARCH >= 10 && PAN_ARCH <= 11
+   if (!input.disable_preamble &&
+       !(shader_flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
+       !nir->info.internal &&
+       (nir->info.stage == MESA_SHADER_FRAGMENT ||
+        nir->info.stage == MESA_SHADER_COMPUTE ||
+        (nir->info.stage == MESA_SHADER_VERTEX && !input.no_idvs)))
+      input.preamble = &preamble;
+#endif
    struct util_dynarray binary = UTIL_DYNARRAY_INIT;
    pan_shader_compile(nir, &input, &binary, &shader->info);
+
+   if (preamble.binary.size) {
+      shader->preamble = calloc(1, sizeof(*shader->preamble));
+      if (!shader->preamble) {
+         util_dynarray_fini(&preamble.binary);
+         util_dynarray_fini(&binary);
+         return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+      struct panvk_shader_variant *pilot = shader->preamble;
+      pilot->info = preamble.info;
+      pilot->cs.local_size = (struct pan_compute_dim){1, 1, 1};
+      pilot->fau.total_count = 1;
+      pilot->bin_ptr = mem_dup(preamble.binary.data, preamble.binary.size);
+      pilot->bin_size = preamble.binary.size;
+      pilot->own_bin = true;
+      if (!pilot->bin_ptr) {
+         util_dynarray_fini(&preamble.binary);
+         util_dynarray_fini(&binary);
+         return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+      if (dump_asm) {
+         char *text = NULL;
+         size_t size = 0;
+         struct u_memstream mem;
+         if (u_memstream_open(&mem, &text, &size)) {
+            pan_disassemble(u_memstream_get(&mem), pilot->bin_ptr,
+                            pilot->bin_size, input.gpu_id, false);
+            u_memstream_close(&mem);
+            pilot->asm_str = text;
+         }
+      }
+   }
+   util_dynarray_fini(&preamble.binary);
 
    /* Propagate potential additional FAU values into the panvk info struct. */
    /* FAU consts are pushed as 32bit values, but total_count is for 64bit
@@ -1385,6 +1430,11 @@ panvk_shader_upload(struct panvk_device *dev,
                     struct panvk_shader_variant *shader,
                     const VkAllocationCallbacks *pAllocator)
 {
+   if (shader->preamble) {
+      VkResult result = panvk_shader_upload(dev, shader->preamble, pAllocator);
+      if (result != VK_SUCCESS)
+         return result;
+   }
    shader->code_mem = (struct panvk_priv_mem){0};
 
 #if PAN_ARCH < 9
@@ -1561,6 +1611,10 @@ panvk_shader_upload(struct panvk_device *dev,
 static void
 panvk_shader_variant_destroy(struct panvk_shader_variant *shader)
 {
+   if (shader->preamble) {
+      panvk_shader_variant_destroy(shader->preamble);
+      free(shader->preamble);
+   }
    free((void *)shader->asm_str);
    ralloc_free((void *)shader->nir_str);
 
@@ -1599,6 +1653,9 @@ panvk_shader_destroy(struct vk_device *vk_dev, struct vk_shader *vk_shader,
    struct panvk_shader *shader =
       container_of(vk_shader, struct panvk_shader, vk);
 
+   if (shader->no_preamble)
+      panvk_shader_destroy(vk_dev, &shader->no_preamble->vk, pAllocator);
+
    panvk_shader_foreach_variant(shader, variant) {
       panvk_shader_variant_destroy(variant);
    }
@@ -1613,13 +1670,13 @@ panvk_shader_destroy(struct vk_device *vk_dev, struct vk_shader *vk_shader,
 static const struct vk_shader_ops panvk_shader_ops;
 
 static VkResult
-panvk_compile_shader(struct panvk_device *dev,
+panvk_compile_shader_impl(struct panvk_device *dev,
                      struct vk_shader_compile_info *info,
                      const struct vk_graphics_pipeline_state *state,
                      const struct pan_varying_layout *vs_varying_layout,
                      const uint32_t *noperspective_varyings,
                      const VkAllocationCallbacks *pAllocator,
-                     struct vk_shader **shader_out)
+                     struct vk_shader **shader_out, bool allow_preamble)
 {
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
@@ -1647,6 +1704,7 @@ panvk_compile_shader(struct panvk_device *dev,
       .view_mask = (state && state->rp) ? state->mv->view_mask : 0,
       .robust_modes = robust_modes,
       .robust_descriptors = dev->vk.enabled_features.nullDescriptor,
+      .disable_preamble = !allow_preamble,
    };
 
    switch (info->stage) {
@@ -2241,6 +2299,53 @@ panvk_compile_shader(struct panvk_device *dev,
    return result;
 }
 
+static VkResult
+panvk_compile_shader(struct panvk_device *dev,
+                     struct vk_shader_compile_info *info,
+                     const struct vk_graphics_pipeline_state *state,
+                     const struct pan_varying_layout *vs_varying_layout,
+                     const uint32_t *noperspective_varyings,
+                     const VkAllocationCallbacks *pAllocator,
+                     struct vk_shader **shader_out)
+{
+   bool eligible = PAN_ARCH >= 10 && PAN_ARCH <= 11 &&
+      !info->nir->info.internal &&
+      !(info->flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
+      (info->stage == MESA_SHADER_COMPUTE ||
+       info->stage == MESA_SHADER_FRAGMENT ||
+       (info->stage == MESA_SHADER_VERTEX &&
+        !(info->next_stage_mask &
+          (VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT |
+           VK_SHADER_STAGE_GEOMETRY_BIT))));
+   struct vk_shader_compile_info fallback_info = *info;
+   fallback_info.nir = eligible ? nir_shader_clone(NULL, info->nir) : NULL;
+   VkResult result = panvk_compile_shader_impl(
+      dev, info, state, vs_varying_layout, noperspective_varyings,
+      pAllocator, shader_out, eligible);
+   if (result == VK_SUCCESS && eligible) {
+      struct panvk_shader *shader =
+         container_of(*shader_out, struct panvk_shader, vk);
+      bool has_preamble = false;
+      panvk_shader_foreach_variant(shader, variant)
+         has_preamble |= variant->preamble != NULL;
+      if (has_preamble) {
+         struct vk_shader *fallback = NULL;
+         result = panvk_compile_shader_impl(
+            dev, &fallback_info, state, vs_varying_layout,
+            noperspective_varyings, pAllocator, &fallback, false);
+         if (result == VK_SUCCESS) {
+            shader->no_preamble =
+               container_of(fallback, struct panvk_shader, vk);
+         } else {
+            panvk_shader_destroy(&dev->vk, *shader_out, pAllocator);
+            *shader_out = NULL;
+         }
+      }
+   }
+   ralloc_free(fallback_info.nir);
+   return result;
+}
+
 VkResult
 panvk_per_arch(create_shader_from_binary)(struct panvk_device *dev,
                                           const struct pan_shader_info *info,
@@ -2462,7 +2567,8 @@ static VkResult
 panvk_deserialize_shader_variant(struct vk_device *vk_dev,
                                  struct blob_reader *blob,
                                  const VkAllocationCallbacks *pAllocator,
-                                 struct panvk_shader_variant *shader)
+                                 struct panvk_shader_variant *shader,
+                                 bool is_preamble)
 {
    struct panvk_device *device = to_panvk_device(vk_dev);
    struct pan_shader_info info;
@@ -2474,6 +2580,9 @@ panvk_deserialize_shader_variant(struct vk_device *vk_dev,
 
    shader->info = info;
    blob_copy_bytes(blob, &shader->fau, sizeof(shader->fau));
+   if (is_preamble &&
+       (info.stage != MESA_SHADER_COMPUTE || shader->fau.total_count != 1))
+      return panvk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
    switch (shader->info.stage) {
    case MESA_SHADER_COMPUTE:
@@ -2543,7 +2652,21 @@ panvk_deserialize_shader_variant(struct vk_device *vk_dev,
          return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
-   result = panvk_shader_upload(device, shader, pAllocator);
+   uint8_t has_preamble = blob_read_uint8(blob);
+   if (blob->overrun || has_preamble > 1 || (is_preamble && has_preamble))
+      return panvk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+   if (has_preamble) {
+      shader->preamble = calloc(1, sizeof(*shader->preamble));
+      if (!shader->preamble)
+         return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      result = panvk_deserialize_shader_variant(vk_dev, blob, pAllocator,
+                                                shader->preamble, true);
+      if (result != VK_SUCCESS)
+         return result;
+   }
+
+   result = is_preamble ? VK_SUCCESS :
+      panvk_shader_upload(device, shader, pAllocator);
 
    if (result != VK_SUCCESS)
       return result;
@@ -2552,17 +2675,18 @@ panvk_deserialize_shader_variant(struct vk_device *vk_dev,
 }
 
 static VkResult
-panvk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
-                         uint32_t binary_version,
+panvk_deserialize_shader_impl(struct vk_device *vk_dev, struct blob_reader *blob,
                          const VkAllocationCallbacks *pAllocator,
-                         struct vk_shader **shader_out)
+                         struct vk_shader **shader_out, bool is_fallback)
 {
    struct panvk_device *device = to_panvk_device(vk_dev);
    struct panvk_shader *shader;
    VkResult result;
 
+   uint32_t version = blob_read_uint32(blob);
    mesa_shader_stage stage = blob_read_uint8(blob);
-   if (blob->overrun)
+   if (blob->overrun || version != 0x50414e01 ||
+       stage > MESA_SHADER_COMPUTE)
       return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
    size_t size =
@@ -2588,16 +2712,46 @@ panvk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
 
    panvk_shader_foreach_variant(shader, variant) {
       result = panvk_deserialize_shader_variant(vk_dev, blob, pAllocator,
-                                                variant);
+                                                variant, false);
       if (result != VK_SUCCESS) {
          panvk_shader_destroy(vk_dev, &shader->vk, pAllocator);
          return result;
       }
    }
 
+   uint8_t has_fallback = blob_read_uint8(blob);
+   if (blob->overrun || has_fallback > 1 || (is_fallback && has_fallback)) {
+      panvk_shader_destroy(vk_dev, &shader->vk, pAllocator);
+      return panvk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+   }
+   if (has_fallback) {
+      struct vk_shader *fallback = NULL;
+      result = panvk_deserialize_shader_impl(vk_dev, blob, pAllocator,
+                                             &fallback, true);
+      if (result != VK_SUCCESS) {
+         panvk_shader_destroy(vk_dev, &shader->vk, pAllocator);
+         return result;
+      }
+      shader->no_preamble = container_of(fallback, struct panvk_shader, vk);
+      if (fallback->stage != stage) {
+         panvk_shader_destroy(vk_dev, &shader->vk, pAllocator);
+         return panvk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+      }
+   }
+
    *shader_out = &shader->vk;
 
    return VK_SUCCESS;
+}
+
+static VkResult
+panvk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
+                         uint32_t binary_version,
+                         const VkAllocationCallbacks *pAllocator,
+                         struct vk_shader **shader_out)
+{
+   return panvk_deserialize_shader_impl(vk_dev, blob, pAllocator,
+                                        shader_out, false);
 }
 
 static void
@@ -2682,6 +2836,11 @@ panvk_shader_serialize_variant(struct vk_device *vk_dev,
    blob_write_bytes(blob, shader->nir_str, nir_str_size);
    blob_write_bytes(blob, shader->asm_str, asm_str_size);
 
+   blob_write_uint8(blob, shader->preamble != NULL);
+   if (shader->preamble &&
+       !panvk_shader_serialize_variant(vk_dev, shader->preamble, blob))
+      return false;
+
    return !blob->out_of_memory;
 }
 
@@ -2692,6 +2851,7 @@ panvk_shader_serialize(struct vk_device *vk_dev,
    struct panvk_shader *shader =
       container_of(vk_shader, struct panvk_shader, vk);
 
+   blob_write_uint32(blob, 0x50414e01);
    blob_write_uint8(blob, vk_shader->stage);
 
    shader_desc_info_serialize(blob, shader);
@@ -2700,6 +2860,10 @@ panvk_shader_serialize(struct vk_device *vk_dev,
    panvk_shader_foreach_variant(shader, variant) {
       panvk_shader_serialize_variant(vk_dev, variant, blob);
    }
+
+   blob_write_uint8(blob, shader->no_preamble != NULL);
+   if (shader->no_preamble)
+      panvk_shader_serialize(vk_dev, &shader->no_preamble->vk, blob);
 
    return !blob->out_of_memory;
 }
@@ -2758,6 +2922,15 @@ panvk_shader_get_executable_properties(
             }
          }
       }
+      if (variant->preamble) {
+         vk_outarray_append_typed(VkPipelineExecutablePropertiesKHR, &out,
+                                   props) {
+            props->stages = mesa_to_vk_shader_stage(shader->vk.stage);
+            props->subgroupSize = pan_subgroup_size(PAN_ARCH);
+            VK_PRINT_STR(props->name, "%s preamble", stage_name);
+            VK_PRINT_STR(props->description, "%s preamble", stage_name);
+         }
+      }
    }
 
    return vk_outarray_status(&out);
@@ -2792,6 +2965,11 @@ get_variant_from_executable_index(struct panvk_shader *shader,
             return variant;
          }
 
+         i++;
+      }
+      if (variant->preamble) {
+         if (i == executable_index)
+            return variant->preamble;
          i++;
       }
    }
@@ -3111,6 +3289,12 @@ static void
 panvk_cmd_bind_shader(struct panvk_cmd_buffer *cmd, const mesa_shader_stage stage,
                       struct panvk_shader *shader)
 {
+#if PAN_ARCH >= 10
+   if (shader && shader->no_preamble &&
+       (cmd->flags & VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT))
+      shader = shader->no_preamble;
+#endif
+
    switch (stage) {
    case MESA_SHADER_COMPUTE:
       if (cmd->state.compute.shader != shader) {

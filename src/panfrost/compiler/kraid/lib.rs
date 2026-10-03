@@ -62,6 +62,7 @@ mod debug {
             const SERIAL = 1 << 3;
             const PRINT_RAW_CONST = 1 << 4;
             const STATS = 1 << 5;
+            const NO_PREAMBLE = 1 << 6;
         }
     }
 
@@ -80,6 +81,7 @@ mod debug {
                 "serial" => flags |= DebugFlags::SERIAL,
                 "print-raw-constants" => flags |= DebugFlags::PRINT_RAW_CONST,
                 "stats" => flags |= DebugFlags::STATS,
+                "nopreamble" => flags |= DebugFlags::NO_PREAMBLE,
                 unk => eprintln!("Unknown {debug_var} flag \"{}\"", unk),
             }
         }

@@ -12,6 +12,10 @@
 
 struct util_format_description;
 
+nir_shader *pan_nir_opt_preamble(nir_shader *nir,
+                               const struct pan_compile_inputs *inputs,
+                               nir_shader **preamble, unsigned *fau_words);
+
 #define PAN_NIR_SET_BLAKE3_INTERNAL(nir, key)                                  \
    _mesa_blake3_compute(key, sizeof(*key), nir->info.source_blake3)
 

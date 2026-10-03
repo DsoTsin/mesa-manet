@@ -456,6 +456,10 @@ init_shader_caches(struct panvk_physical_device *device,
    _mesa_blake3_update(&blake3_ctx, &device->kmod.dev->props.gpu_id,
                      sizeof(device->kmod.dev->props.gpu_id));
 
+   const uint64_t driver_flags =
+      pan_get_compiler_flags(pan_arch(device->kmod.dev->props.gpu_id));
+   _mesa_blake3_update(&blake3_ctx, &driver_flags, sizeof(driver_flags));
+
    unsigned char blake3[BLAKE3_KEY_LEN];
    _mesa_blake3_final(&blake3_ctx, blake3);
 
@@ -473,7 +477,6 @@ init_shader_caches(struct panvk_physical_device *device,
    char timestamp[BLAKE3_HEX_LEN];
    _mesa_blake3_format(timestamp, instance->driver_build_sha);
 
-   const uint64_t driver_flags = pan_get_compiler_flags(pan_arch(gpu_id));
    device->vk.disk_cache = disk_cache_create(renderer, timestamp, driver_flags);
 #endif
 }

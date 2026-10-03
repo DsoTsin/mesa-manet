@@ -424,6 +424,7 @@ struct panvk_shader_desc_info {
 
 struct panvk_shader_variant {
    struct pan_shader_info info;
+   struct panvk_shader_variant *preamble;
    uint16_t xfb_stride[MAX_XFB_BUFFERS];
 
    union {
@@ -511,6 +512,8 @@ struct panvk_tess_info {
 
 struct panvk_shader {
    struct vk_shader vk;
+
+   struct panvk_shader *no_preamble;
 
    struct panvk_shader_desc_info desc_info;
 

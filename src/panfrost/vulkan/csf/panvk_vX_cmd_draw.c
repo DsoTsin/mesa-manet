@@ -2842,7 +2842,7 @@ prepare_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
                                              vs_words))
       gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
 
-   if (gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS)) {
+   if (gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS) || vs->preamble) {
       struct pan_ptr push_uniforms;
       result = panvk_per_arch(cmd_prepare_gfx_push_uniforms)(
          cmdbuf, vs, &push_uniforms, vs_repeat_count);
@@ -2876,7 +2876,8 @@ prepare_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
                                              fs_words))
       gfx_state_set_dirty(cmdbuf, FS_PUSH_UNIFORMS);
 
-   if (fs_user_dirty(cmdbuf) || gfx_state_dirty(cmdbuf, FS_PUSH_UNIFORMS)) {
+   if (fs_user_dirty(cmdbuf) || gfx_state_dirty(cmdbuf, FS_PUSH_UNIFORMS) ||
+       (fs && fs->preamble)) {
       uint64_t fau_ptr = 0;
 
       if (fs) {
@@ -2886,6 +2887,16 @@ prepare_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
          if (result != VK_SUCCESS)
             return result;
          cmdbuf->state.gfx.fs.push_uniforms = push_uniforms.gpu;
+
+         if (fs->preamble) {
+            struct panvk_preamble_dispatch pilot = {
+               .shader = fs,
+               .fau = push_uniforms.gpu,
+               .srt = cmdbuf->state.gfx.fs.desc.res_table,
+            };
+            util_dynarray_append_typed(&cmdbuf->fs_preambles,
+                                      struct panvk_preamble_dispatch, pilot);
+         }
 
          if (fs_ubo_words)
             panvk_per_arch(get_fau_ubo_copies)(fs, fs_words, push_uniforms, 1,
@@ -4512,6 +4523,8 @@ static void
 launch_draw(struct panvk_cmd_buffer *cmdbuf,
             const struct panvk_draw_info *draw)
 {
+   const struct panvk_shader_variant *vs =
+      panvk_shader_hw_variant(cmdbuf->state.gfx.vs.shader);
    const struct cs_tracing_ctx *tracing_ctx =
       &cmdbuf->state.cs[PANVK_SUBQUEUE_VERTEX_TILER].tracing;
    struct cs_builder *b =
@@ -4557,6 +4570,10 @@ launch_draw(struct panvk_cmd_buffer *cmdbuf,
 
    panvk_cond_render(cmdbuf, b)
    {
+      panvk_per_arch(cmd_emit_preamble)(
+         cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER, vs,
+         cs_sr_reg64(b, IDVS, VERTEX_FAU),
+         cs_sr_reg64(b, IDVS, VERTEX_SRT));
       if (idvs_count > 1 || dynamic_idvs_count) {
          struct cs_index counter_reg = cs_scratch_reg32(b, 4);
          struct cs_index tiler_ctx_addr = cs_sr_reg64(b, IDVS, TILER_CTX);
@@ -4835,6 +4852,10 @@ launch_indirect_draw_vertex(
       cs_umin32(b, draw_nonempty, cs_sr_reg32(b, IDVS, INDEX_COUNT),
                 cs_sr_reg32(b, IDVS, INSTANCE_COUNT));
       cs_if(b, MALI_CS_CONDITION_NEQUAL, draw_nonempty) {
+         panvk_per_arch(cmd_emit_preamble)(
+            cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER, vs,
+            cs_sr_reg64(b, IDVS, VERTEX_FAU),
+            cs_sr_reg64(b, IDVS, VERTEX_SRT));
          if (idvs_count > 1 || dynamic_idvs_count) {
             if (dynamic_idvs_count) {
                cs_add_imm32(b, idvs_count_reg, idvs_count_reg_tmp, 0);

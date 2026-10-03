@@ -153,6 +153,10 @@ get_resource_mask(const struct panvk_device *dev,
 {
    uint32_t mask = 0;
 
+#if PAN_ARCH == 10 || PAN_ARCH == 11
+   mask |= CS_COMPUTE_RES;
+#endif
+
 #if PAN_ARCH >= 15
    if (dev->vk.enabled_features.rayQuery ||
        dev->vk.enabled_features.rayTracingPipeline)

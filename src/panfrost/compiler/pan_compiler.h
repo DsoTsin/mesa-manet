@@ -18,6 +18,7 @@
 #include "util/shader_stats.h"
 
 struct pan_shader_info;
+struct pan_compile_preamble;
 
 static inline uint32_t
 pan_loop_weight(unsigned depth)
@@ -74,6 +75,8 @@ struct pan_compile_inputs {
 
    bool instrument;
    uint32_t instrument_fau;
+   struct pan_compile_preamble *preamble;
+   bool disable_preamble;
 };
 
 #define PAN_INSTRUMENTATION_METRICS      6
@@ -593,6 +596,11 @@ struct pan_shader_info {
 
 void pan_shader_update_info(struct pan_shader_info *info, nir_shader *s,
                             const struct pan_compile_inputs *inputs);
+
+struct pan_compile_preamble {
+   struct pan_shader_info info;
+   struct util_dynarray binary;
+};
 
 uint16_t pan_to_bytemask(unsigned bytes, unsigned mask);
 

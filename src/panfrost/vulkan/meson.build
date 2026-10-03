@@ -122,6 +122,7 @@ csf_files = [
   'csf/panvk_vX_cmd_xfb.c',
   'csf/panvk_vX_cmd_query.c',
   'csf/panvk_vX_cmd_precomp.c',
+  'csf/panvk_vX_cmd_preamble.c',
   'csf/panvk_vX_cmd_shader_instrumentation.c',
   'csf/panvk_vX_dgc.c',
   'csf/panvk_vX_dgc_submit.c',

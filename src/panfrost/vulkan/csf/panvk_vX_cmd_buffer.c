@@ -666,7 +666,9 @@ void
 panvk_per_arch(cmd_flush_fs_fau_copies)(struct panvk_cmd_buffer *cmdbuf)
 {
    if (!util_dynarray_num_elements(&cmdbuf->fau_copies.fs,
-                                   struct panvk_fau_copy))
+                                   struct panvk_fau_copy) &&
+       !util_dynarray_num_elements(&cmdbuf->fs_preambles,
+                                   struct panvk_preamble_dispatch))
       return;
 
    struct cs_builder *b =
@@ -675,6 +677,15 @@ panvk_per_arch(cmd_flush_fs_fau_copies)(struct panvk_cmd_buffer *cmdbuf)
    panvk_per_arch(cs_emit_fau_copies)(b, &cmdbuf->fau_copies.fs);
    cs_flush_stores(b);
    util_dynarray_clear(&cmdbuf->fau_copies.fs);
+   util_dynarray_foreach(&cmdbuf->fs_preambles, struct panvk_preamble_dispatch, p) {
+      cs_move64_to(b, cs_scratch_reg64(b, 0), p->fau |
+                   ((uint64_t)p->shader->fau.total_count << 56));
+      cs_move64_to(b, cs_scratch_reg64(b, 2), p->srt);
+      panvk_per_arch(cmd_emit_preamble)(cmdbuf, PANVK_SUBQUEUE_FRAGMENT,
+                                        p->shader, cs_scratch_reg64(b, 0),
+                                        cs_scratch_reg64(b, 2));
+   }
+   util_dynarray_clear(&cmdbuf->fs_preambles);
    cmdbuf->fau_copies.fs_after_tiling = false;
 }
 
@@ -833,7 +844,9 @@ panvk_per_arch(add_cs_deps)(struct panvk_cmd_buffer *cmdbuf,
     * copies recorded before one inside the render pass run after the
     * tiling. */
    if (util_dynarray_num_elements(&cmdbuf->fau_copies.fs,
-                                  struct panvk_fau_copy))
+                                  struct panvk_fau_copy) ||
+       util_dynarray_num_elements(&cmdbuf->fs_preambles,
+                                  struct panvk_preamble_dispatch))
       cmdbuf->fau_copies.fs_after_tiling = true;
 
    bool is_asymmetric_event =
@@ -1206,6 +1219,7 @@ panvk_reset_cmdbuf(struct vk_command_buffer *vk_cmdbuf,
 
    util_dynarray_clear(&cmdbuf->fau_copies.vs);
    util_dynarray_clear(&cmdbuf->fau_copies.fs);
+   util_dynarray_clear(&cmdbuf->fs_preambles);
    cmdbuf->fau_copies.fs_after_tiling = false;
 
    memset(&cmdbuf->state, 0, sizeof(cmdbuf->state));
@@ -1231,6 +1245,7 @@ panvk_destroy_cmdbuf(struct vk_command_buffer *vk_cmdbuf)
 
    util_dynarray_fini(&cmdbuf->fau_copies.vs);
    util_dynarray_fini(&cmdbuf->fau_copies.fs);
+   util_dynarray_fini(&cmdbuf->fs_preambles);
 
    panvk_pool_cleanup(&cmdbuf->cs_pool);
    panvk_per_arch(dgc_records_reset)(cmdbuf);
@@ -1279,6 +1294,7 @@ panvk_create_cmdbuf(struct vk_command_pool *vk_pool, VkCommandBufferLevel level,
    list_inithead(&cmdbuf->push_sets);
    util_dynarray_init(&cmdbuf->fau_copies.vs, NULL);
    util_dynarray_init(&cmdbuf->fau_copies.fs, NULL);
+   util_dynarray_init(&cmdbuf->fs_preambles, NULL);
    cmdbuf->vk.dynamic_graphics_state.vi = &cmdbuf->state.gfx.dynamic.vi;
    list_inithead(&cmdbuf->dgc_records);
    cmdbuf->vk.dynamic_graphics_state.ms.sample_locations =
