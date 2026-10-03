@@ -2701,7 +2701,7 @@ impl<'a> ShaderFromNir<'a> {
                     intrin.def.bit_size,
                 );
 
-                let name = match flags.name() {
+                let name = match flags.name() as pan_bi_varying_name {
                     PAN_VARYING_NAME_POINT => VarSpecialName::Point,
                     PAN_VARYING_NAME_FRAG_Z => VarSpecialName::FragZ,
                     PAN_VARYING_NAME_FRAG_W => VarSpecialName::FragW,
