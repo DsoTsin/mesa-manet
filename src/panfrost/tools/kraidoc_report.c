@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <string.h>
 
 #include "git_sha1.h"
 #include "kraidoc_report.h"
@@ -71,6 +72,11 @@ kraidoc_write_list(FILE *f, bool json)
       const struct pan_model *model = &pan_model_list[i];
       unsigned arch = model->gpu_prod_id >> 16;
       if (arch < 9 || arch > 11)
+         continue;
+      bool duplicate = false;
+      for (unsigned j = 0; j < i; j++)
+         duplicate |= !strcmp(pan_model_list[j].name, model->name);
+      if (duplicate)
          continue;
       if (json) {
          fprintf(f, "%s{\"apis\":[\"Vulkan\"],\"core\":", comma ? "," : "");

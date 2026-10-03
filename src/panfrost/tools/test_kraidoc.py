@@ -181,6 +181,22 @@ void main() {
     assert typed_values["specialization"] == raw_values["specialization"]
     for value in ["4=2147483648", "4=-2147483649", "5=invalid", "6=2"]:
         run(typed_types, "-S", value, success=False)
+    scratch = fixture(root, "scratch.comp", """#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0) buffer Data { float data[]; } output_data;
+void main() {
+  float values[128];
+  uint id=gl_GlobalInvocationID.x;
+  for (int i=0;i<128;i++) values[i]=sin(float(id)+float(i));
+  output_data.data[id]=values[id%128];
+}
+""")
+    scratch_report = json.loads(run("-C", "--format", "json", scratch).stdout)
+    scratch_props = {p["name"]: p["value"] for p in
+                     scratch_report["shaders"][0]["variants"][0]["properties"]}
+    assert scratch_props["stack_alloca_bytes"] > 0
+    assert scratch_props["stack_spill_bytes"] == 0
+    assert scratch_props["has_stack_spilling"] is False
     assert "Work registers:" in run("-C", compute).stdout
     assert "Total instruction cycles:" in run("--compute", "--detailed", compute).stdout
     stdout_report = json.loads(run("-C", "--format", "json", compute).stdout)
