@@ -40,6 +40,7 @@ enum ExpressionKind {
     FmaRScale(FRound, FClamp),
     FSinTable(bool),
     FCosTable(bool),
+    Clper(u8, u8, u8),
 }
 
 #[derive(Eq, Hash, PartialEq)]
@@ -61,6 +62,11 @@ impl Expression {
             Op::FmaRScale(op) => ExpressionKind::FmaRScale(op.round, op.clamp),
             Op::FSinTable(op) => ExpressionKind::FSinTable(op.offset),
             Op::FCosTable(op) => ExpressionKind::FCosTable(op.offset),
+            Op::Clper(op) => ExpressionKind::Clper(
+                op.subgroup as u8,
+                op.lane_op as u8,
+                op.inactive as u8,
+            ),
             _ => return None,
         };
         let [dst] = instr.dsts() else { return None; };
@@ -71,8 +77,19 @@ impl Expression {
         if vec.comps() != 1 || vec[0].bits() != 32 || vec[0].is_mem() {
             return None;
         }
-        let srcs = instr.srcs().iter().map(ScalarSource::new)
-            .collect::<Option<Vec<_>>>()?;
+        let srcs = if let Op::Clper(op) = &instr.op {
+            let lane = op.lane.resolve_imm(DataType::U32)?;
+            vec![
+                ScalarSource::new(&op.data)?,
+                ScalarSource {
+                    value: ScalarValue::Imm(lane as u32),
+                    src_mod: SrcMod::None,
+                },
+            ]
+        } else {
+            instr.srcs().iter().map(ScalarSource::new)
+                .collect::<Option<Vec<_>>>()?
+        };
         Some((vec[0], Self { kind, srcs }))
     }
 }
@@ -86,6 +103,11 @@ fn cse_block(instrs: &mut [Instr]) -> bool {
             if let Some(&copy) = copies.get(src) {
                 *src = copy;
             }
+        }
+        if instr.op.writes_discard() {
+            expressions.retain(|expression: &Expression, _| {
+                !matches!(expression.kind, ExpressionKind::Clper(..))
+            });
         }
         let Some((dst, expression)) = Expression::new(instr) else {
             continue;
@@ -120,8 +142,51 @@ mod tests {
     use super::*;
     use crate::builder::{SSAInstrBuilder, SSABuilder};
     use crate::model::model_for_gpu_id;
-    use crate::ops::{OpFma, OpFmaRScale, OpFSinTable};
+    use crate::ops::{ClperInactiveResult, ClperLaneOp, CmpOp, OpClper, OpDiscard,
+                     OpFma, OpFmaRScale, OpFSinTable, SubgroupSize};
     use crate::ssa_value::{AllocSSA, SSAValueAllocator};
+
+    fn clper(alloc: &mut SSAValueAllocator, data: SSAValue, lane: u8,
+             lane_op: ClperLaneOp) -> Instr {
+        OpClper {
+            dst: alloc.alloc_ssa(32).into(),
+            subgroup: SubgroupSize::Subgroup4,
+            lane_op,
+            inactive: ClperInactiveResult::Zero,
+            data: data.into(),
+            lane: lane.into(),
+        }.into()
+    }
+
+    #[test]
+    fn identical_lane_reads_are_shared() {
+        let mut alloc = SSAValueAllocator::default();
+        let input = alloc.alloc_ssa(32);
+        let mut instrs = vec![
+            clper(&mut alloc, input, 0, ClperLaneOp::None),
+            clper(&mut alloc, input, 1, ClperLaneOp::None),
+            clper(&mut alloc, input, 0, ClperLaneOp::None),
+            clper(&mut alloc, input, 1, ClperLaneOp::Xor),
+        ];
+        assert!(cse_block(&mut instrs));
+        assert!(matches!(instrs[0].op, Op::Clper(_)));
+        assert!(matches!(instrs[1].op, Op::Clper(_)));
+        assert!(matches!(instrs[2].op, Op::Copy(_)));
+        assert!(matches!(instrs[3].op, Op::Clper(_)));
+    }
+
+    #[test]
+    fn lane_reads_are_not_shared_across_discard() {
+        let mut alloc = SSAValueAllocator::default();
+        let input = alloc.alloc_ssa(32);
+        let mut instrs = vec![
+            clper(&mut alloc, input, 0, ClperLaneOp::None),
+            OpDiscard { cmp_op: CmpOp::Lt, srcs: [input.into(), 0_u32.into()] }.into(),
+            clper(&mut alloc, input, 0, ClperLaneOp::None),
+        ];
+        assert!(!cse_block(&mut instrs));
+        assert!(matches!(instrs[2].op, Op::Clper(_)));
+    }
 
     #[test]
     fn sin_cos_share_reduction_and_tables() {

@@ -367,7 +367,7 @@ static_assert(sizeof(struct pan_bi_var_special_flags) == 4, "Must fit in uint32_
 void pan_nir_lower_mediump_io(nir_shader *nir);
 
 bool pan_nir_lower_tex(nir_shader *nir, uint64_t gpu_id);
-bool pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id);
+bool pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id, bool in_bounds);
 bool pan_nir_lower_tensor(nir_shader *nir);
 
 bool pan_nir_lower_mem_to_global(nir_shader *nir);

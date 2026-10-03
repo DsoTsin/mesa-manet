@@ -10,3 +10,4 @@
 bool bifrost_nir_lower_algebraic_late(nir_shader *shader, unsigned gpu_arch,
                                       bool is_kraid);
 bool bifrost_nir_opt_boolean_bitwise(nir_shader *shader);
+bool bifrost_nir_opt_fp16(nir_shader *shader, bool is_kraid);

@@ -493,6 +493,11 @@ impl RegAlignConstraint {
     }
 }
 
+pub(crate) fn src_has_reg_placement(model: &dyn Model, op: &Op, src: &Src) -> bool {
+    !matches!(src.src_ref, SrcRef::SSA(_))
+        || !RegAlignConstraint::for_op_src(model, op, src).is_empty()
+}
+
 impl std::ops::BitAndAssign for RegAlignConstraint {
     fn bitand_assign(&mut self, rhs: Self) {
         self.0 &= rhs.0
@@ -1428,10 +1433,37 @@ impl LocalRegAlloc<'_> {
         }
 
         let bytes = vec.bytes();
+        if vec.comps() == 1 {
+            return self.choose_ssa_ref_bytes(p, vec, align, |b| {
+                let bytes = b..(b + u16::from(bytes));
+                src_bytes
+                    .count_set_in_range(bytes.start.into()..bytes.end.into())
+                    .try_into()
+                    .unwrap_or(u8::MAX)
+            });
+        }
+
+        let mut comps = Vec::new();
+        let mut offset = 0_u16;
+        for ssa in vec.iter() {
+            comps.push((offset, self.ssa_bytes(ssa)));
+            offset += u16::from(ssa.bytes());
+        }
         self.choose_ssa_ref_bytes(p, vec, align, |b| {
-            let bytes = b..(b + u16::from(bytes));
-            src_bytes
-                .count_set_in_range(bytes.start.into()..bytes.end.into())
+            let mut cost = 0_usize;
+            let mut in_place = 0_usize;
+            for (offset, old) in &comps {
+                let start = b + offset;
+                if old.start == start {
+                    in_place += usize::from(old.end - old.start);
+                } else {
+                    cost += usize::from(old.end - old.start);
+                }
+            }
+            let range = b..(b + u16::from(bytes));
+            let overlap = src_bytes
+                .count_set_in_range(range.start.into()..range.end.into());
+            (cost + overlap.saturating_sub(in_place))
                 .try_into()
                 .unwrap_or(u8::MAX)
         })

@@ -17,10 +17,10 @@ build_scratch_addr(nir_builder *b, nir_intrinsic_instr *intr)
 static nir_def *
 build_shared_addr(nir_builder *b, nir_intrinsic_instr *intr)
 {
-   nir_def *offset = nir_iadd_imm(b, nir_get_io_offset_src(intr)->ssa,
-                                  nir_intrinsic_base(intr));
-   return nir_iadd(b, nir_load_shared_base_ptr(b, 1, 64),
-                   nir_u2u64(b, offset));
+   nir_def *offset = nir_get_io_offset_src(intr)->ssa;
+   nir_def *addr = nir_iadd(b, nir_load_shared_base_ptr(b, 1, 64),
+                            nir_u2u64(b, offset));
+   return nir_iadd_imm(b, addr, nir_intrinsic_base(intr));
 }
 
 static bool

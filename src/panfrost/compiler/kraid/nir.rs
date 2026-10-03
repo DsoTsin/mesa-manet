@@ -102,6 +102,79 @@ fn sample_position_from_pan(n: pan_bi_sample_loc) -> SamplePosition {
     }
 }
 
+fn clper_identity(op: nir_op) -> ClperInactiveResult {
+    match op {
+        nir_op_iadd | nir_op_ior | nir_op_ixor | nir_op_umax => {
+            ClperInactiveResult::Zero
+        }
+        nir_op_iand | nir_op_umin => ClperInactiveResult::UMax,
+        nir_op_imul => ClperInactiveResult::I32_1,
+        nir_op_imin => ClperInactiveResult::S32Max,
+        nir_op_imax => ClperInactiveResult::S32Min,
+        _ => panic!("Unsupported subgroup reduction op"),
+    }
+}
+
+fn emit_reduction_alu(
+    b: &mut impl SSABuilder,
+    op: nir_op,
+    x: Src,
+    y: Src,
+) -> SSAValue {
+    let dst = b.alloc_ssa(32);
+    match op {
+        nir_op_iadd => {
+            b.push_op(OpIAdd {
+                dst: dst.into(),
+                dst_type: DataType::I32,
+                saturate: false,
+                srcs: [x, y],
+            });
+        }
+        nir_op_imul => {
+            b.push_op(OpIMul {
+                dst: dst.into(),
+                dst_type: DataType::I32,
+                saturate: false,
+                srcs: [x, y],
+            });
+        }
+        nir_op_iand | nir_op_ior | nir_op_ixor => {
+            b.push_op(OpShiftLop {
+                dst: dst.into(),
+                dst_type: DataType::U32,
+                shift_op: ShiftOp::None,
+                logic_op: match op {
+                    nir_op_iand => LogicOp::And,
+                    nir_op_ior => LogicOp::Or,
+                    _ => LogicOp::Xor,
+                },
+                not_result: false,
+                src0: x,
+                shift: Src::from(0_u8),
+                src2: y,
+            });
+        }
+        nir_op_imin | nir_op_imax | nir_op_umin | nir_op_umax => {
+            b.push_op(OpCSel {
+                dst: dst.into(),
+                cmp_type: match op {
+                    nir_op_imin | nir_op_imax => DataType::S32,
+                    _ => DataType::U32,
+                },
+                cmp_op: match op {
+                    nir_op_imin | nir_op_umin => CmpOp::Lt,
+                    _ => CmpOp::Gt,
+                },
+                cmp_srcs: [x.clone(), y.clone()],
+                sel_srcs: [x, y],
+            });
+        }
+        _ => panic!("Unsupported subgroup reduction op"),
+    }
+    dst
+}
+
 struct ShaderFromNir<'a> {
     model: &'a dyn Model,
     nir: &'a nir_shader,
@@ -659,9 +732,12 @@ impl<'a> ShaderFromNir<'a> {
                                 clamp: FClamp::None,
                             });
                         } else {
-                            b.push_op(OpV2F32ToV2F16 {
-                                dst: dst.into(),
-                                srcs: [srcs(0).word(0), srcs(0).word(0)],
+                            let mut dst: Dst = dst.into();
+                            dst.lanes = DstLanes::AnyHF;
+                            b.push_op(OpFAdd {
+                                dst,
+                                dst_type: DataType::F32,
+                                srcs: [Src::fneg_zero(32), srcs(0)],
                                 round,
                                 clamp: FClamp::None,
                             });
@@ -1120,6 +1196,16 @@ impl<'a> ShaderFromNir<'a> {
                     src_type: src_type(0, NumericType::Float),
                     src: srcs(0),
                     mode: FrexpMode::Normal,
+                });
+            }
+            nir_op_ffma_rscale_pan => {
+                assert!(alu.def.bit_size == 32);
+                b.push_op(OpFmaRScale {
+                    dst: dst.into(),
+                    round: self.fround(32),
+                    clamp: FClamp::None,
+                    srcs: [srcs(0), srcs(1), srcs(2)],
+                    scale: srcs(3),
                 });
             }
             nir_op_ldexp => {
@@ -1905,12 +1991,13 @@ impl<'a> ShaderFromNir<'a> {
                     | nir_intrinsic_ddy_coarse => DerivativeAxis::Y,
                     _ => unreachable!(),
                 };
-                let coarse = matches!(
-                    intrin.intrinsic,
-                    nir_intrinsic_ddx_coarse | nir_intrinsic_ddy_coarse
-                );
                 let sign_is_ignored =
                     unsafe { nir_def_all_uses_ignore_sign_bit(&intrin.def) };
+                let coarse = match intrin.intrinsic {
+                    nir_intrinsic_ddx_coarse | nir_intrinsic_ddy_coarse => true,
+                    nir_intrinsic_ddx | nir_intrinsic_ddy => !sign_is_ignored,
+                    _ => false,
+                };
                 let ssa = b.derivative(
                     dst_type,
                     self.get_src(&srcs[0]),
@@ -2327,6 +2414,77 @@ impl<'a> ShaderFromNir<'a> {
                     data,
                     lane,
                 });
+            }
+            nir_intrinsic_reduce
+            | nir_intrinsic_inclusive_scan
+            | nir_intrinsic_exclusive_scan => {
+                assert_eq!(intrin.def.bit_size, 32);
+                assert_eq!(intrin.def.num_components, 1);
+                let op = intrin.reduction_op();
+                let inactive = clper_identity(op);
+                let lanes = u32::from(self.model.subgroup_size());
+                let subgroup = self.model.subgroup_size().try_into().unwrap();
+                let value = self.get_src(&srcs[0]);
+                let (lane_op, steps) = if intrin.intrinsic == nir_intrinsic_reduce {
+                    let cluster = match intrin.cluster_size() {
+                        0 => lanes,
+                        c => c.min(lanes),
+                    };
+                    (ClperLaneOp::Xor, cluster)
+                } else {
+                    (ClperLaneOp::Shift, lanes)
+                };
+                let mut data = value.clone();
+                let mut step = 1;
+                while step < steps {
+                    let lane = if lane_op == ClperLaneOp::Shift {
+                        (-(step as i32)) as u32
+                    } else {
+                        step
+                    };
+                    let shifted = b.alloc_ssa(32);
+                    b.push_op(OpClper {
+                        dst: shifted.into(),
+                        subgroup,
+                        lane_op,
+                        inactive,
+                        data: data.clone(),
+                        lane: Src::from(lane).byte(0),
+                    });
+                    data = emit_reduction_alu(b, op, data, shifted.into()).into();
+                    step *= 2;
+                }
+                if intrin.intrinsic == nir_intrinsic_exclusive_scan {
+                    data = match op {
+                        nir_op_iadd => {
+                            let dst = b.alloc_ssa(32);
+                            b.push_op(OpISub {
+                                dst: dst.into(),
+                                dst_type: DataType::I32,
+                                saturate: false,
+                                srcs: [data, value],
+                            });
+                            dst.into()
+                        }
+                        nir_op_ixor => {
+                            emit_reduction_alu(b, op, data, value).into()
+                        }
+                        _ => {
+                            let dst = b.alloc_ssa(32);
+                            b.push_op(OpClper {
+                                dst: dst.into(),
+                                subgroup,
+                                lane_op: ClperLaneOp::Shift,
+                                inactive,
+                                data,
+                                lane: Src::from(u32::MAX).byte(0),
+                            });
+                            dst.into()
+                        }
+                    };
+                }
+                let dst = self.alloc_ssa(b, &intrin.def);
+                b.copy_i32_to(dst.into(), data);
             }
             nir_intrinsic_shader_clock => {
                 assert_eq!(intrin.def.bit_size * intrin.def.num_components, 64);

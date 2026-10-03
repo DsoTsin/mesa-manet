@@ -8,6 +8,7 @@ use compiler::smallvec::SmallVec;
 use crate::ir::*;
 use crate::model::SmallConstantTable;
 use crate::ops::LogicOp;
+use crate::ra;
 
 fn supported_swizzles(
     model: &dyn Model,
@@ -195,6 +196,14 @@ fn lower_instr(instr: &mut Instr, model: &dyn Model, ctx: &mut VecCtx) {
         }
 
         p.apply(instr);
+        if !instr
+            .srcs()
+            .iter()
+            .all(|src| ra::src_has_reg_placement(model, &instr.op, src))
+        {
+            p.unapply(instr);
+            continue;
+        }
         let r = find_lowerable_srcs(instr, &ctx.swizzles, &ctx.mods, sc_table);
         p.unapply(instr);
 
@@ -230,6 +239,53 @@ impl Shader<'_> {
                 }
                 lower_instr(instr, self.model, &mut vec_ctx);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::model_for_gpu_id;
+    use crate::ops::{OpShiftLop, ShiftOp};
+    use crate::ssa_value::{AllocSSA, SSAValueAllocator};
+
+    #[test]
+    fn permutation_keeps_subword_source_placeable() {
+        let imms = [
+            Src::from(0x01010101_u32),
+            Src::from(1_u32).swizzle(Swizzle::B0000),
+        ];
+        for (arch, imm) in [9, 10, 12, 13, 14]
+            .into_iter()
+            .flat_map(|arch| imms.iter().map(move |imm| (arch, imm.clone())))
+        {
+            let model = model_for_gpu_id(arch << 28, 0).unwrap();
+            let mut alloc = SSAValueAllocator::default();
+            let half = alloc.alloc_ssa(16);
+            let mut dst: Dst = alloc.alloc_ssa(16).into();
+            dst.lanes = DstLanes::AnyH;
+            let mut instr: Instr = OpShiftLop {
+                dst,
+                dst_type: DataType::V4U8,
+                shift_op: ShiftOp::None,
+                logic_op: LogicOp::And,
+                not_result: false,
+                src0: half.into(),
+                shift: 0_u32.into(),
+                src2: imm,
+            }
+            .into();
+            assert!(instr
+                .srcs()
+                .iter()
+                .all(|src| ra::src_has_reg_placement(model.as_ref(), &instr.op, src)));
+            let mut ctx = VecCtx::default();
+            lower_instr(&mut instr, model.as_ref(), &mut ctx);
+            assert!(instr
+                .srcs()
+                .iter()
+                .all(|src| ra::src_has_reg_placement(model.as_ref(), &instr.op, src)));
         }
     }
 }

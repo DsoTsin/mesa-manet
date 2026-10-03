@@ -172,3 +172,16 @@ test('ir3_delay_test',
   ),
   suite: ['freedreno'],
 )
+
+if host_machine.system() == 'windows' and host_machine.cpu_family() == 'x86_64'
+  executable(
+    'ir3-aoc-isa',
+    'ir3-aoc-isa.cpp',
+    dependencies: [idep_libir3decode, cpp.find_library('bcrypt')],
+    include_directories: [inc_src],
+    cpp_args: ['/U_HAS_EXCEPTIONS', '/D_HAS_EXCEPTIONS=1'],
+    override_options: ['cpp_eh=sc'],
+    build_by_default: with_tools.contains('freedreno'),
+    install: false,
+  )
+endif

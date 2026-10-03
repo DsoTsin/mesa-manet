@@ -6,7 +6,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use crate::ir::*;
 use kraid_bindings::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum ConstEntry {
@@ -70,15 +70,45 @@ fn fau_emit_const(fau: &mut pan_fau_layout, imm: u32) -> u16 {
     unsafe { pan_fau_emit_const(fau, imm) }.try_into().unwrap()
 }
 
+fn pair_key(a: NonZeroU32, b: NonZeroU32) -> (NonZeroU32, NonZeroU32) {
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
 fn promote_consts(s: &mut Shader, fau: &mut pan_fau_layout) {
     let mut const_table = ConstTable::default();
+    let mut pair_weights: FxHashMap<(NonZeroU32, NonZeroU32), u32> =
+        FxHashMap::default();
+    let zero_free = s.model.fau().is_zero_free;
 
     // TODO: Take into account control flow and try to use source mods to unify
     // constants together.
     for block in s.blocks.iter() {
         for instr in block.instrs.iter() {
+            let mut imms: Vec<NonZeroU32> = Vec::new();
+            let mut blocked = s.model.op_is_message(&instr.op);
             for src in instr.srcs() {
                 const_table.add_op_src(s.model, &instr.op, src);
+                match ConstEntry::from_src_promotable(s.model, &instr.op, src) {
+                    Some(ConstEntry::I32(v)) => {
+                        if !imms.contains(&v) {
+                            imms.push(v);
+                        }
+                    }
+                    Some(ConstEntry::I64(_)) => blocked = true,
+                    None => match &src.src_ref {
+                        SrcRef::Zero => blocked |= !zero_free,
+                        SrcRef::FAU(_) => blocked = true,
+                        _ => {}
+                    },
+                }
+            }
+            if !blocked && imms.len() == 2 {
+                *pair_weights.entry(pair_key(imms[0], imms[1])).or_insert(0) +=
+                    1;
             }
         }
     }
@@ -110,14 +140,43 @@ fn promote_consts(s: &mut Shader, fau: &mut pan_fau_layout) {
         }
     }
 
+    let selected_set: FxHashSet<NonZeroU32> =
+        selected32.iter().copied().collect();
+    let mut edges: Vec<_> = pair_weights
+        .into_iter()
+        .filter(|((a, b), _)| selected_set.contains(a) && selected_set.contains(b))
+        .collect();
+    edges.sort_by_key(|((a, b), w)| Reverse((*w, *a, *b)));
+
+    let mut paired = FxHashSet::default();
+    let mut pairs = Vec::new();
+    for ((a, b), _) in edges {
+        if paired.contains(&a) || paired.contains(&b) {
+            continue;
+        }
+        paired.insert(a);
+        paired.insert(b);
+        pairs.push((a, b));
+    }
+    let mut singles: Vec<NonZeroU32> = selected32
+        .into_iter()
+        .filter(|imm32| !paired.contains(imm32))
+        .collect();
+
     let mut entry_to_idx = FxHashMap::default();
     let has_wide = !selected64.is_empty();
-    let mut selected32 = selected32.into_iter();
     let selected64 = selected64.into_iter();
 
     // If we have an unaligned hole fill it with a 32-bit const
-    if has_wide && (fau.count % 2) != 0 {
-        if let Some(imm32) = selected32.next() {
+    if (has_wide || !pairs.is_empty()) && (fau.count % 2) != 0 {
+        if singles.is_empty() {
+            if let Some((a, b)) = pairs.pop() {
+                singles.push(a);
+                singles.push(b);
+            }
+        }
+        if !singles.is_empty() {
+            let imm32 = singles.remove(0);
             let fau_idx = fau_emit_const(fau, imm32.get());
             entry_to_idx.insert(ConstEntry::I32(imm32), fau_idx);
         } else {
@@ -132,7 +191,15 @@ fn promote_consts(s: &mut Shader, fau: &mut pan_fau_layout) {
         entry_to_idx.insert(ConstEntry::I64(imm64), fau_idx);
     }
 
-    for imm32 in selected32 {
+    for (a, b) in pairs {
+        let fau_idx = fau_emit_const(fau, a.get());
+        debug_assert_eq!(fau_idx % 2, 0);
+        entry_to_idx.insert(ConstEntry::I32(a), fau_idx);
+        let fau_idx = fau_emit_const(fau, b.get());
+        entry_to_idx.insert(ConstEntry::I32(b), fau_idx);
+    }
+
+    for imm32 in singles {
         let fau_idx = fau_emit_const(fau, imm32.get());
         entry_to_idx.insert(ConstEntry::I32(imm32), fau_idx);
     }

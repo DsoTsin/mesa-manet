@@ -785,6 +785,7 @@ typedef struct nir_shader_compiler_options {
    unsigned max_unroll_iterations;
    unsigned max_unroll_iterations_aggressive;
    unsigned max_unroll_iterations_fp64;
+   unsigned max_unroll_cost;
 
    /** Register pressure a loop can be under before nir_opt_gcm stops moving
     * instructions out of it for free.

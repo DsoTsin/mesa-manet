@@ -930,7 +930,9 @@ check_unrolling_restrictions(nir_shader *shader, nir_loop *loop)
    if (li->force_unroll && !li->guessed_trip_count && trip_count <= max_iter)
       return true;
 
-   unsigned cost_limit = max_iter * LOOP_UNROLL_LIMIT;
+   unsigned cost_limit = shader->options->max_unroll_cost ?
+                         shader->options->max_unroll_cost :
+                         max_iter * LOOP_UNROLL_LIMIT;
    unsigned cost = li->instr_cost * trip_count;
 
    if (cost <= cost_limit && trip_count <= max_iter)

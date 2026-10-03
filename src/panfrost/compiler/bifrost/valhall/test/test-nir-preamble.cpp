@@ -198,3 +198,103 @@ TEST_F(preamble_test, compile_main_with_control_flow)
    util_dynarray_fini(&binary);
    util_dynarray_fini(&compiled.binary);
 }
+
+TEST_F(preamble_test, single_uniform_alu_is_extracted)
+{
+   sink(nir_fadd_imm(b, uniform(), 1.0f));
+   ASSERT_TRUE(run());
+   EXPECT_EQ(words, 10u);
+   EXPECT_EQ(count(main, nir_intrinsic_load_push_constant), 1u);
+}
+
+TEST_F(preamble_test, source_modifier_is_not_extracted)
+{
+   sink(nir_fneg(b, uniform()));
+   EXPECT_FALSE(run());
+}
+
+TEST_F(preamble_test, uniform_load_in_divergent_branch_is_extracted)
+{
+   auto id = nir_channel(b, nir_load_local_invocation_id(b), 0);
+   nir_push_if(b, nir_ine_imm(b, id, 0));
+   sink(nir_fadd_imm(b, uniform(), 1.0f));
+   nir_pop_if(b, nullptr);
+   ASSERT_TRUE(run());
+   EXPECT_EQ(words, 10u);
+   EXPECT_EQ(count(main, nir_intrinsic_load_local_invocation_id), 1u);
+}
+
+TEST_F(preamble_test, fau_pressure_keeps_cheap_uniform_alu)
+{
+   inputs.fau.pushable_ubos = 1;
+   auto acc = nir_u2f32(b, nir_channel(b, nir_load_local_invocation_id(b), 0));
+   for (unsigned i = 0; i < 100; i++) {
+      auto x = nir_load_ubo(b, 1, 32, nir_imm_int(b, 0), nir_imm_int(b, i * 4),
+                            .align_mul = 4, .range = 4096);
+      acc = nir_fadd(b, acc, x);
+   }
+   sink(acc);
+   sink(nir_fadd_imm(b, uniform(), 1.0f));
+   EXPECT_FALSE(run());
+   EXPECT_EQ(words, 8u);
+}
+
+TEST_F(preamble_test, fau_pressure_extracts_expensive_uniform_alu)
+{
+   inputs.fau.pushable_ubos = 1;
+   auto acc = nir_u2f32(b, nir_channel(b, nir_load_local_invocation_id(b), 0));
+   for (unsigned i = 0; i < 100; i++) {
+      auto x = nir_load_ubo(b, 1, 32, nir_imm_int(b, 0), nir_imm_int(b, i * 4),
+                            .align_mul = 4, .range = 4096);
+      acc = nir_fadd(b, acc, x);
+   }
+   sink(acc);
+   sink(nir_fsin(b, uniform()));
+   ASSERT_TRUE(run());
+   EXPECT_EQ(words, 10u);
+   EXPECT_EQ(count(main, nir_intrinsic_load_ubo), 100u);
+}
+
+class preamble_arch_test
+   : public preamble_test,
+     public ::testing::WithParamInterface<std::pair<unsigned, uint64_t>> {};
+
+TEST_P(preamble_arch_test, compile_main_and_pilot)
+{
+   const unsigned arch = GetParam().first;
+   if (!pan_use_kraid(arch, MESA_SHADER_COMPUTE, false)) {
+      GTEST_SKIP();
+   }
+   inputs.gpu_id = GetParam().second;
+   b->shader->options =
+      pan_get_nir_shader_compiler_options(arch, MESA_SHADER_COMPUTE, false);
+   b->shader->info.workgroup_size[0] = 32;
+   b->shader->info.workgroup_size[1] = 1;
+   b->shader->info.workgroup_size[2] = 1;
+   auto value = chain(uniform());
+   auto id = nir_channel(b, nir_load_local_invocation_id(b), 0);
+   nir_push_if(b, nir_ine_imm(b, id, 0));
+   sink(value);
+   nir_push_else(b, nullptr);
+   sink(nir_fadd_imm(b, value, 1.0f));
+   nir_pop_if(b, nullptr);
+   pan_compile_preamble compiled = {};
+   util_dynarray binary = {};
+   pan_shader_info info = {};
+   inputs.preamble = &compiled;
+   pan_postprocess_nir(b->shader, &inputs, &info);
+   pan_shader_compile(b->shader, &inputs, &binary, &info);
+   EXPECT_GT(binary.size, 0u);
+   EXPECT_GT(compiled.binary.size, 0u);
+   util_dynarray_fini(&binary);
+   util_dynarray_fini(&compiled.binary);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+   csf, preamble_arch_test,
+   ::testing::Values(std::make_pair(10u, 0xa8670000ull),
+                     std::make_pair(11u, 0xb8020000ull),
+                     std::make_pair(12u, 0xc8000000ull),
+                     std::make_pair(13u, 0xd8000000ull),
+                     std::make_pair(14u, 0xe8000000ull),
+                     std::make_pair(15u, 0x0f080000f0000000ull)));

@@ -1724,6 +1724,11 @@ if (!isnormal(dst))
    dst = copysignf(0.0f, src0);
 """)
 
+opcode("ffma_rscale_pan", 0, tfloat32, [0, 0, 0, 0],
+       [tfloat32, tfloat32, tfloat32, tint32], False, "", """
+dst = ldexpf(fmaf(src0, src1, src2), src3);
+""")
+
 # vc4-specific opcodes
 
 # Saturated vector add for 4 8bit ints.

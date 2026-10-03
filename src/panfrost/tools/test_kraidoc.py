@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -48,6 +49,34 @@ def compile_shader(root, spv, name, *args):
         assert program["instructions"] > 0
         assert Path(stem + ".isa.txt").read_text().strip()
     return report
+
+
+def shader_isa(root, spv, name, *args):
+    compile_shader(root, spv, name, "--no-preamble", "--nir", *args)
+    return Path(str(root / name) + ".0.main.isa.txt").read_text()
+
+
+def add_float_controls(root, spv, name, rtz, width=16):
+    data = spv.read_bytes()
+    words = list(struct.unpack("<" + "I" * (len(data) // 4), data))
+    i = 5
+    while words[i] & 0xffff == 17:
+        i += words[i] >> 16
+    rounding_capability = 4468 if rtz else 4467
+    words[i:i] = [2 << 16 | 17, 4464, 2 << 16 | 17, 4466,
+                  2 << 16 | 17, rounding_capability]
+    while words[i] & 0xffff != 15:
+        i += words[i] >> 16
+    entry = words[i + 2]
+    while words[i] & 0xffff != 16:
+        i += words[i] >> 16
+    rounding_mode = 4463 if rtz else 4462
+    words[i:i] = [4 << 16 | 16, entry, 4459, width,
+                  4 << 16 | 16, entry, 4461, width,
+                  4 << 16 | 16, entry, rounding_mode, width]
+    output = root / name
+    output.write_bytes(struct.pack("<" + "I" * len(words), *words))
+    return output
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -99,6 +128,106 @@ void main() { result=vec4(gl_FragCoord.z,gl_FragCoord.w,gl_PointCoord); }
     for target in targets:
         for spv in [compute, vertex, fragment]:
             compile_shader(root, spv, target + spv.suffixes[0], "-c", target)
+    fp16_source = """#version 450
+layout(local_size_x=32) in;
+layout(set=0,binding=0) buffer Data { vec4 data[]; } values;
+void main() {
+  uint i=gl_GlobalInvocationID.x;
+  PRECISION vec2 a=values.data[i].xy;
+  PRECISION vec2 b=values.data[i].zw;
+  PRECISION vec2 s=a+b;
+  PRECISION vec2 f=fma(a,b,vec2(0.5));
+  values.data[i]=vec4(s,f);
+}
+"""
+    mediump = fixture(root, "mediump.comp",
+                      fp16_source.replace("PRECISION", "mediump"))
+    highp = fixture(root, "highp.comp",
+                    fp16_source.replace("PRECISION", "highp"))
+    fp16 = fixture(root, "fp16.comp", fp16_source.replace(
+        "#version 450", "#version 450\n#extension "
+        "GL_EXT_shader_explicit_arithmetic_types_float16 : require").replace(
+        "PRECISION vec2 a=values.data[i].xy",
+        "f16vec2 a=f16vec2(values.data[i].xy)").replace(
+        "PRECISION vec2 b=values.data[i].zw",
+        "f16vec2 b=f16vec2(values.data[i].zw)").replace(
+        "PRECISION vec2", "f16vec2").replace("vec2(0.5)", "f16vec2(0.5)").replace(
+        "vec4(s,f)", "vec4(vec2(s),vec2(f))"))
+    precise = fixture(root, "precise.comp", fp16_source.replace(
+        "PRECISION", "mediump").replace(
+        "mediump vec2 f=fma(a,b,vec2(0.5))",
+        "precise mediump vec2 f=a*b+vec2(0.5)"))
+    scalar = fixture(root, "scalar-fp16.comp", fp16_source.replace(
+        "PRECISION", "mediump").replace("vec2", "float").replace(
+        ".xy", ".x").replace(".zw", ".y").replace(
+        "vec4(s,f)", "vec4(s,f,0.0,0.0)"))
+    derivatives = fixture(root, "mediump-derivatives.frag", """#version 450
+layout(location=0) in mediump vec2 uv;
+layout(location=0) out vec4 result;
+void main() { result=vec4(dFdx(uv),dFdy(uv)); }
+""")
+    fp16_math = fixture(root, "mediump-math.comp", """#version 450
+layout(local_size_x=32) in;
+layout(set=0,binding=0) buffer Data { vec4 data[]; } values;
+void main() {
+  uint i=gl_GlobalInvocationID.x;
+  mediump vec2 a=abs(values.data[i].xy);
+  mediump vec2 b=values.data[i].zw;
+  mediump vec2 c=clamp(a,b,vec2(16.0))+fract(a)+floor(b);
+  mediump vec2 d=sqrt(a)+inversesqrt(a)+vec2(1.0)/a;
+  mediump vec2 e=exp2(a)+log2(a)+pow(a,b)+sin(a)+cos(b);
+  values.data[i]=vec4(c,d+e);
+}
+""")
+    fp16_rte = add_float_controls(root, fp16, "fp16-rte.spv", False)
+    fp16_rtz = add_float_controls(root, fp16, "fp16-rtz.spv", True)
+    mixed = fixture(root, "fp16-mixed.comp", """#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+layout(local_size_x=32) in;
+layout(set=0,binding=0) buffer Data { vec4 data[]; } values;
+void main() {
+  uint i=gl_GlobalInvocationID.x;
+  float s=values.data[i].x+values.data[i].y;
+  float16_t h=float16_t(s);
+  float16_t c=clamp(h+float16_t(values.data[i].z),float16_t(0),float16_t(1));
+  values.data[i]=vec4(s,float(h),float(c),float(clamp(c,float16_t(0),float16_t(1))));
+}
+""")
+    different_rounds = add_float_controls(root, mixed, "fp16-mixed-rte.spv", False)
+    different_rounds = add_float_controls(root, different_rounds,
+                                          "fp16-mixed-rounds.spv", True, 32)
+    for target in targets:
+        for name, spv in [("mediump", mediump), ("explicit", fp16),
+                          ("scalar", scalar), ("rte", fp16_rte),
+                          ("rtz", fp16_rtz)]:
+            isa = shader_isa(root, spv, name + target, "-c", target)
+            if name != "scalar":
+                assert "FADD.v2f16" in isa, isa
+            assert re.search(r"^FMA\.v2f16[^\n]+(?<!neg)$", isa, re.M), isa
+            assert "F16_TO_F32" in isa, isa
+            if name == "rtz":
+                assert re.search(r"^FADD\.v2f16\.round_zero", isa, re.M), isa
+                assert re.search(r"^FMA\.v2f16\.round_zero", isa, re.M), isa
+            elif name == "rte":
+                assert "round_zero" not in isa, isa
+        isa = shader_isa(root, highp, "highp" + target, "-c", target)
+        assert not re.search(r"\.(?:v2)?f16\b", isa), isa
+        isa = shader_isa(root, precise, "precise" + target, "-c", target)
+        multiplies = re.findall(r"^FMA\.v2f16[^\n]+", isa, re.M)
+        assert multiplies and all("k0.h00.neg" in op for op in multiplies), isa
+        isa = shader_isa(root, derivatives, "derivatives" + target, "-c", target)
+        assert "CLPER" in isa and "FADD.f32" in isa, isa
+        assert not re.search(r"\.(?:v2)?f16\b", isa), isa
+        isa = shader_isa(root, fp16_math, "math" + target, "-c", target)
+        assert "FRCP.f16" in isa and "FRSQ.f16" in isa, isa
+        assert "FMIN.v2f16" in isa and "FMAX.v2f16" in isa, isa
+        nir = Path(str(root / ("math" + target)) + ".0.main.nir.txt").read_text()
+        for op in ["fexp2", "flog2", "fpow", "fsin", "fcos"]:
+            assert re.search(r"32\s+%\d+ = " + op + r"\b", nir), nir
+        isa = shader_isa(root, mixed, "mixed" + target, "-c", target)
+        assert re.search(r"^FADD\.f32\S* r\d+,", isa, re.M), isa
+        isa = shader_isa(root, different_rounds, "rounds" + target, "-c", target)
+        assert re.search(r"^FADD\.f32\.round_zero\S* r\d+,", isa, re.M), isa
     original = compile_shader(root, compute, "original", "--nir")
     assert original["bindings"][0]["type"] == 7
     assert Path(str(root / "original") + ".0.main.nir.txt").is_file()

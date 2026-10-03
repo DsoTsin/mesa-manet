@@ -50,9 +50,15 @@ lower_image_samples(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
    return true;
 }
 
+struct lower_image_ctx {
+   uint64_t gpu_id;
+   bool in_bounds;
+};
+
 static nir_def *
 pack_image_coords(nir_builder *b, nir_def *coords, nir_def *msaa_idx,
-                  enum glsl_sampler_dim dim, bool is_array, uint64_t gpu_id)
+                  enum glsl_sampler_dim dim, bool is_array, uint64_t gpu_id,
+                  bool in_bounds)
 {
    /* Must be lowered before this pass */
    assert(dim != GLSL_SAMPLER_DIM_BUF);
@@ -118,18 +124,18 @@ pack_image_coords(nir_builder *b, nir_def *coords, nir_def *msaa_idx,
       params[0] = NULL;
    }
 
-   /* TODO: we could skip a lot of instructions if robustness is disabled */
    nir_def *oob = NULL;
    /* Truncate and accumulate OOB */
    for (unsigned i = 0; i < ARRAY_SIZE(params); i++) {
       if (params[i] == NULL)
          continue;
 
-      nir_def *ch_oob = nir_unpack_32_2x16_split_y(b, params[i]);
       clamped_chan[i] = nir_unpack_32_2x16_split_x(b, params[i]);
+      if (!in_bounds) {
+         nir_def *ch_oob = nir_unpack_32_2x16_split_y(b, params[i]);
+         oob = (oob == NULL) ? ch_oob : nir_ior(b, oob, ch_oob);
+      }
       params[i] = NULL;
-
-      oob = (oob == NULL) ? ch_oob : nir_ior(b, oob, ch_oob);
    }
 
    /* Place OOB in the first unused coord  */
@@ -162,7 +168,8 @@ pack_image_coords(nir_builder *b, nir_def *coords, nir_def *msaa_idx,
 }
 
 static bool
-lower_image_load(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
+lower_image_load(nir_builder *b, nir_intrinsic_instr *intr,
+                 const struct lower_image_ctx *ctx)
 {
    enum glsl_sampler_dim dim = nir_intrinsic_image_dim(intr);
    bool image_array = nir_intrinsic_image_array(intr);
@@ -174,7 +181,7 @@ lower_image_load(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
    b->cursor = nir_before_instr(&intr->instr);
 
    nir_def *packed = pack_image_coords(b, coords, msaa_idx, dim, image_array,
-                                       gpu_id);
+                                       ctx->gpu_id, ctx->in_bounds);
    nir_def *new_def =
       nir_load_tex_pan(b, intr->num_components, intr->def.bit_size,
                        packed, handle,
@@ -185,7 +192,8 @@ lower_image_load(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
 }
 
 static bool
-lower_image_store(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
+lower_image_store(nir_builder *b, nir_intrinsic_instr *intr,
+                  const struct lower_image_ctx *ctx)
 {
    enum glsl_sampler_dim dim = nir_intrinsic_image_dim(intr);
    bool image_array = nir_intrinsic_image_array(intr);
@@ -210,7 +218,7 @@ lower_image_store(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
    b->cursor = nir_before_instr(&intr->instr);
 
    nir_def *packed = pack_image_coords(b, coords, msaa_idx, dim, image_array,
-                                       gpu_id);
+                                       ctx->gpu_id, ctx->in_bounds);
 
    nir_def *tex = nir_lea_tex_pan(b, packed, handle, .src_type = src_type);
    nir_def *addr = nir_pack_64_2x32(b, nir_trim_vector(b, tex, 2));
@@ -232,7 +240,7 @@ lower_image_store(nir_builder *b, nir_intrinsic_instr *intr, uint64_t gpu_id)
 
 static bool
 lower_image_texel_addr(nir_builder *b, nir_intrinsic_instr *intr,
-                       uint64_t gpu_id)
+                       const struct lower_image_ctx *ctx)
 {
    enum glsl_sampler_dim dim = nir_intrinsic_image_dim(intr);
    bool image_array = nir_intrinsic_image_array(intr);
@@ -246,7 +254,7 @@ lower_image_texel_addr(nir_builder *b, nir_intrinsic_instr *intr,
    b->cursor = nir_before_instr(&intr->instr);
 
    nir_def *packed = pack_image_coords(b, coords, NULL, dim, image_array,
-                                       gpu_id);
+                                       ctx->gpu_id, ctx->in_bounds);
    nir_def *tex = nir_lea_tex_pan(b, packed, handle, .src_type = src_type);
    nir_def *addr = nir_pack_64_2x32(b, nir_trim_vector(b, tex, 2));
    nir_def_replace(&intr->def, addr);
@@ -256,7 +264,8 @@ lower_image_texel_addr(nir_builder *b, nir_intrinsic_instr *intr,
 static bool
 lower_image_intr(nir_builder *b, nir_intrinsic_instr *intr, void *cb_data)
 {
-   uint64_t gpu_id = *(uint64_t *)cb_data;
+   const struct lower_image_ctx *ctx = cb_data;
+   uint64_t gpu_id = ctx->gpu_id;
 
    switch (intr->intrinsic) {
    case nir_intrinsic_image_size:
@@ -266,13 +275,13 @@ lower_image_intr(nir_builder *b, nir_intrinsic_instr *intr, void *cb_data)
       return lower_image_samples(b, intr, gpu_id);
 
    case nir_intrinsic_image_load:
-      return lower_image_load(b, intr, gpu_id);
+      return lower_image_load(b, intr, ctx);
 
    case nir_intrinsic_image_store:
-      return lower_image_store(b, intr, gpu_id);
+      return lower_image_store(b, intr, ctx);
 
    case nir_intrinsic_image_texel_address:
-      return lower_image_texel_addr(b, intr, gpu_id);
+      return lower_image_texel_addr(b, intr, ctx);
 
    default:
       return false;
@@ -280,8 +289,12 @@ lower_image_intr(nir_builder *b, nir_intrinsic_instr *intr, void *cb_data)
 }
 
 bool
-pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id)
+pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id, bool in_bounds)
 {
+   struct lower_image_ctx ctx = {
+      .gpu_id = gpu_id,
+      .in_bounds = in_bounds,
+   };
    return nir_shader_intrinsics_pass(nir, lower_image_intr,
-                                     nir_metadata_none, &gpu_id);
+                                     nir_metadata_none, &ctx);
 }

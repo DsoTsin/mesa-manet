@@ -310,3 +310,113 @@ TEST_F(nir_loop_unroll_test, partial_unroll_oob_load_zero_init)
    EXPECT_EQ(4, count_used_instr(nir_op_flt));
    EXPECT_EQ(1, count_unused_instr(nir_op_flt));
 }
+
+static void
+cost_loop_test_helper(nir_builder *bld, unsigned body_size)
+{
+   nir_def *x = nir_load_ubo(bld, 1, 32, nir_imm_int(bld, 0),
+                             nir_imm_int(bld, 0), (gl_access_qualifier)0,
+                             0, 0, 0, 16);
+   nir_def *init = nir_imm_int(bld, 0);
+   nir_def *limit = nir_imm_int(bld, 6);
+
+   nir_loop *loop = nir_push_loop(bld);
+
+   nir_block *top_block =
+      nir_cf_node_as_block(nir_cf_node_prev(&loop->cf_node));
+   nir_block *head_block = nir_loop_first_block(loop);
+
+   nir_phi_instr *phi = nir_phi_instr_create(bld->shader);
+   nir_def_init(&phi->instr, &phi->def, 1, 32);
+   nir_phi_instr_add_src(phi, top_block, init);
+
+   nir_break_if(bld, nir_ige(bld, &phi->def, limit));
+
+   nir_def *v = x;
+   for (unsigned i = 0; i < body_size; i++)
+      v = nir_fsin(bld, v);
+
+   nir_def *next = nir_iadd_imm(bld, &phi->def, 1);
+   nir_phi_instr_add_src(phi, nir_cursor_current_block(bld->cursor), next);
+
+   nir_pop_loop(bld, loop);
+
+   bld->cursor = nir_after_phis(head_block);
+   nir_builder_instr_insert(bld, &phi->instr);
+
+   nir_validate_shader(bld->shader, NULL);
+}
+
+TEST_F(nir_loop_unroll_test, unroll_cost_default_limit)
+{
+   cost_loop_test_helper(&bld, 20);
+
+   EXPECT_TRUE(nir_opt_loop_unroll(bld.shader));
+   EXPECT_EQ(0, count_loops());
+   EXPECT_EQ(120, count_instr(nir_op_fsin));
+}
+
+TEST_F(nir_loop_unroll_test, unroll_cost_lowered_limit)
+{
+   nir_shader_compiler_options options = *bld.shader->options;
+   options.max_unroll_cost = 64;
+   bld.shader->options = &options;
+
+   cost_loop_test_helper(&bld, 20);
+
+   EXPECT_FALSE(nir_opt_loop_unroll(bld.shader));
+   EXPECT_EQ(1, count_loops());
+   EXPECT_EQ(20, count_instr(nir_op_fsin));
+}
+
+TEST_F(nir_loop_unroll_test, unroll_cost_default_limit_exceeded)
+{
+   cost_loop_test_helper(&bld, 150);
+
+   EXPECT_FALSE(nir_opt_loop_unroll(bld.shader));
+   EXPECT_EQ(1, count_loops());
+   EXPECT_EQ(150, count_instr(nir_op_fsin));
+}
+
+TEST_F(nir_loop_unroll_test, unroll_cost_raised_limit)
+{
+   nir_shader_compiler_options options = *bld.shader->options;
+   options.max_unroll_cost = 1024;
+   bld.shader->options = &options;
+
+   cost_loop_test_helper(&bld, 150);
+
+   EXPECT_TRUE(nir_opt_loop_unroll(bld.shader));
+   EXPECT_EQ(0, count_loops());
+   EXPECT_EQ(900, count_instr(nir_op_fsin));
+}
+
+TEST_F(nir_loop_unroll_test, skip_partial_unroll_guessed_trip_count)
+{
+   nir_shader_compiler_options options = *bld.shader->options;
+   options.skip_partial_unroll = true;
+   bld.shader->options = &options;
+
+   partial_unroll_oob_load_test_helper(&bld, 1, 4, false);
+
+   EXPECT_FALSE(nir_opt_loop_unroll(bld.shader));
+   EXPECT_EQ(1, count_loops());
+   EXPECT_EQ(1, count_instr(nir_op_flt));
+}
+
+TEST_F(nir_loop_unroll_test, skip_partial_unroll_known_trip_count)
+{
+   nir_shader_compiler_options options = *bld.shader->options;
+   options.skip_partial_unroll = true;
+   bld.shader->options = &options;
+
+   nir_def *init = nir_imm_int(&bld, 0);
+   nir_def *limit = nir_imm_int(&bld, 24);
+   nir_def *step = nir_imm_int(&bld, 4);
+   loop_unroll_test_helper(&bld, init, limit, step, &nir_ige, &nir_iadd,
+                           false);
+
+   EXPECT_TRUE(nir_opt_loop_unroll(bld.shader));
+   EXPECT_EQ(0, count_loops());
+   EXPECT_EQ(6, count_instr(nir_op_iadd));
+}

@@ -54,6 +54,7 @@ struct pan_compile_inputs {
    /* Whether or not descriptor accesses should add additional robustness
     * checks. */
    bool robust_descriptors;
+   bool image_access_in_bounds;
 
    /* Varying layout in memory, if known */
    const struct pan_varying_layout *varying_layout;

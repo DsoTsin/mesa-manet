@@ -4,7 +4,8 @@
 use crate::data_type::NumericType;
 use crate::ir::*;
 use crate::ops::{BranchCombineOp, CmpAccumOp, CmpOp, CmpResultType, LogicOp, MuxOp,
-                 OpCSel, OpFCmp, OpICmp, OpMux, OpShiftLop, ShiftOp};
+                 OpCSel, OpCopy, OpFCmp, OpICmp, OpMux, OpShiftLop, ShiftOp};
+use crate::ssa_value::AllocSSA;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 struct Comparison {
@@ -607,6 +608,39 @@ fn try_replace_mux_csel(op: &OpMux) -> Option<OpCSel> {
     })
 }
 
+fn csel_zero_reg_helps(op: &OpCSel) -> bool {
+    if !matches!(op.cmp_srcs[1].src_ref, SrcRef::Zero)
+        || !op.cmp_srcs[1].src_mod.is_none()
+    {
+        return false;
+    }
+    let mut words: Vec<(FAUPage, u16)> = Vec::new();
+    let mut slots: Vec<(FAUPage, u16)> = Vec::new();
+    for src in op.cmp_srcs.iter().chain(op.sel_srcs.iter()) {
+        match &src.src_ref {
+            SrcRef::FAU(fau) => {
+                let idxs = if fau.load64 {
+                    [fau.idx & !1, fau.idx | 1]
+                } else {
+                    [fau.idx, fau.idx]
+                };
+                for idx in idxs {
+                    if !words.contains(&(fau.page, idx)) {
+                        words.push((fau.page, idx));
+                    }
+                }
+                let slot = (fau.page, fau.idx >> 1);
+                if !fau.page.is_small_const() && !slots.contains(&slot) {
+                    slots.push(slot);
+                }
+            }
+            SrcRef::Imm32(_) | SrcRef::Imm64(_) => return false,
+            _ => {}
+        }
+    }
+    words.len() == 2 && slots.len() <= 1
+}
+
 fn translate_instr(i: &mut Instr) {
     if let Op::Mux(op) = &mut i.op {
         if let Some(csel) = try_replace_mux_csel(op) {
@@ -631,6 +665,7 @@ impl Shader<'_> {
             }
         }
         let model = self.model;
+        let zero_free = model.fau().is_zero_free;
         let masks = BooleanMasks::for_shader(self);
         let aliases: FxHashMap<_, _> = self.blocks.iter()
             .flat_map(|block| &block.instrs)
@@ -639,7 +674,8 @@ impl Shader<'_> {
         let mut progress = false;
         for block in self.blocks.iter_mut() {
             let mut comparisons = FxHashMap::default();
-            for instr in &mut block.instrs {
+            let mut zero_users: Vec<usize> = Vec::new();
+            for (ip, instr) in block.instrs.iter_mut().enumerate() {
                 translate_instr(instr);
                 if let Op::Branch(op) = &mut instr.op {
                     progress |= fold_branch_condition(op, &aliases, &masks);
@@ -652,6 +688,13 @@ impl Shader<'_> {
                                 instr.op = merged;
                                 progress = true;
                             }
+                        }
+                    }
+                }
+                if !zero_free {
+                    if let Op::CSel(op) = &instr.op {
+                        if csel_zero_reg_helps(op) {
+                            zero_users.push(ip);
                         }
                     }
                 }
@@ -678,6 +721,23 @@ impl Shader<'_> {
                         comparisons.insert(ssa, cmp);
                     }
                 }
+            }
+            if zero_users.len() >= 2 {
+                let zero = self.ssa_alloc.alloc_ssa(32);
+                for &ip in &zero_users {
+                    if let Op::CSel(op) = &mut block.instrs[ip].op {
+                        op.cmp_srcs[1] = SSARef::from(zero).into();
+                    }
+                }
+                block.instrs.insert(
+                    zero_users[0],
+                    OpCopy {
+                        dst: SSARef::from(zero).into(),
+                        dst_type: DataType::I32,
+                        src: 0_u32.into(),
+                    }
+                    .into(),
+                );
             }
         }
         if progress {

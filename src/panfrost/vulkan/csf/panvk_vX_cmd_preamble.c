@@ -10,7 +10,6 @@ panvk_per_arch(cmd_emit_preamble)(struct panvk_cmd_buffer *cmdbuf,
    if (!shader->preamble)
       return;
 
-   assert(PAN_ARCH == 10 || PAN_ARCH == 11);
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, subqueue);
    const struct panvk_shader_variant *pilot = shader->preamble;
@@ -38,8 +37,18 @@ panvk_per_arch(cmd_emit_preamble)(struct panvk_cmd_buffer *cmdbuf,
       cs_add_imm64(b, cs_reg64(b, PANVK_PRECOMP_SRT), srt, 0);
       cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_FAU),
                    (saved.gpu + 336) | (1ull << 56));
+#if PAN_ARCH >= 15
+      struct mali_shader_program_pointer_packed spp;
+      pan_pack(&spp, SHADER_PROGRAM_POINTER, cfg) {
+         cfg.register_count = pilot->info.work_reg_count;
+         cfg.pointer = panvk_priv_mem_dev_addr(pilot->spd);
+      }
+      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SPD),
+                   ((uint64_t)spp.opaque[1] << 32) | spp.opaque[0]);
+#else
       cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SPD),
                    panvk_priv_mem_dev_addr(pilot->spd));
+#endif
       cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_TSD),
                    cmdbuf->state.tls.desc.gpu);
       struct mali_compute_size_workgroup_packed wg;

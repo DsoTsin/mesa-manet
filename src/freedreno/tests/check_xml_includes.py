@@ -23,6 +23,7 @@ files = (
 )
 
 result = subprocess.run(
-    ["awk", "-f", "src/freedreno/tests/check_xml_includes.awk"] + sorted(files)
+    ["awk", "-f", "src/freedreno/tests/check_xml_includes.awk"]
+    + sorted(path.replace("\\", "/") for path in files)
 )
 sys.exit(result.returncode)

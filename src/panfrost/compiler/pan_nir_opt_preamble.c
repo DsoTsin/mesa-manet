@@ -4,6 +4,7 @@ struct preamble_ctx {
    const struct pan_compile_inputs *inputs;
    uint8_t *allowed;
    unsigned result_base;
+   bool fau_pressure;
 };
 
 static bool allowed_def(nir_def *def, struct preamble_ctx *ctx);
@@ -76,10 +77,53 @@ def_size(nir_def *def, unsigned *size, unsigned *align,
    *class_ = nir_preamble_class_general;
 }
 
-static float
-instr_cost(nir_instr *instr, const void *data)
+static unsigned
+block_loop_depth(nir_block *block)
 {
-   const struct preamble_ctx *ctx = data;
+   unsigned depth = 0;
+   for (nir_cf_node *node = block->cf_node.parent; node; node = node->parent)
+      depth += node->type == nir_cf_node_loop;
+   return depth;
+}
+
+static unsigned
+use_loop_depth(nir_def *def)
+{
+   unsigned depth = 0;
+   nir_foreach_use_including_if(use, def) {
+      nir_block *block;
+      if (nir_src_is_if(use))
+         block = nir_cf_node_as_block(
+            nir_cf_node_prev(&nir_src_use_if(use)->cf_node));
+      else
+         block = nir_src_use_instr(use)->block;
+      depth = MAX2(depth, block_loop_depth(block));
+   }
+   return depth;
+}
+
+static unsigned
+alu_lanes(const nir_def *def)
+{
+   if (def->bit_size == 8)
+      return DIV_ROUND_UP(def->num_components, 4);
+   if (def->bit_size == 16)
+      return DIV_ROUND_UP(def->num_components, 2);
+   return def->num_components;
+}
+
+static bool
+pushable_ubo_load(const nir_intrinsic_instr *intr,
+                  const struct preamble_ctx *ctx)
+{
+   return intr->intrinsic == nir_intrinsic_load_ubo &&
+          ctx->inputs->fau.pushable_ubos && nir_src_is_const(intr->src[0]) &&
+          nir_src_is_const(intr->src[1]);
+}
+
+static float
+base_instr_cost(nir_instr *instr, const struct preamble_ctx *ctx)
+{
    if (instr->type == nir_instr_type_alu) {
       nir_alu_instr *alu = nir_instr_as_alu(instr);
       switch (alu->op) {
@@ -97,9 +141,13 @@ instr_cost(nir_instr *instr, const void *data)
       case nir_op_flog2:
       case nir_op_fsin:
       case nir_op_fcos:
-         return 8 * alu->def.num_components;
+         return 5 * alu_lanes(&alu->def);
+      case nir_op_fmul:
+      case nir_op_imul:
+      case nir_op_ffma:
+         return 2 * alu_lanes(&alu->def);
       default:
-         return alu->def.num_components;
+         return alu_lanes(&alu->def);
       }
    }
 
@@ -107,25 +155,98 @@ instr_cost(nir_instr *instr, const void *data)
       nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
       switch (intr->intrinsic) {
       case nir_intrinsic_load_ubo:
-         if (ctx->inputs->fau.pushable_ubos && nir_src_is_const(intr->src[0]) &&
-             nir_src_is_const(intr->src[1]))
-            return 0;
-         return 8;
+         if (pushable_ubo_load(intr, ctx))
+            return ctx->fau_pressure ? 4 : 0;
+         return 5;
       case nir_intrinsic_load_ssbo:
       case nir_intrinsic_load_global_constant:
-         return 8;
+      case nir_intrinsic_load_constant:
+         return 5;
       default:
          return 0;
       }
    }
 
-   return instr->type == nir_instr_type_phi ? 2 : 0;
+   return instr->type == nir_instr_type_phi ? 1 : 0;
+}
+
+static float
+instr_cost(nir_instr *instr, const void *data)
+{
+   const struct preamble_ctx *ctx = data;
+   float cost = base_instr_cost(instr, ctx);
+   nir_def *def = nir_instr_def(instr);
+   if (cost == 0 || !def)
+      return cost;
+   return cost * (use_loop_depth(def) + 1);
 }
 
 static float
 rewrite_cost(nir_def *def, const void *data)
 {
-   return 2 + DIV_ROUND_UP(def->num_components * def->bit_size, 32);
+   const struct preamble_ctx *ctx = data;
+   unsigned words = DIV_ROUND_UP(def->num_components * def->bit_size, 32);
+   return ctx->fau_pressure ? 4.0f * words : words / 16.0f;
+}
+
+static int
+compare_u64(const void *a, const void *b)
+{
+   uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+   return (x > y) - (x < y);
+}
+
+static unsigned
+count_pushable_ubo_words(nir_function_impl *impl,
+                         const struct preamble_ctx *ctx)
+{
+   struct util_dynarray words;
+   util_dynarray_init(&words, NULL);
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (!pushable_ubo_load(intr, ctx))
+            continue;
+         uint64_t handle = nir_src_as_uint(intr->src[0]);
+         unsigned offset = nir_src_as_uint(intr->src[1]);
+         unsigned bytes = intr->def.num_components * (intr->def.bit_size / 8);
+         for (unsigned b = offset / 4; b < DIV_ROUND_UP(offset + bytes, 4); b++)
+            util_dynarray_append_typed(&words, uint64_t, (handle << 32) | b);
+      }
+   }
+   unsigned count = util_dynarray_num_elements(&words, uint64_t);
+   uint64_t *data = util_dynarray_begin(&words);
+   if (count > 1)
+      qsort(data, count, sizeof(uint64_t), compare_u64);
+   unsigned unique = 0;
+   for (unsigned i = 0; i < count; i++)
+      unique += i == 0 || data[i] != data[i - 1];
+   util_dynarray_fini(&words);
+   return unique;
+}
+
+static void
+mark_speculatable_uniform_loads(nir_function_impl *impl,
+                                const struct preamble_ctx *ctx)
+{
+   bool robust_ubo = ctx->inputs->robust_modes & nir_var_mem_ubo;
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         bool uniform_load =
+            (intr->intrinsic == nir_intrinsic_load_push_constant &&
+             nir_src_is_const(intr->src[0])) ||
+            (!robust_ubo && pushable_ubo_load(intr, ctx));
+         if (uniform_load && nir_intrinsic_has_access(intr))
+            nir_intrinsic_set_access(intr, nir_intrinsic_access(intr) |
+                                              ACCESS_CAN_REORDER |
+                                              ACCESS_CAN_SPECULATE);
+      }
+   }
 }
 
 static bool
@@ -194,9 +315,20 @@ pan_nir_opt_preamble(nir_shader *nir, const struct pan_compile_inputs *inputs,
       ralloc_free(clone);
       return NULL;
    }
+   mark_speculatable_uniform_loads(main, &ctx);
+   unsigned ubo_words = count_pushable_ubo_words(main, &ctx);
+   unsigned available = PAN_MAX_PUSH - ctx.result_base;
+   ctx.fau_pressure = (ctx.result_base + ubo_words) * 4 > PAN_MAX_PUSH * 3;
+   unsigned storage = ctx.fau_pressure ? available :
+                      available - MIN2(ubo_words, available);
+   if (!storage) {
+      free(ctx.allowed);
+      ralloc_free(clone);
+      return NULL;
+   }
    const nir_opt_preamble_options opts = {
       .def_size = def_size,
-      .preamble_storage_size = {PAN_MAX_PUSH - ctx.result_base},
+      .preamble_storage_size = {storage},
       .instr_cost_cb = instr_cost,
       .rewrite_cost_cb = rewrite_cost,
       .avoid_instr_cb = avoid_instr,
@@ -230,6 +362,9 @@ pan_nir_opt_preamble(nir_shader *nir, const struct pan_compile_inputs *inputs,
    func->impl->function = func;
    nir_foreach_block(block, func->impl)
    {
+      nir_if *nif = nir_block_get_following_if(block);
+      if (nif)
+         nif->control = nir_selection_control_dont_flatten;
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
             continue;

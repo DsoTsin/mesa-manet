@@ -63,6 +63,7 @@ fn nir_opts(arch: u8, merge_wg: bool) -> nir_shader_compiler_options {
 
         has_ldexp: true,
         has_isub: true,
+        support_16bit_alu: true,
         vectorize_vec2_16bit: true,
         float_mul_add16: nir_float_muladd_support_has_ffma
             | nir_float_muladd_support_fuse,
@@ -77,6 +78,8 @@ fn nir_opts(arch: u8, merge_wg: bool) -> nir_shader_compiler_options {
         lower_cs_local_index_to_id: true,
         lower_device_index_to_zero: true,
         max_unroll_iterations: 32,
+        skip_partial_unroll: true,
+        max_unroll_cost: 384,
         max_samples: 16,
         force_indirect_unrolling: (nir_var_shader_in
             | nir_var_shader_out

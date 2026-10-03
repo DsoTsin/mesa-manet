@@ -564,10 +564,11 @@ panvk_get_nir_options(UNUSED struct vk_physical_device *vk_pdev,
 
 static struct spirv_to_nir_options
 panvk_get_spirv_options(UNUSED struct vk_physical_device *vk_pdev,
-                        UNUSED mesa_shader_stage stage,
+                        mesa_shader_stage stage,
                         const struct vk_pipeline_robustness_state *rs)
 {
    return (struct spirv_to_nir_options){
+      .mediump_16bit_alu = pan_use_kraid(PAN_ARCH, stage, false),
       .ubo_addr_format = panvk_buffer_ubo_addr_format(rs->uniform_buffers),
       .ssbo_addr_format = panvk_buffer_ssbo_addr_format(rs->storage_buffers),
       .phys_ssbo_addr_format = nir_address_format_64bit_global,
@@ -1240,7 +1241,7 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
    struct pan_compile_preamble preamble = {
       .binary = UTIL_DYNARRAY_INIT,
    };
-#if PAN_ARCH >= 10 && PAN_ARCH <= 11
+#if PAN_ARCH >= 10
    if (!input.disable_preamble &&
        !(shader_flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
        !nir->info.internal &&
@@ -1716,6 +1717,8 @@ panvk_compile_shader_impl(struct panvk_device *dev,
       .view_mask = (state && state->rp) ? state->mv->view_mask : 0,
       .robust_modes = robust_modes,
       .robust_descriptors = dev->vk.enabled_features.nullDescriptor,
+      .image_access_in_bounds = info->robustness->images ==
+                                VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED_EXT,
       .disable_preamble = !allow_preamble,
    };
 
@@ -2331,7 +2334,7 @@ panvk_compile_shader_with_upload(struct panvk_device *dev,
                      struct vk_shader **shader_out, bool upload,
                      bool enable_preamble)
 {
-   bool eligible = enable_preamble && PAN_ARCH >= 10 && PAN_ARCH <= 11 &&
+   bool eligible = enable_preamble && PAN_ARCH >= 10 &&
       !info->nir->info.internal &&
       !(info->flags & VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT) &&
       (info->stage == MESA_SHADER_COMPUTE ||

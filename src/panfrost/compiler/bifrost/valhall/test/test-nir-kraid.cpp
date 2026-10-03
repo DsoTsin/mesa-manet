@@ -116,3 +116,142 @@ TEST_F(kraid_nir_test, divergent_lane_index_uses_uniform_reads)
    EXPECT_GT(count(nir_intrinsic_ballot), 0u);
    EXPECT_GT(count(nir_intrinsic_read_invocation), 0u);
 }
+
+TEST_F(kraid_nir_test, subgroup_scan_remains_native)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   auto lane = nir_load_subgroup_invocation(b);
+   auto value = nir_iadd(b, input(0), lane);
+   sink(nir_inclusive_scan(b, value, .reduction_op = nir_op_iadd));
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_inclusive_scan), 1u);
+}
+
+TEST_F(kraid_nir_test, subgroup_reduce_remains_native)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   auto lane = nir_load_subgroup_invocation(b);
+   auto value = nir_iadd(b, input(0), lane);
+   sink(nir_reduce(b, value, .reduction_op = nir_op_umin));
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_reduce), 1u);
+}
+
+TEST_F(kraid_nir_test, prefix_guarded_scan_remains_native)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   auto lane = nir_load_subgroup_invocation(b);
+   auto id = nir_channel(b, nir_load_local_invocation_id(b), 0);
+   nir_push_if(b, nir_ult(b, id, input(4)));
+   auto value = nir_iadd(b, input(0), lane);
+   sink(nir_exclusive_scan(b, value, .reduction_op = nir_op_umax));
+   nir_pop_if(b, nullptr);
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_exclusive_scan), 1u);
+}
+
+TEST_F(kraid_nir_test, divergent_scan_is_lowered)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   auto lane = nir_load_subgroup_invocation(b);
+   nir_push_if(b, nir_ieq_imm(b, nir_iand_imm(b, lane, 1), 0));
+   auto value = nir_iadd(b, input(0), lane);
+   sink(nir_inclusive_scan(b, value, .reduction_op = nir_op_iadd));
+   nir_pop_if(b, nullptr);
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_inclusive_scan), 0u);
+}
+
+TEST_F(kraid_nir_test, prefix_guarded_reduce_is_lowered)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   auto lane = nir_load_subgroup_invocation(b);
+   auto id = nir_channel(b, nir_load_local_invocation_id(b), 0);
+   nir_push_if(b, nir_ult(b, id, input(4)));
+   auto value = nir_iadd(b, input(0), lane);
+   sink(nir_reduce(b, value, .reduction_op = nir_op_iadd));
+   nir_pop_if(b, nullptr);
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_reduce), 0u);
+}
+
+TEST_F(kraid_nir_test, partial_subgroup_scan_is_lowered)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   b->shader->info.workgroup_size[0] = 24;
+   auto lane = nir_load_subgroup_invocation(b);
+   auto value = nir_iadd(b, input(0), lane);
+   sink(nir_inclusive_scan(b, value, .reduction_op = nir_op_iadd));
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_inclusive_scan), 0u);
+}
+
+TEST_F(kraid_nir_test, float_scan_is_lowered)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   auto lane = nir_load_subgroup_invocation(b);
+   auto value = nir_fadd(b, input(0), nir_u2f32(b, lane));
+   sink(nir_inclusive_scan(b, value, .reduction_op = nir_op_fadd));
+   postprocess();
+   EXPECT_EQ(count(nir_intrinsic_inclusive_scan), 0u);
+}
+
+TEST_F(kraid_nir_test, pow2_scale_fuses_into_rscale)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   sink(nir_fmul_imm(b, nir_fadd(b, input(0), input(4)), 0.25));
+   postprocess();
+   EXPECT_EQ(count(nir_op_ffma_rscale_pan), 1u);
+   EXPECT_EQ(count(nir_op_fmul), 0u);
+   EXPECT_EQ(count(nir_op_fadd), 0u);
+}
+
+TEST_F(kraid_nir_test, pow2_scaled_product_fuses_into_rscale)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   sink(nir_fmul(b, nir_fmul_imm(b, input(0), 4.0), input(4)));
+   postprocess();
+   EXPECT_EQ(count(nir_op_ffma_rscale_pan), 1u);
+   EXPECT_EQ(count(nir_op_fmul), 0u);
+}
+
+TEST_F(kraid_nir_test, no_contraction_blocks_rscale)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   b->fp_math_ctrl = nir_fp_no_contract | nir_fp_no_transform;
+   sink(nir_fmul_imm(b, nir_fadd(b, input(0), input(4)), 0.25));
+   postprocess();
+   EXPECT_EQ(count(nir_op_ffma_rscale_pan), 0u);
+   EXPECT_EQ(count(nir_op_fmul), 1u);
+   EXPECT_EQ(count(nir_op_fadd), 1u);
+}
+
+TEST_F(kraid_nir_test, fma_candidate_keeps_ffma)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   sink(nir_fadd(b, nir_fmul_imm(b, input(0), 0.5), input(4)));
+   postprocess();
+   EXPECT_EQ(count(nir_op_ffma_rscale_pan), 0u);
+   EXPECT_EQ(count(nir_op_ffma), 1u);
+}
+
+TEST_F(kraid_nir_test, non_pow2_scale_is_not_fused)
+{
+   if (!pan_use_kraid(10, MESA_SHADER_COMPUTE, false))
+      GTEST_SKIP();
+   sink(nir_fmul_imm(b, nir_fadd(b, input(0), input(4)), 0.3));
+   postprocess();
+   EXPECT_EQ(count(nir_op_ffma_rscale_pan), 0u);
+   EXPECT_EQ(count(nir_op_fmul), 1u);
+}

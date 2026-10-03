@@ -106,6 +106,21 @@ for fmt in ['e4m3fn', 'e5m2']:
             op = f'f2{fmt}{sat}{rnd}'
             algebraic_late += [((op, ('f2f32', 'a@16')), (op, a))]
 
+algebraic_fp16 = []
+for convert in ['f2f16', 'f2f16_rtz', 'f2f16_rtne', 'f2fmp']:
+    for op in ['fneg', 'fabs']:
+        algebraic_fp16 += [
+            ((convert, (op, ('f2f32', 'a@16'))),
+             (op, ('fcanonicalize', a)), 'is_kraid'),
+        ]
+
+algebraic_fp16 += [
+    (('fcanonicalize', 'a@16'), a,
+     'is_kraid && !nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
+    (('fcanonicalize', 'a@16(is_created_as_float)'), a, 'is_kraid'),
+    (('fcanonicalize(is_only_used_as_float)', 'a@16'), a, 'is_kraid'),
+]
+
 # nir_lower_bool_to_bitsize can generate needless conversions.
 for bits in [8, 16, 32]:
     algebraic_late += [
@@ -260,6 +275,9 @@ def run():
 
     print(nir_algebraic.AlgebraicPass("bifrost_nir_opt_boolean_bitwise",
                                       opt_bool_bitwise).render())
+    print(nir_algebraic.AlgebraicPass("bifrost_nir_opt_fp16",
+                                      algebraic_fp16,
+                                      [("bool ", "is_kraid")]).render())
     print(nir_algebraic.AlgebraicPass("bifrost_nir_lower_algebraic_late",
                                       algebraic_late,
                                       [
