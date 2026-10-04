@@ -82,7 +82,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tool", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--backend", choices=("both", "loadlibrary", "process"), default="both")
     args = parser.parse_args()
+    backends = ("process", "loadlibrary") if args.backend == "both" else (args.backend,)
     tool = args.tool.resolve()
     root = args.work_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -168,38 +170,59 @@ void main(uint3 id:SV_DispatchThreadID) { values[id.x]=values[id.x]*2.0+1.0; }
     }), encoding="utf-8")
     cases.append(("dxil-spaces-a741", ["-arch=a741", "-link_info", dxil_spaces]))
     results = []
-    for name, compiler_args in cases:
-        target = root / name
-        target.mkdir(exist_ok=True)
-        text, vendor, raw = target / "mesa.isa", target / "aoc.log", target / "raw"
-        result = run_checked([tool, "--output", text, "--aoc-log", vendor,
-                              "--raw-dir", raw, "--", *compiler_args], root)
-        raw_files = sorted(raw.glob("*.bin"), key=lambda p: int(p.name.split("-")[0]))
-        words = []
-        for file in raw_files:
-            data = file.read_bytes()
-            if not data or len(data) % 8:
-                raise RuntimeError("Invalid raw ISA length: " + str(file))
-            words.extend(struct.unpack("<" + "Q" * (len(data) // 8), data))
-        mesa_text, vendor_text = text.read_text(), vendor.read_text()
-        if words != text_words(mesa_text) or words != text_words(vendor_text):
-            raise RuntimeError("Raw, Mesa and vendor instruction words differ: " + name)
-        if ".quad" in mesa_text or "unmatched instruction" in mesa_text:
-            raise RuntimeError("Unmatched instructions: " + name)
-        if name.startswith("dxbc-vertex") and not any("binning" in p.name for p in raw_files):
-            raise RuntimeError("Missing DXBC binning variant")
-        if len(words) <= 1:
-            raise RuntimeError("Fixture compiled to trivial ISA: " + name)
-        record = {"case": name, "variants": len(raw_files), "instructions": len(words),
-                  "bytes": len(words) * 8, "stderr": result.stderr.decode().strip()}
-        results.append(record)
-        print(json.dumps(record), flush=True)
+    for backend in backends:
+        for name, compiler_args in cases:
+            target = root / backend / name
+            target.mkdir(parents=True, exist_ok=True)
+            text, vendor, raw = target / "mesa.isa", target / "aoc.log", target / "raw"
+            result = run_checked([tool, "--backend", backend, "--output", text, "--aoc-log", vendor,
+                                  "--raw-dir", raw, "--", *compiler_args], root)
+            raw_files = sorted(raw.glob("*.bin"), key=lambda p: int(p.name.split("-")[0]))
+            words = []
+            for file in raw_files:
+                data = file.read_bytes()
+                if not data or len(data) % 8:
+                    raise RuntimeError("Invalid raw ISA length: " + str(file))
+                words.extend(struct.unpack("<" + "Q" * (len(data) // 8), data))
+            mesa_text, vendor_text = text.read_text(), vendor.read_text()
+            if words != text_words(mesa_text) or words != text_words(vendor_text):
+                raise RuntimeError("Raw, Mesa and vendor instruction words differ: " + name)
+            if ".quad" in mesa_text or "unmatched instruction" in mesa_text:
+                raise RuntimeError("Unmatched instructions: " + name)
+            if name.startswith("dxbc-vertex") and not any("binning" in p.name for p in raw_files):
+                raise RuntimeError("Missing DXBC binning variant")
+            if len(words) <= 1:
+                raise RuntimeError("Fixture compiled to trivial ISA: " + name)
+            record = {"backend": backend, "case": name, "variants": len(raw_files), "instructions": len(words),
+                      "bytes": len(words) * 8, "stderr": result.stderr.decode().strip()}
+            if backend == "loadlibrary" and "process" in backends:
+                reference = root / "process" / name
+                if (reference / "mesa.isa").read_bytes() != text.read_bytes():
+                    raise RuntimeError("Process and LoadLibrary ISA text differs: " + name)
+                for file in raw_files:
+                    if (reference / "raw" / file.name).read_bytes() != file.read_bytes():
+                        raise RuntimeError("Process and LoadLibrary raw ISA differs: " + name)
+            results.append(record)
+            print(json.dumps(record), flush=True)
 
-    first = root / "spv-buffer-a830" / "mesa.isa"
-    repeated = root / "repeated.isa"
-    run_checked([tool, "--output", repeated, "--", "-arch=a830", fixtures / "buffer.comp.spv"], root)
-    if first.read_bytes() != repeated.read_bytes():
-        raise RuntimeError("Repeated compilation differs")
+    for backend in backends:
+        for name in ("spv-buffer-a830", "dxbc-graphics-a741", "dxil-compute-a741"):
+            compiler_args = next(command for case, command in cases if case == name)
+            first = root / backend / name / "mesa.isa"
+            repeated = root / backend / (name + "-repeated.isa")
+            result = run_checked([tool, "--backend", backend, "--repeat", "20",
+                                  "--output", repeated, "--", *compiler_args], root)
+            if first.read_bytes() != repeated.read_bytes():
+                raise RuntimeError("Repeated compilation differs: " + backend + " " + name)
+            print(json.dumps({"backend": backend, "repeated": name,
+                              "stderr": result.stderr.decode().strip()}), flush=True)
+
+    if "loadlibrary" in backends:
+        result = run_checked([tool, "--", "-arch=a830", fixtures / "buffer.comp.spv"], root)
+        reference = root / "loadlibrary" / "spv-buffer-a830" / "mesa.isa"
+        if result.stdout.decode().replace("\r\n", "\n") != reference.read_text():
+            raise RuntimeError("Default LoadLibrary backend did not restore ISA stdout")
+        print(json.dumps({"backend": "default", "stdout": "restored"}), flush=True)
 
     bad = fixtures / "invalid.comp.spv"
     bad.write_bytes(b"invalid SPIR-V")
@@ -209,18 +232,19 @@ void main(uint3 id:SV_DispatchThreadID) { values[id.x]=values[id.x]*2.0+1.0; }
         ("unsupported-binary", ["--aoc", tool, "--", fixtures / "buffer.comp.spv"]),
         ("unbound-dxbc-uav", ["--", "-arch=a741", d3d_inputs / "compute.cs.dxbc"]),
     ]
-    for name, command in failures:
-        output = root / (name + ".isa")
-        output.unlink(missing_ok=True)
-        result = subprocess.run([str(tool), "--output", str(output), *map(str, command)],
-                                cwd=root, capture_output=True, timeout=120)
-        if result.returncode != 1 or output.exists():
-            raise RuntimeError("Failure was not rejected cleanly: " + name)
-        print(json.dumps({"failure": name, "exit": result.returncode}), flush=True)
+    for backend in backends:
+        for name, command in failures:
+            output = root / backend / (name + ".isa")
+            output.unlink(missing_ok=True)
+            result = subprocess.run([str(tool), "--backend", backend, "--output", str(output), *map(str, command)],
+                                    cwd=root, capture_output=True, timeout=120)
+            if result.returncode != 1 or output.exists():
+                raise RuntimeError("Failure was not rejected cleanly: " + name)
+            print(json.dumps({"backend": backend, "failure": name, "exit": result.returncode}), flush=True)
     if list(root.glob("aoc-isa-*.json")) or list(root.glob("aoc-isa-*.dxbc")):
         raise RuntimeError("Temporary compiler inputs were not removed")
     (root / "results.json").write_text(json.dumps(results, indent=2) + "\n")
-    print("PASS: ISA word equality, repeated output and four failure paths")
+    print("PASS: raw/vendor/Mesa ISA equality, backend parity, repeated teardown and failure paths")
 
 
 if __name__ == "__main__":

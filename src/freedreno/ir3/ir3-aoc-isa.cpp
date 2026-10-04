@@ -18,10 +18,14 @@
 #include <utility>
 #include <vector>
 
-#include "aoc-isa.h"
+#include "aoc-capture.h"
+#include "aoc-inprocess.h"
 #include "ir3-isa.h"
 
 namespace {
+
+using aoc::Capture;
+using aoc::require;
 
 class Handle {
    HANDLE value_ = nullptr;
@@ -32,13 +36,6 @@ public:
    Handle& operator=(const Handle&) = delete;
    HANDLE get() const { return value_; }
 };
-
-void require(bool ok, const char *operation)
-{
-   if (!ok)
-      throw std::runtime_error(std::string(operation) + " (Win32 " +
-                               std::to_string(GetLastError()) + ")");
-}
 
 std::wstring quote(const std::wstring& arg)
 {
@@ -83,12 +80,6 @@ std::array<unsigned char, 32> sha256(HANDLE file)
       throw std::runtime_error("Cannot finish SHA-256 hash");
    return result;
 }
-
-struct Capture {
-   unsigned stage;
-   bool binning;
-   std::vector<std::uint64_t> words;
-};
 
 class TemporaryInputs {
    std::vector<std::filesystem::path> files_;
@@ -147,20 +138,6 @@ class CompilerProcess {
    bool initial_breakpoint_ = false;
    std::vector<Capture> captures_;
 
-   void read(std::uint64_t address, void *output, std::size_t size) const
-   {
-      SIZE_T copied = 0;
-      require(ReadProcessMemory(process_, reinterpret_cast<const void*>(address), output, size, &copied)
-              && copied == size, "Read compiler memory");
-   }
-
-   template<class T> T read(std::uint64_t address) const
-   {
-      T value{};
-      read(address, &value, sizeof(value));
-      return value;
-   }
-
    void arm(HANDLE thread) const
    {
       CONTEXT registers{};
@@ -184,53 +161,6 @@ class CompilerProcess {
       arm(owned);
    }
 
-   void capture(const CONTEXT& registers)
-   {
-      unsigned flags = read<std::uint32_t>(registers.Rsp + 0x38);
-      if (!(flags & aoc::isa_dump_flag)) return;
-      auto span = read<aoc::InstructionSpan>(registers.R8);
-      if (!span.instruction_count) return;
-      if (!span.data || span.instruction_count > 1024 * 1024 || registers.Rcx > 8)
-         throw std::runtime_error("Invalid ISA span");
-      auto reader = read<std::uint64_t>(registers.Rdx + offsetof(aoc::MetadataContextView, reader));
-      auto view = read<std::uint64_t>(reader + offsetof(aoc::MetadataReaderView, object_span));
-      auto object = read<aoc::ObjectSpan>(view);
-      if (object.byte_count < sizeof(aoc::ObjectHeaderView) || object.byte_count > 256 * 1024 * 1024)
-         throw std::runtime_error("Invalid shader object span");
-      auto header = read<aoc::ObjectHeaderView>(object.data);
-      std::uint64_t table_size = std::uint64_t(header.section_count) * sizeof(aoc::SectionDescriptor);
-      if (header.signature != aoc::object_magic || header.section_offset > object.byte_count ||
-          table_size > object.byte_count - header.section_offset)
-         throw std::runtime_error("Invalid shader object section table");
-      bool found_code = false;
-      bool found_flags = false;
-      bool binning = false;
-      for (unsigned i = 0; i < header.section_count; ++i) {
-         auto section = read<aoc::SectionDescriptor>(object.data + header.section_offset +
-                                                     i * sizeof(aoc::SectionDescriptor));
-         if (section.offset > object.byte_count || section.byte_size > object.byte_count - section.offset)
-            throw std::runtime_error("Shader object section exceeds its span");
-         if (section.type == 10) {
-            if (section.element_size != 8 || section.element_count != span.instruction_count ||
-                section.byte_size != span.instruction_count * 8 || object.data + section.offset != span.data)
-               throw std::runtime_error("ISA span does not match shader object section 10");
-            found_code = true;
-         }
-         if (section.type == 1) {
-            if (section.byte_size < 0x24)
-               throw std::runtime_error("Shader flags section is truncated");
-            binning = (read<std::uint32_t>(object.data + section.offset + 0x20) & aoc::binning_flag) != 0;
-            found_flags = true;
-         }
-      }
-      if (!found_code || !found_flags)
-         throw std::runtime_error("Missing code or shader flags section");
-      Capture result{static_cast<unsigned>(registers.Rcx), binning, {}};
-      result.words.resize(static_cast<std::size_t>(span.instruction_count));
-      read(span.data, result.words.data(), result.words.size() * 8);
-      captures_.push_back(std::move(result));
-   }
-
    void breakpoint(DWORD thread_id)
    {
       auto it = threads_.find(thread_id);
@@ -240,16 +170,9 @@ class CompilerProcess {
       require(GetThreadContext(it->second, &registers), "Read compiler registers");
       if (registers.Rip == image_base_ + aoc::vulkan_entry_rva ||
           registers.Rip == image_base_ + aoc::direct3d_entry_rva) {
-         auto api = read<std::uint32_t>(registers.Rcx + offsetof(aoc::Application, api));
-         if (api != 1 && api != 2)
-            throw std::runtime_error("Only Vulkan SPIR-V and Direct3D DXBC/DXIL inputs are supported");
-         std::uint8_t enabled = 1;
-         SIZE_T written = 0;
-         require(WriteProcessMemory(process_, reinterpret_cast<void*>(registers.Rcx +
-                                    offsetof(aoc::Application, dump_isa)), &enabled, 1, &written) && written == 1,
-                 "Enable compiler ISA output");
+         aoc::Memory(process_).enable_isa(registers);
       } else if (registers.Rip == image_base_ + aoc::dump_entry_rva) {
-         capture(registers);
+         aoc::Memory(process_).capture(registers, captures_);
       } else {
          throw std::runtime_error("Unexpected compiler hardware breakpoint");
       }
@@ -382,7 +305,8 @@ unsigned gpu_generation(const std::vector<std::wstring>& args)
 void usage()
 {
    std::fprintf(stderr, "Usage: ir3-aoc-isa [--aoc PATH] [--output FILE] [--raw-dir DIR]\n"
-                        "                   [--aoc-log FILE] -- AOC_ARGUMENTS\n"
+                        "                   [--aoc-log FILE] [--backend loadlibrary|process]\n"
+                        "                   [--repeat COUNT] -- AOC_ARGUMENTS\n"
                         "Examples: -- -arch=a830 shader.comp.spv\n"
                         "          -- -arch=a741 -link_info pipeline.json\n");
 }
@@ -397,6 +321,8 @@ int wmain(int argc, wchar_t **argv)
       std::filesystem::path output, raw_dir, aoc_log;
       std::vector<std::wstring> args;
       bool separator = false;
+      bool in_process = true;
+      unsigned repeat = 1;
       for (int i = 1; i < argc; ++i) {
          std::wstring arg = argv[i];
          if (separator) { args.push_back(arg); continue; }
@@ -407,6 +333,18 @@ int wmain(int argc, wchar_t **argv)
          else if (arg == L"--output") output = argv[++i];
          else if (arg == L"--raw-dir") raw_dir = argv[++i];
          else if (arg == L"--aoc-log") aoc_log = argv[++i];
+         else if (arg == L"--backend") {
+            std::wstring backend = argv[++i];
+            if (backend != L"loadlibrary" && backend != L"process")
+               throw std::runtime_error("Backend must be loadlibrary or process");
+            in_process = backend == L"loadlibrary";
+         } else if (arg == L"--repeat") {
+            std::size_t end = 0;
+            std::wstring count = argv[++i];
+            repeat = std::stoul(count, &end);
+            if (!repeat || repeat > 100 || end != count.size())
+               throw std::runtime_error("Repeat count must be between 1 and 100");
+         }
          else { usage(); return 1; }
       }
       if (args.empty()) { usage(); return 1; }
@@ -430,8 +368,42 @@ int wmain(int argc, wchar_t **argv)
       Handle log(CreateFileW(log_path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &inherit,
                              OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
       require(log.get() != INVALID_HANDLE_VALUE, "Open compiler log");
-      CompilerProcess compiler;
-      DWORD status = compiler.run(executable, args, log.get());
+      aoc::Compilation compilation{};
+      DWORD first_handles = 0, final_handles = 0;
+      for (unsigned iteration = 0; iteration < repeat; ++iteration) {
+         LARGE_INTEGER start{};
+         require(SetFilePointerEx(log.get(), start, nullptr, FILE_BEGIN) && SetEndOfFile(log.get()),
+                 "Reset compiler log");
+         aoc::Compilation next{};
+         if (in_process) {
+            next = aoc::compile_in_process(executable, args, log.get());
+            if (GetModuleHandleW(executable.c_str()) || GetModuleHandleW(L"ir3-aoc-tls.dll"))
+               throw std::runtime_error("Compiler image or TLS carrier remained loaded");
+         } else {
+            CompilerProcess compiler;
+            next.status = compiler.run(executable, args, log.get());
+            next.captures = compiler.captures();
+         }
+         if (iteration) {
+            if (next.status != compilation.status || next.captures.size() != compilation.captures.size())
+               throw std::runtime_error("Repeated compilation changed status or variant count");
+            for (std::size_t i = 0; i < next.captures.size(); ++i) {
+               const auto& before = compilation.captures[i];
+               const auto& after = next.captures[i];
+               if (before.stage != after.stage || before.binning != after.binning || before.words != after.words)
+                  throw std::runtime_error("Repeated compilation changed ISA");
+            }
+         }
+         compilation = std::move(next);
+         require(GetProcessHandleCount(GetCurrentProcess(), &final_handles), "Count process handles");
+         if (!iteration) first_handles = final_handles;
+      }
+      if (repeat > 1) {
+         if (final_handles != first_handles) throw std::runtime_error("Repeated compilation leaked handles");
+         std::fprintf(stderr, "Verified %u compilations; handle count %lu -> %lu\n", repeat,
+                      static_cast<unsigned long>(first_handles), static_cast<unsigned long>(final_handles));
+      }
+      DWORD status = compilation.status;
       LARGE_INTEGER origin{};
       require(SetFilePointerEx(log.get(), origin, nullptr, FILE_BEGIN), "Read compiler log");
       std::string diagnostic;
@@ -450,9 +422,9 @@ int wmain(int argc, wchar_t **argv)
       }
       bool success = diagnostic.find("Compilation succeeded") != std::string::npos &&
                      diagnostic.find("Compilation failed") == std::string::npos;
-      if (status || !success || compiler.captures().empty()) {
+      if (status || !success || compilation.captures.empty()) {
          std::fwrite(diagnostic.data(), 1, diagnostic.size(), stderr);
-         if (status) std::fprintf(stderr, "AOC process status: 0x%08lx\n", static_cast<unsigned long>(status));
+         if (status) std::fprintf(stderr, "AOC status: 0x%08lx\n", static_cast<unsigned long>(status));
          throw std::runtime_error("AOC compilation did not produce a successful ISA capture");
       }
       FILE *text = output.empty() ? stdout : _wfopen(output.c_str(), L"wb");
@@ -461,7 +433,7 @@ int wmain(int argc, wchar_t **argv)
       if (!raw_dir.empty()) std::filesystem::create_directories(raw_dir);
       static const char *stages[] = {"VS", "TCS", "TES", "GS", "FS", "CS", "BVH", "RAY", "TASK"};
       unsigned index = 0;
-      for (const auto& capture : compiler.captures()) {
+      for (const auto& capture : compilation.captures) {
          std::fprintf(text, "; AOC 7.0.15 GPU %u %s%s, %zu instructions\n", gpu,
                       capture.binning ? "BINNING " : "", stages[capture.stage], capture.words.size());
          isa_decode_options options{};
