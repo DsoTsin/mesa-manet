@@ -83,9 +83,7 @@ fn nir_opts(arch: u8, merge_wg: bool) -> nir_shader_compiler_options {
             | nir_var_function_temp),
         force_indirect_unrolling_sampler: true,
         scalarize_ddx: true,
-        support_indirect_inputs: (1 << MESA_SHADER_TESS_CTRL)
-            | (1 << MESA_SHADER_TESS_EVAL)
-            | (1 << MESA_SHADER_FRAGMENT),
+        support_indirect_inputs: 0,
         lower_hadd: arch >= 11,
         discard_is_demote: true,
         has_udot_4x8: true,
