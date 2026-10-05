@@ -824,16 +824,16 @@ tu_GetPhysicalDeviceImageFormatProperties2(
    {
       switch (sType) {
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO:
-         external_info = (const VkPhysicalDeviceExternalImageFormatInfo *) s;
+         external_info = static_cast<const VkPhysicalDeviceExternalImageFormatInfo *>(s);
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_IMAGE_FORMAT_INFO_EXT:
-         image_view_info = (const VkPhysicalDeviceImageViewImageFormatInfoEXT *) s;
+         image_view_info = static_cast<const VkPhysicalDeviceImageViewImageFormatInfoEXT *>(s);
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT:
-         drm_info = (const VkPhysicalDeviceImageDrmFormatModifierInfoEXT *) s;
+         drm_info = static_cast<const VkPhysicalDeviceImageDrmFormatModifierInfoEXT *>(s);
          break;
       case VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_CONTROL_EXT:
-         compression_control = (const VkImageCompressionControlEXT *) s;
+         compression_control = static_cast<const VkImageCompressionControlEXT *>(s);
          break;
       default:
          break;
@@ -850,19 +850,19 @@ tu_GetPhysicalDeviceImageFormatProperties2(
    {
       switch (sType) {
       case VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES:
-         external_props = (VkExternalImageFormatProperties *) s;
+         external_props = static_cast<VkExternalImageFormatProperties *>(s);
          break;
       case VK_STRUCTURE_TYPE_FILTER_CUBIC_IMAGE_VIEW_IMAGE_FORMAT_PROPERTIES_EXT:
-         cubic_props = (VkFilterCubicImageViewImageFormatPropertiesEXT *) s;
+         cubic_props = static_cast<VkFilterCubicImageViewImageFormatPropertiesEXT *>(s);
          break;
       case VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES:
-         ycbcr_props = (VkSamplerYcbcrConversionImageFormatProperties *) s;
+         ycbcr_props = static_cast<VkSamplerYcbcrConversionImageFormatProperties *>(s);
          break;
       case VK_STRUCTURE_TYPE_HOST_IMAGE_COPY_DEVICE_PERFORMANCE_QUERY_EXT:
-         hic_props = (VkHostImageCopyDevicePerformanceQueryEXT *) s;
+         hic_props = static_cast<VkHostImageCopyDevicePerformanceQueryEXT *>(s);
          break;
       case VK_STRUCTURE_TYPE_IMAGE_COMPRESSION_PROPERTIES_EXT:
-         compression_props = (VkImageCompressionPropertiesEXT *) s;
+         compression_props = static_cast<VkImageCompressionPropertiesEXT *>(s);
          break;
       default:
          break;

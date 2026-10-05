@@ -140,7 +140,7 @@ get_rq_deref(nir_builder *b, struct hash_table *ht, nir_def *def,
    struct hash_entry *entry = _mesa_hash_table_search(ht, opaque_var);
    assert(entry);
 
-   struct rq_var *rq = (struct rq_var *)entry->data;
+   struct rq_var *rq = static_cast<struct rq_var *>(entry->data);
 
    nir_deref_instr *out_deref = nir_build_deref_var(b, rq->rq);
 
@@ -213,7 +213,7 @@ calc_uav_index(nir_function_impl *impl, struct hash_table *ht)
          struct hash_entry *entry = _mesa_hash_table_search(ht, opaque_var);
          assert(entry);
 
-         struct rq_var *rq = (struct rq_var *)entry->data;
+         struct rq_var *rq = static_cast<struct rq_var *>(entry->data);
 
          if (intr->intrinsic == nir_intrinsic_rq_initialize) {
             rq->initialization = intr;
@@ -238,7 +238,7 @@ get_uav_index(nir_instr *cur_instr, struct hash_table *ht)
 {
    struct hash_entry *entry = _mesa_hash_table_search(ht, cur_instr);
    if (entry)
-      return (nir_def *)entry->data;
+      return static_cast<nir_def *>(entry->data);
    return NULL;
 }
 
@@ -254,7 +254,7 @@ load_tlas(nir_builder *b, nir_def *tlas,
    if (uav_index) {
       return nir_load_uav_ir3(b, components, 32, uav_index,
                               nir_vec2(b, index, nir_imm_int(b, offset / 4)),
-                              .access = (gl_access_qualifier)(
+                              .access = static_cast<gl_access_qualifier>(
                                           ACCESS_NON_WRITEABLE |
                                           ACCESS_CAN_REORDER),
                               .align_mul = AS_RECORD_SIZE,

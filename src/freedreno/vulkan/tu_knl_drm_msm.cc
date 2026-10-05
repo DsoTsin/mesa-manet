@@ -282,8 +282,8 @@ tu_free_zombie_vma_locked(struct tu_device *dev, bool wait)
    MESA_TRACE_FUNC();
 
    if (wait) {
-      struct tu_zombie_vma *vma = (struct tu_zombie_vma *)
-            u_vector_head(&dev->zombie_vmas);
+      struct tu_zombie_vma *vma = static_cast<struct tu_zombie_vma *>(
+            u_vector_head(&dev->zombie_vmas));
       /* Wait for 3s (arbitrary timeout) */
       VkResult ret = tu_wait_fence(dev, dev->queues[0]->msm_queue_id,
                                    vma->fence, 3000000000);
@@ -294,8 +294,8 @@ tu_free_zombie_vma_locked(struct tu_device *dev, bool wait)
 
    int last_signaled_fence = -1;
    while (u_vector_length(&dev->zombie_vmas) > 0) {
-      struct tu_zombie_vma *vma = (struct tu_zombie_vma *)
-            u_vector_tail(&dev->zombie_vmas);
+      struct tu_zombie_vma *vma = static_cast<struct tu_zombie_vma *>(
+            u_vector_tail(&dev->zombie_vmas));
       if (vma->fence > last_signaled_fence) {
          VkResult ret =
             tu_wait_fence(dev, dev->queues[0]->msm_queue_id, vma->fence, 0);
@@ -492,9 +492,9 @@ tu_bo_add_to_bo_list(struct tu_device *dev,
    /* grow the bo list if needed */
    if (idx >= dev->submit_bo_list_size) {
       uint32_t new_len = idx + 64;
-      struct drm_msm_gem_submit_bo *new_ptr = (struct drm_msm_gem_submit_bo *)
+      struct drm_msm_gem_submit_bo *new_ptr = static_cast<struct drm_msm_gem_submit_bo *>(
          vk_realloc(&dev->vk.alloc, dev->submit_bo_list, new_len * sizeof(*dev->submit_bo_list),
-                    8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+                    8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE));
       if (!new_ptr) {
          dev->submit_bo_count--;
          return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -743,12 +743,12 @@ msm_bo_init_dmabuf(struct tu_device *dev,
                    enum tu_bo_alloc_flags flags,
                    int prime_fd)
 {
-   flags = (enum tu_bo_alloc_flags)(flags | TU_BO_ALLOC_DMABUF);
+   flags = static_cast<enum tu_bo_alloc_flags>(flags | TU_BO_ALLOC_DMABUF);
 
    /* lseek() to get the real size */
    off_t real_size = lseek(prime_fd, 0, SEEK_END);
    lseek(prime_fd, 0, SEEK_SET);
-   if (real_size < 0 || (uint64_t) real_size < size)
+   if (real_size < 0 || static_cast<uint64_t>(real_size) < size)
       return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
 
    /* iova allocation needs to consider the object's *real* size: */
@@ -919,7 +919,7 @@ msm_sparse_vma_init(struct tu_device *dev,
    VkResult result;
    enum tu_bo_alloc_flags bo_flags =
       (flags & TU_SPARSE_VMA_REPLAYABLE) ? TU_BO_ALLOC_REPLAYABLE :
-      (enum tu_bo_alloc_flags)0;
+      static_cast<enum tu_bo_alloc_flags>(0);
 
    out_vma->msm.size = size;
 
@@ -960,9 +960,9 @@ static int
 compare_binds(const void *_a, const void *_b)
 {
    const struct drm_msm_vm_bind_op *a =
-      (const struct drm_msm_vm_bind_op *)_a;
+      static_cast<const struct drm_msm_vm_bind_op *>(_a);
    const struct drm_msm_vm_bind_op *b =
-      (const struct drm_msm_vm_bind_op *)_b;
+      static_cast<const struct drm_msm_vm_bind_op *>(_b);
 
    if (a->iova < b->iova)
       return -1;
@@ -981,7 +981,7 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
    VkResult result = VK_SUCCESS;
    int ret;
    struct tu_msm_queue_submit *submit =
-      (struct tu_msm_queue_submit *)_submit;
+      static_cast<struct tu_msm_queue_submit *>(_submit);
 
    struct drm_msm_syncobj *in_syncobjs, *out_syncobjs;
    uint64_t gpu_offset = 0;
@@ -1002,10 +1002,10 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
       (queue->type == TU_QUEUE_GFX && has_vm_bind) ? 1 : 0;
 
    /* Allocate without wait timeline semaphores */
-   in_syncobjs = (struct drm_msm_syncobj *) vk_zalloc(
+   in_syncobjs = static_cast<struct drm_msm_syncobj *>(vk_zalloc(
       &queue->device->vk.alloc,
       (wait_count + extra_wait_count) * sizeof(*in_syncobjs), 8,
-      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE));
 
    if (in_syncobjs == NULL) {
       result = vk_error(queue, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1013,10 +1013,10 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
    }
 
    /* Allocate with signal timeline semaphores considered */
-   out_syncobjs = (struct drm_msm_syncobj *) vk_zalloc(
+   out_syncobjs = static_cast<struct drm_msm_syncobj *>(vk_zalloc(
       &queue->device->vk.alloc,
       (signal_count + extra_signal_count) * sizeof(*out_syncobjs), 8,
-      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE));
 
    if (out_syncobjs == NULL) {
       result = vk_error(queue, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1089,8 +1089,8 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
          .nr_ops = nr_ops,
          .fence_fd = queue->device->vm_bind_fence_fd,
          .queue_id = queue->sparse_queue_id,
-         .in_syncobjs = (uint64_t)(uintptr_t)in_syncobjs,
-         .out_syncobjs = (uint64_t)(uintptr_t)out_syncobjs,
+         .in_syncobjs = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(in_syncobjs)),
+         .out_syncobjs = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out_syncobjs)),
          .nr_in_syncobjs = wait_count + extra_wait_count,
          .nr_out_syncobjs = signal_count + extra_signal_count,
          .syncobj_stride = sizeof(struct drm_msm_syncobj),
@@ -1103,7 +1103,7 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
       if (req.nr_ops == 1) {
          memcpy(&req.op, submit->binds.data, sizeof(req.op));
       } else {
-         req.ops = (uint64_t)(uintptr_t)submit->binds.data;
+         req.ops = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(submit->binds.data));
       }
 
       {
@@ -1155,8 +1155,8 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
                   .fence_fd = queue->device->vm_bind_fence_fd,
                   .queue_id = queue->sparse_queue_id,
                   .in_syncobjs =
-                     (uint64_t)(uintptr_t)&in_syncobjs[wait_count],
-                  .out_syncobjs = (uint64_t)(uintptr_t)out_syncobjs,
+                     static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&in_syncobjs[wait_count])),
+                  .out_syncobjs = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out_syncobjs)),
                   .nr_in_syncobjs = extra_wait_count,
                   .nr_out_syncobjs = last ? signal_count +
                      extra_signal_count : 0,
@@ -1251,12 +1251,12 @@ msm_queue_submit(struct tu_queue *queue, void *_submit,
          .flags = flags,
          .nr_bos = entry_count ? queue->device->submit_bo_count : 0,
          .nr_cmds = entry_count,
-         .bos = (uint64_t)(uintptr_t) queue->device->submit_bo_list,
-         .cmds = (uint64_t)(uintptr_t)submit->commands.data,
+         .bos = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(queue->device->submit_bo_list)),
+         .cmds = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(submit->commands.data)),
          .fence_fd = queue->device->vm_bind_fence_fd,
          .queueid = queue->msm_queue_id,
-         .in_syncobjs = (uint64_t)(uintptr_t)in_syncobjs,
-         .out_syncobjs = (uint64_t)(uintptr_t)out_syncobjs,
+         .in_syncobjs = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(in_syncobjs)),
+         .out_syncobjs = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out_syncobjs)),
          .nr_in_syncobjs = wait_count + extra_wait_count,
          .nr_out_syncobjs = signal_count + extra_signal_count,
          .syncobj_stride = sizeof(struct drm_msm_syncobj),
@@ -1353,9 +1353,9 @@ tu_knl_drm_msm_load(struct tu_instance *instance,
       return result;
    }
 
-   struct tu_physical_device *device = (struct tu_physical_device *)
+   struct tu_physical_device *device = static_cast<struct tu_physical_device *>(
       vk_zalloc(&instance->vk.alloc, sizeof(*device), 8,
-                VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+                VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE));
    if (!device) {
       result = vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
       goto fail;
@@ -1420,7 +1420,8 @@ tu_knl_drm_msm_load(struct tu_instance *instance,
    device->ubwc_config.highest_bank_bit = tu_drm_get_param_or(fd, MSM_PARAM_HIGHEST_BANK_BIT, &val, 0);
    device->ubwc_config.bank_swizzle_levels = tu_drm_get_param_or(fd, MSM_PARAM_UBWC_SWIZZLE, &val, ~0);
    device->ubwc_config.macrotile_mode =
-      (enum fdl_macrotile_mode) tu_drm_get_param_or(fd, MSM_PARAM_MACROTILE_MODE, &val, FDL_MACROTILE_INVALID);
+      static_cast<enum fdl_macrotile_mode>(
+         tu_drm_get_param_or(fd, MSM_PARAM_MACROTILE_MODE, &val, FDL_MACROTILE_INVALID));
 
    device->uche_trap_base = tu_drm_get_param_or(fd, MSM_PARAM_UCHE_TRAP_BASE, &val, UINT64_C(0x1fffffffff000));
 

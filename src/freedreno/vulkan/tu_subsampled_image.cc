@@ -30,9 +30,9 @@ tu_emit_subsampled_metadata(struct tu_cmd_buffer *cmd,
                             const VkOffset2D *fdm_offsets)
 {
    const struct tu_image_view *iview = cmd->state.attachments[a];
-   float size_ratio_x = (float)iview->image->vk.extent.width /
+   float size_ratio_x = static_cast<float>(iview->image->vk.extent.width) /
       iview->image->layout[0].width0;
-   float size_ratio_y = (float)iview->image->vk.extent.height /
+   float size_ratio_y = static_cast<float>(iview->image->vk.extent.height) /
       iview->image->layout[0].height0;
    for_each_layer (i, cmd->state.pass->attachments[a].used_views |
                       cmd->state.pass->attachments[a].resolve_views,
@@ -60,10 +60,10 @@ tu_emit_subsampled_metadata(struct tu_cmd_buffer *cmd,
          if (fdm_offsets)
             bin_offset = tu_bin_offset(fdm_offsets[view], tiling);
          tile_count = vsc->tile_count.width * vsc->tile_count.height;
-         metadata.hdr.scale_x = (float)iview->vk.extent.width / tiling->tile0.width;
-         metadata.hdr.scale_y = (float)iview->vk.extent.height / tiling->tile0.height;
-         metadata.hdr.offset_x = (float)bin_offset.x / tiling->tile0.width;
-         metadata.hdr.offset_y = (float)bin_offset.y / tiling->tile0.height;
+         metadata.hdr.scale_x = static_cast<float>(iview->vk.extent.width) / tiling->tile0.width;
+         metadata.hdr.scale_y = static_cast<float>(iview->vk.extent.height) / tiling->tile0.height;
+         metadata.hdr.offset_x = static_cast<float>(bin_offset.x) / tiling->tile0.width;
+         metadata.hdr.offset_y = static_cast<float>(bin_offset.y) / tiling->tile0.height;
          metadata.hdr.bin_stride = vsc->tile_count.width;
 
          for (unsigned j = 0; j < tile_count; j++) {
@@ -81,17 +81,17 @@ tu_emit_subsampled_metadata(struct tu_cmd_buffer *cmd,
 
             VkExtent2D frag_area = get_effective_frag_area(tile, view);
             VkOffset2D fb_bin_start = (VkOffset2D) {
-               MAX2(tile->pos.x * (int32_t)tiling->tile0.width - bin_offset.x, 0),
-               MAX2(tile->pos.y * (int32_t)tiling->tile0.height - bin_offset.y, 0),
+               MAX2(tile->pos.x * static_cast<int32_t>(tiling->tile0.width) - bin_offset.x, 0),
+               MAX2(tile->pos.y * static_cast<int32_t>(tiling->tile0.height) - bin_offset.y, 0),
             };
             metadata.bins[j].scale_x = 1.0 / frag_area.width * size_ratio_x;
             metadata.bins[j].scale_y = 1.0 / frag_area.height * size_ratio_y;
             metadata.bins[j].offset_x =
-               (float)(tile->subsampled_pos[view].offset.x -
+               static_cast<float>(tile->subsampled_pos[view].offset.x -
                        fb_bin_start.x / frag_area.width) /
                iview->image->layout[0].width0;
             metadata.bins[j].offset_y =
-               (float)(tile->subsampled_pos[view].offset.y -
+               static_cast<float>(tile->subsampled_pos[view].offset.y -
                        fb_bin_start.y / frag_area.height) /
                iview->image->layout[0].height0;
          }
@@ -106,9 +106,9 @@ tu_emit_subsampled_metadata(struct tu_cmd_buffer *cmd,
                       2 + (sizeof(struct tu_subsampled_header) +
                            tile_count * sizeof(struct tu_subsampled_bin)) / 4);
       tu_cs_emit_qw(cs, iova);
-      tu_cs_emit_array(cs, (const uint32_t *)&metadata.hdr,
+      tu_cs_emit_array(cs, reinterpret_cast<const uint32_t *>(&metadata.hdr),
                        sizeof(struct tu_subsampled_header) / 4);
-      tu_cs_emit_array(cs, (const uint32_t *)&metadata.bins,
+      tu_cs_emit_array(cs, reinterpret_cast<const uint32_t *>(&metadata.bins),
                        sizeof(struct tu_subsampled_bin) * tile_count / 4);
    }
 
@@ -126,7 +126,7 @@ tu_get_subsampled_coordinates(nir_builder *b,
                               nir_def *descriptor,
                               bool can_speculate)
 {
-   gl_access_qualifier access = can_speculate ? ACCESS_CAN_SPECULATE : (gl_access_qualifier)0;
+   gl_access_qualifier access = can_speculate ? ACCESS_CAN_SPECULATE : static_cast<gl_access_qualifier>(0);
    nir_def *layer;
    if (coords->num_components > 2)
       layer = nir_f2u16(b, nir_channel(b, coords, 2));
@@ -291,14 +291,14 @@ handle_vertical_corners(const struct tu_tile_config *tile,
                         struct tu_rect2d_float *other_src)
 {
    float other_apron_height =
-      (float)APRON_SIZE * get_effective_frag_area(tile, view).height /
+      static_cast<float>(APRON_SIZE) * get_effective_frag_area(tile, view).height /
       get_effective_frag_area(other_tile, view).height;
-   if ((unsigned)other_src->y_start > other_tile->subsampled_pos[view].offset.y) {
+   if (static_cast<unsigned>(other_src->y_start) > other_tile->subsampled_pos[view].offset.y) {
       tile_dst->offset.y -= APRON_SIZE;
       tile_dst->extent.height += APRON_SIZE;
       other_src->y_start -= other_apron_height;
    }
-   if ((unsigned)other_src->y_end <
+   if (static_cast<unsigned>(other_src->y_end) <
        other_tile->subsampled_pos[view].offset.y +
        other_tile->subsampled_pos[view].extent.height) {
       tile_dst->extent.height += APRON_SIZE;
@@ -314,14 +314,14 @@ handle_horizontal_corners(const struct tu_tile_config *tile,
                           struct tu_rect2d_float *other_src)
 {
    float other_apron_width =
-      (float)APRON_SIZE * get_effective_frag_area(tile, view).width /
+      static_cast<float>(APRON_SIZE) * get_effective_frag_area(tile, view).width /
       get_effective_frag_area(other_tile, view).width;
    if (other_src->x_start > other_tile->subsampled_pos[view].offset.x) {
       tile_dst->offset.x -= APRON_SIZE;
       tile_dst->extent.width += APRON_SIZE;
       other_src->x_start -= other_apron_width;
    }
-   if ((unsigned)other_src->x_end <
+   if (static_cast<unsigned>(other_src->x_end) <
        other_tile->subsampled_pos[view].offset.x +
        other_tile->subsampled_pos[view].extent.width) {
       tile_dst->extent.width += APRON_SIZE;
@@ -454,7 +454,7 @@ tu_calc_subsampled_aprons(VkRect2D *dst,
 
                other_src.x_start = other_tile->subsampled_pos[view].offset.x;
                other_src.x_end = other_src.x_start +
-                  (float)APRON_SIZE * frag_area.width / other_frag_area.width;
+                  static_cast<float>(APRON_SIZE) * frag_area.width / other_frag_area.width;
 
                other_src.y_start = other_tile_start;
                other_src.y_end = other_tile_end;
@@ -482,7 +482,7 @@ tu_calc_subsampled_aprons(VkRect2D *dst,
                tile_src.x_end = tile->subsampled_pos[view].offset.x
                   + tile->subsampled_pos[view].extent.width;
                tile_src.x_start = tile_src.x_end -
-                  (float)APRON_SIZE * other_frag_area.width / frag_area.width;
+                  static_cast<float>(APRON_SIZE) * other_frag_area.width / frag_area.width;
 
                tile_src.y_start = tile_start;
                tile_src.y_end = tile_end;
@@ -557,7 +557,7 @@ tu_calc_subsampled_aprons(VkRect2D *dst,
 
                other_src.y_start = other_tile->subsampled_pos[view].offset.y;
                other_src.y_end = other_src.y_start +
-                  (float)APRON_SIZE * frag_area.height / other_frag_area.height;
+                  static_cast<float>(APRON_SIZE) * frag_area.height / other_frag_area.height;
 
                other_src.x_start = other_tile_start;
                other_src.x_end = other_tile_end;
@@ -587,7 +587,7 @@ tu_calc_subsampled_aprons(VkRect2D *dst,
                tile_src.y_end = tile->subsampled_pos[view].offset.y
                   + tile->subsampled_pos[view].extent.height;
                tile_src.y_start = tile_src.y_end -
-                  (float)APRON_SIZE * other_frag_area.height / frag_area.height;
+                  static_cast<float>(APRON_SIZE) * other_frag_area.height / frag_area.height;
 
                tile_src.x_start = tile_start;
                tile_src.x_end = tile_end;

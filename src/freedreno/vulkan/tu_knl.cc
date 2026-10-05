@@ -175,7 +175,7 @@ tu_bo_sync_cache(struct tu_device *dev,
                  VkDeviceSize size,
                  enum tu_mem_sync_op op)
 {
-   char *start = (char *) bo->map + offset;
+   char *start = static_cast<char *>(bo->map) + offset;
 
    size = size == VK_WHOLE_SIZE ? (bo->size - offset) : size;
    if (op == TU_MEM_SYNC_CACHE_TO_GPU) {

@@ -19,8 +19,8 @@ tu_CreateBufferView(VkDevice _device,
    VK_FROM_HANDLE(tu_buffer, buffer, pCreateInfo->buffer);
    struct tu_buffer_view *view;
 
-   view = (struct tu_buffer_view *) vk_buffer_view_create(
-      &device->vk, pCreateInfo, pAllocator, sizeof(*view));
+   view = static_cast<struct tu_buffer_view *>(vk_buffer_view_create(
+      &device->vk, pCreateInfo, pAllocator, sizeof(*view)));
 
    if (!view)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);

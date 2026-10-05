@@ -41,8 +41,8 @@ get_cmd_buffer(struct tu_device *dev, struct tu_cmd_buffer **cmd_buffer_out)
     * shrinking the array of pending entries.
     */
    struct dynamic_rendering_entry *new_entry =
-      (struct dynamic_rendering_entry *) util_dynarray_begin(
-         &dev->dynamic_rendering_pending);
+      static_cast<struct dynamic_rendering_entry *>(util_dynarray_begin(
+         &dev->dynamic_rendering_pending));
    uint32_t entries = 0;
    util_dynarray_foreach(&dev->dynamic_rendering_pending,
                          struct dynamic_rendering_entry, entry) {
@@ -204,9 +204,9 @@ tu_insert_dynamic_cmdbufs(struct tu_device *dev,
       }
    }
 
-   struct tu_cmd_buffer **new_cmds = (struct tu_cmd_buffer **)
+   struct tu_cmd_buffer **new_cmds = static_cast<struct tu_cmd_buffer **>(
       vk_alloc(&dev->vk.alloc, cmds.size, alignof(struct tu_cmd_buffer *),
-               VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+               VK_SYSTEM_ALLOCATION_SCOPE_DEVICE));
    if (!new_cmds)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    memcpy(new_cmds, cmds.data, cmds.size);

@@ -88,7 +88,8 @@ tu_render_pass_add_subpass_dep(struct tu_render_pass *pass,
 
    if (!vk_subpass_dependency_is_fb_local(dep, src_stage_mask, dst_stage_mask)) {
       non_fb_local = false;
-      perf_debug((struct tu_device *)pass->base.device, "Disabling gmem rendering due to invalid subpass dependency");
+      perf_debug(reinterpret_cast<struct tu_device *>(pass->base.device),
+                 "Disabling gmem rendering due to invalid subpass dependency");
       for (int i = 0; i < ARRAY_SIZE(pass->gmem_pixels); i++)
          pass->gmem_pixels[i] = 0;
    }
@@ -785,9 +786,9 @@ tu_render_pass_gmem_config(struct tu_render_pass *pass,
    STACK_ARRAY(struct tu_gmem_alloc, gmem_alloc, 2 * pass->attachment_count);
    STACK_ARRAY(struct tu_gmem_alloc *, att_gmem_alloc, 2 * pass->attachment_count);
 
-   for (enum tu_gmem_layout layout = (enum tu_gmem_layout) 0;
+   for (enum tu_gmem_layout layout = static_cast<enum tu_gmem_layout>(0);
         layout < TU_GMEM_LAYOUT_COUNT;
-        layout = (enum tu_gmem_layout)(layout + 1)) {
+        layout = static_cast<enum tu_gmem_layout>(layout + 1)) {
       /* log2(gmem_align/(tile_align_w*tile_align_h)) */
       uint32_t block_align_shift = 3;
       uint32_t tile_align_w = phys_dev->info->tile_align_w;
@@ -1134,8 +1135,8 @@ tu_CreateRenderPass2(VkDevice _device,
    attachments_offset = size;
    size += attachment_count * sizeof(pass->attachments[0]);
 
-   pass = (struct tu_render_pass *) vk_object_zalloc(
-      &device->vk, pAllocator, size, VK_OBJECT_TYPE_RENDER_PASS);
+   pass = static_cast<struct tu_render_pass *>(vk_object_zalloc(
+      &device->vk, pAllocator, size, VK_OBJECT_TYPE_RENDER_PASS));
    if (pass == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -1143,7 +1144,7 @@ tu_CreateRenderPass2(VkDevice _device,
    pass->user_attachment_count = pCreateInfo->attachmentCount;
    pass->subpass_count = pCreateInfo->subpassCount;
    pass->attachments =
-      (struct tu_render_pass_attachment *) ((char *) pass +
+      reinterpret_cast<struct tu_render_pass_attachment *>(reinterpret_cast<char *>(pass) +
                                             attachments_offset);
 
    for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
@@ -1186,10 +1187,10 @@ tu_CreateRenderPass2(VkDevice _device,
    }
 
    if (subpass_attachment_count) {
-      pass->subpass_attachments = (struct tu_subpass_attachment *) vk_alloc2(
+      pass->subpass_attachments = static_cast<struct tu_subpass_attachment *>(vk_alloc2(
          &device->vk.alloc, pAllocator,
          subpass_attachment_count * sizeof(struct tu_subpass_attachment), 8,
-         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT));
       if (pass->subpass_attachments == NULL) {
          vk_object_free(&device->vk, pAllocator, pass);
          return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1228,7 +1229,7 @@ tu_CreateRenderPass2(VkDevice _device,
       subpass->input_count = desc->inputAttachmentCount;
       subpass->color_count = desc->colorAttachmentCount;
       subpass->resolve_depth_stencil = is_depth_stencil_resolve_enabled(ds_resolve);
-      subpass->samples = (VkSampleCountFlagBits) 0;
+      subpass->samples = static_cast<VkSampleCountFlagBits>(0);
       subpass->srgb_cntl = 0;
       subpass->legacy_dithering_enabled = desc->flags &
          VK_SUBPASS_DESCRIPTION_ENABLE_LEGACY_DITHERING_BIT_EXT;
@@ -1534,12 +1535,12 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
 
       VK_FROM_HANDLE(tu_image_view, view, att_info->imageView);
       tu_setup_dynamic_attachment(att, view,
-                                  (VkSampleCountFlagBits)view->image->layout->nr_samples);
+                                  static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples));
       uint32_t att_idx = a++;
       bool att_is_msrtss = false;
       if (msrtss && msrtss->multisampledRenderToSingleSampledEnable &&
           msrtss->rasterizationSamples !=
-          (VkSampleCountFlagBits)view->image->layout->nr_samples) {
+          static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples)) {
          if (att_info->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD)
             subpass->unresolve_attachments[i].attachment = att_idx;
          else
@@ -1567,7 +1568,7 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
                             VK_ATTACHMENT_STORE_OP_NONE);
          subpass->input_attachments[i + 1].patch_input_gmem = true;
          subpass->unresolve_attachments[i].attachment = VK_ATTACHMENT_UNUSED;
-         subpass->samples = (VkSampleCountFlagBits) view->image->layout->nr_samples;
+         subpass->samples = static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples);
       }
       subpass->color_attachments[i].attachment = att_idx;
       subpass->input_attachments[i + 1].attachment = att_idx;
@@ -1630,13 +1631,13 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
 
          struct tu_render_pass_attachment *att = &pass->attachments[a];
          tu_setup_dynamic_attachment(att, view,
-                                    (VkSampleCountFlagBits)view->image->layout->nr_samples);
+                                    static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples));
          uint32_t att_idx = a++;
          subpass->input_attachments[0].attachment = att_idx;
          subpass->depth_stencil_attachment.attachment = att_idx;
 
-         subpass->depth_used = (bool) info->pDepthAttachment;
-         subpass->stencil_used = (bool) info->pStencilAttachment;
+         subpass->depth_used = static_cast<bool>(info->pDepthAttachment);
+         subpass->stencil_used = static_cast<bool>(info->pStencilAttachment);
 
          bool att_is_msrtss = false;
          VkAttachmentLoadOp load_op =
@@ -1653,7 +1654,7 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
                info->pStencilAttachment->storeOp : VK_ATTACHMENT_STORE_OP_NONE_EXT;
          if (msrtss && msrtss->multisampledRenderToSingleSampledEnable &&
              msrtss->rasterizationSamples !=
-             (VkSampleCountFlagBits)view->image->layout->nr_samples) {
+             static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples)) {
             bool load = load_op == VK_ATTACHMENT_LOAD_OP_LOAD ||
                stencil_load_op == VK_ATTACHMENT_LOAD_OP_LOAD;
             bool store = store_op == VK_ATTACHMENT_STORE_OP_STORE ||
@@ -1692,7 +1693,7 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
                device, att, load_op, stencil_load_op, store_op,
                stencil_store_op);
             subpass->input_attachments[0].patch_input_gmem = true;
-            subpass->samples = (VkSampleCountFlagBits) view->image->layout->nr_samples;
+            subpass->samples = static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples);
          }
 
          if (!att_is_msrtss) {
@@ -1831,7 +1832,7 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
          VK_FROM_HANDLE(tu_image_view, view, att_info->imageView);
 
          if (msrtss->rasterizationSamples !=
-             (VkSampleCountFlagBits)view->image->layout->nr_samples) {
+             static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples)) {
             struct tu_render_pass_attachment *att = &pass->attachments[a];
             tu_setup_dynamic_attachment(att, view, msrtss->rasterizationSamples);
             uint32_t att_idx = a++;
@@ -1863,7 +1864,7 @@ tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
          if (common_info && common_info->imageView != VK_NULL_HANDLE) {
             VK_FROM_HANDLE(tu_image_view, view, common_info->imageView);
             if (msrtss->rasterizationSamples !=
-                (VkSampleCountFlagBits)view->image->layout->nr_samples) {
+                static_cast<VkSampleCountFlagBits>(view->image->layout->nr_samples)) {
                struct tu_render_pass_attachment *att = &pass->attachments[a];
                tu_setup_dynamic_attachment(att, view, msrtss->rasterizationSamples);
                uint32_t att_idx = a++;
@@ -1928,7 +1929,7 @@ tu_setup_dynamic_inheritance(struct tu_cmd_buffer *cmd_buffer,
    subpass->feedback_invalidate = false;
    subpass->feedback_loop_ds = subpass->feedback_loop_color = false;
    subpass->input_count = 0;
-   subpass->samples = (VkSampleCountFlagBits) 0;
+   subpass->samples = static_cast<VkSampleCountFlagBits>(0);
    subpass->srgb_cntl = 0;
    subpass->raster_order_attachment_access = false;
    subpass->multiview_mask = info->viewMask;

@@ -116,7 +116,7 @@ struct alignas(8) accel_struct_slot {
 #define query_iova(type, pool, query, field)                               \
    pool->bo->iova + pool->query_stride * (query) + offsetof(type, field)
 #define query_addr(type, pool, query, field)                               \
-   (uint64_t *) ((char *) pool->bo->map + pool->query_stride * (query) +   \
+   reinterpret_cast<uint64_t *>(static_cast<char *>(pool->bo->map) + pool->query_stride * (query) +   \
                  offsetof(type, field))
 
 #define occlusion_query_iova(pool, query, field)                           \
@@ -147,7 +147,7 @@ struct alignas(8) accel_struct_slot {
    offsetof(struct perfcntr_query_slot, field)
 
 #define perf_query_derived_perfcntr_addr(pool, query, field, i)            \
-   (uint64_t *) ((char *) pool->bo->map + pool->query_stride * (query) +   \
+   reinterpret_cast<uint64_t *>(static_cast<char *>(pool->bo->map) + pool->query_stride * (query) +   \
                  sizeof(struct query_slot) +                               \
                  sizeof(uint64_t) * pool->perf_query.derived.counter_index_count + \
                  sizeof(struct perfcntr_query_slot) * (i) +                \
@@ -164,7 +164,7 @@ struct alignas(8) accel_struct_slot {
    sizeof(struct query_slot) + sizeof(type) * (i)
 
 #define query_result_addr(pool, query, type, i)                            \
-   (uint64_t *) ((char *) pool->bo->map + pool->query_stride * (query) +   \
+   reinterpret_cast<uint64_t *>(static_cast<char *>(pool->bo->map) + pool->query_stride * (query) +   \
                  sizeof(struct query_slot) + sizeof(type) * (i))
 
 #define query_is_available(slot) p_atomic_read(&slot->available)
@@ -214,8 +214,8 @@ fd_perfcntr_type_to_vk_storage[] = {
 static struct query_slot *
 slot_address(struct tu_query_pool *pool, uint32_t query)
 {
-   return (struct query_slot *) ((char *) pool->bo->map +
-                                 query * pool->query_stride);
+   return reinterpret_cast<struct query_slot *>(static_cast<char *>(pool->bo->map) +
+                                                query * pool->query_stride);
 }
 
 static bool
@@ -266,8 +266,8 @@ perfcntr_index(const struct fd_perfcntr_group *group, uint32_t group_count,
 static int
 compare_perfcntr_pass(const void *a, const void *b)
 {
-   return ((struct tu_perf_query_raw_data *)a)->pass -
-          ((struct tu_perf_query_raw_data *)b)->pass;
+   return static_cast<const struct tu_perf_query_raw_data *>(a)->pass -
+          static_cast<const struct tu_perf_query_raw_data *>(b)->pass;
 }
 
 static uint32_t
@@ -380,9 +380,9 @@ tu_CreateQueryPool(VkDevice _device,
       UNREACHABLE("Invalid query type");
    }
 
-   struct tu_query_pool *pool = (struct tu_query_pool *)
+   struct tu_query_pool *pool = static_cast<struct tu_query_pool *>(
          vk_query_pool_create(&device->vk, pCreateInfo,
-                              pAllocator, pool_size);
+                              pAllocator, pool_size));
    if (!pool)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -639,9 +639,9 @@ write_query_value_cpu(char *base,
                       VkQueryResultFlags flags)
 {
    if (flags & VK_QUERY_RESULT_64_BIT) {
-      *(uint64_t*)(base + (offset * sizeof(uint64_t))) = *query_value_address;
+      *reinterpret_cast<uint64_t*>(base + (offset * sizeof(uint64_t))) = *query_value_address;
    } else {
-      *(uint32_t*)(base + (offset * sizeof(uint32_t))) = *query_value_address;
+      *reinterpret_cast<uint32_t*>(base + (offset * sizeof(uint32_t))) = *query_value_address;
    }
 }
 
@@ -651,26 +651,26 @@ write_performance_query_value_cpu(char *base,
                                   VkPerformanceCounterStorageKHR storage,
                                   uint64_t *query_value_address)
 {
-   VkPerformanceCounterResultKHR *result = &((VkPerformanceCounterResultKHR *)base)[offset];
+   VkPerformanceCounterResultKHR *result = &reinterpret_cast<VkPerformanceCounterResultKHR *>(base)[offset];
 
    switch (storage) {
    case VK_PERFORMANCE_COUNTER_STORAGE_INT32_KHR:
-      result->int32 = *((int32_t *)query_value_address);
+      result->int32 = *reinterpret_cast<int32_t *>(query_value_address);
       break;
    case VK_PERFORMANCE_COUNTER_STORAGE_INT64_KHR:
-      result->int64 = *((int64_t *)query_value_address);
+      result->int64 = *reinterpret_cast<int64_t *>(query_value_address);
       break;
    case VK_PERFORMANCE_COUNTER_STORAGE_UINT32_KHR:
-      result->uint32 = *((uint32_t *)query_value_address);
+      result->uint32 = *reinterpret_cast<uint32_t *>(query_value_address);
       break;
    case VK_PERFORMANCE_COUNTER_STORAGE_UINT64_KHR:
-      result->uint64 = *((uint64_t *)query_value_address);
+      result->uint64 = *query_value_address;
       break;
    case VK_PERFORMANCE_COUNTER_STORAGE_FLOAT32_KHR:
-      result->float32 = *((float *)query_value_address);
+      result->float32 = *reinterpret_cast<float *>(query_value_address);
       break;
    case VK_PERFORMANCE_COUNTER_STORAGE_FLOAT64_KHR:
-      result->float64 = *((double *)query_value_address);
+      result->float64 = *reinterpret_cast<double *>(query_value_address);
       break;
    }
 }
@@ -686,7 +686,7 @@ get_query_pool_results(struct tu_device *device,
                        VkDeviceSize stride,
                        VkQueryResultFlags flags)
 {
-   char *result_base = (char *) pData;
+   char *result_base = static_cast<char *>(pData);
    VkResult result = VK_SUCCESS;
    for (uint32_t i = 0; i < queryCount; i++) {
       uint32_t query = firstQuery + i;
@@ -1080,7 +1080,8 @@ tu_ResetQueryPool(VkDevice device,
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
 
    reset_query_pool<CHIP>(pool, firstQuery, queryCount, [pool](uint64_t result_iova) {
-      uint64_t *result = (uint64_t *) ((char *) pool->bo->map + result_iova - pool->bo->iova);
+      uint64_t *result = reinterpret_cast<uint64_t *>(static_cast<char *>(pool->bo->map) +
+                                                      result_iova - pool->bo->iova);
       *result = 0;
    });
 }

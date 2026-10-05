@@ -79,7 +79,7 @@ VkResult tu_rmv_SetDebugUtilsObjectNameEXT(VkDevice _device,
       return VK_SUCCESS;
    }
 
-   tu_rmv_log_resource_name(device, (const void *) pNameInfo->objectHandle,
+   tu_rmv_log_resource_name(device, reinterpret_cast<const void *>(pNameInfo->objectHandle),
                             pNameInfo->pObjectName);
    return VK_SUCCESS;
 }

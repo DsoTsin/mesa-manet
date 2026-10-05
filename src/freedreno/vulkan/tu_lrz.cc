@@ -1086,7 +1086,7 @@ tu_lrz_clear_depth_image(struct tu_cmd_buffer *cmd,
    ));
 
    tu_lrz_clear<CHIP>(cmd, &cmd->cs, image,
-                      (const VkClearValue *) pDepthStencil, fast_clear);
+                      reinterpret_cast<const VkClearValue *>(pDepthStencil), fast_clear);
    tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_FLUSH);
 }
 TU_GENX(tu_lrz_clear_depth_image);

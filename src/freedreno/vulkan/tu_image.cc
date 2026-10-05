@@ -265,11 +265,13 @@ tu_image_view_init(struct tu_device *device,
       UNREACHABLE("unknown view type");
    }
 
-   STATIC_ASSERT((unsigned)VK_CHROMA_LOCATION_COSITED_EVEN == (unsigned)FDL_CHROMA_LOCATION_COSITED_EVEN);
-   STATIC_ASSERT((unsigned)VK_CHROMA_LOCATION_MIDPOINT == (unsigned)FDL_CHROMA_LOCATION_MIDPOINT);
+   STATIC_ASSERT(static_cast<unsigned>(VK_CHROMA_LOCATION_COSITED_EVEN) ==
+                 static_cast<unsigned>(FDL_CHROMA_LOCATION_COSITED_EVEN));
+   STATIC_ASSERT(static_cast<unsigned>(VK_CHROMA_LOCATION_MIDPOINT) ==
+                 static_cast<unsigned>(FDL_CHROMA_LOCATION_MIDPOINT));
    if (conversion) {
-      args.chroma_offsets[0] = (enum fdl_chroma_location) conversion->state.chroma_offsets[0];
-      args.chroma_offsets[1] = (enum fdl_chroma_location) conversion->state.chroma_offsets[1];
+      args.chroma_offsets[0] = static_cast<enum fdl_chroma_location>(conversion->state.chroma_offsets[0]);
+      args.chroma_offsets[1] = static_cast<enum fdl_chroma_location>(conversion->state.chroma_offsets[1]);
    }
 
    if (sample_weights) {
@@ -941,8 +943,8 @@ tu_CreateImage(VkDevice _device,
                                                pImage);
    }
 
-   struct tu_image *image = (struct tu_image *)
-      vk_image_create(&device->vk, pCreateInfo, alloc, sizeof(*image));
+   struct tu_image *image = static_cast<struct tu_image *>(
+      vk_image_create(&device->vk, pCreateInfo, alloc, sizeof(*image)));
 
    if (!image)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1146,7 +1148,7 @@ tu_image_bind(struct tu_device *device,
             return result;
       }
 
-      image->map = (char *) mem->bo->map + offset;
+      image->map = static_cast<char *>(mem->bo->map) + offset;
    } else {
       image->map = NULL;
    }
@@ -1216,7 +1218,7 @@ tu_get_image_memory_requirements(struct tu_device *dev, struct tu_image *image,
       switch (sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
          VkMemoryDedicatedRequirements *req =
-            (VkMemoryDedicatedRequirements *) ext;
+            static_cast<VkMemoryDedicatedRequirements *>(ext);
          req->requiresDedicatedAllocation =
             image->vk.external_handle_types != 0;
          req->prefersDedicatedAllocation = req->requiresDedicatedAllocation;
@@ -1538,8 +1540,8 @@ tu_CreateImageView(VkDevice _device,
    VK_FROM_HANDLE(tu_device, device, _device);
    struct tu_image_view *view;
 
-   view = (struct tu_image_view *) vk_object_alloc(
-      &device->vk, pAllocator, sizeof(*view), VK_OBJECT_TYPE_IMAGE_VIEW);
+   view = static_cast<struct tu_image_view *>(vk_object_alloc(
+      &device->vk, pAllocator, sizeof(*view), VK_OBJECT_TYPE_IMAGE_VIEW));
    if (view == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -1590,7 +1592,8 @@ tu_fragment_density_map_sample(const struct tu_image_view *fdm,
    unsigned cpp = fdm->image->layout[0].cpp;
    unsigned pitch = fdm->view.pitch;
 
-   void *pixel = (char *)fdm->image->map + fdm->view.offset + fdm->view.layer_size * layer + cpp * i + pitch * j;
+   void *pixel = static_cast<char *>(fdm->image->map) + fdm->view.offset +
+                 fdm->view.layer_size * layer + cpp * i + pitch * j;
    float density_src[4], density[4];
    util_format_unpack_rgba(fdm->view.format, density_src, pixel, 1);
    pipe_swizzle_4f(density, density_src, fdm->swizzle);

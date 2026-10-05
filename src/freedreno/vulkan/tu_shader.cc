@@ -32,9 +32,9 @@ init_ir3_nir_options(struct ir3_shader_nir_options *options,
                      const struct tu_shader_key *key)
 {
    *options = {
-      .robust_modes = (nir_variable_mode)
-         ((key->robust_storage_access2 ? nir_var_mem_ssbo : 0) |
-          (key->robust_uniform_access2 ? nir_var_mem_ubo : 0)),
+      .robust_modes = static_cast<nir_variable_mode>(
+         (key->robust_storage_access2 ? nir_var_mem_ssbo : 0) |
+         (key->robust_uniform_access2 ? nir_var_mem_ubo : 0)),
    };
 }
 
@@ -93,7 +93,7 @@ tu_spirv_to_nir_library(struct tu_device *dev,
     * this here so that nir_remove_dead_variables and split_per_member_structs
     * below see the corresponding stores.
     */
-   NIR_PASS(_, nir, nir_lower_variable_initializers, (nir_variable_mode)~0);
+   NIR_PASS(_, nir, nir_lower_variable_initializers, static_cast<nir_variable_mode>(~0));
 
    NIR_PASS(_, nir, nir_opt_find_array_copies);
    NIR_PASS(_, nir, nir_opt_copy_prop_vars);
@@ -432,7 +432,7 @@ bindless_resource_ir3(nir_builder *b, unsigned base, nir_def *desc_offset,
                                     .desc_set = base,
                                     .access = can_speculate_descriptor ?
                                     ACCESS_CAN_SPECULATE :
-                                    (gl_access_qualifier)0);
+                                    static_cast<gl_access_qualifier>(0));
 }
 
 static bool
@@ -695,8 +695,8 @@ lower_image_deref(struct tu_device *dev, nir_builder *b,
         instr->intrinsic == nir_intrinsic_image_deref_samples) &&
        descriptor_valid) {
       nir_intrinsic_set_access(instr,
-                               (gl_access_qualifier)(nir_intrinsic_access(instr) |
-                                                     ACCESS_CAN_SPECULATE));
+                               static_cast<gl_access_qualifier>(nir_intrinsic_access(instr) |
+                                                                ACCESS_CAN_SPECULATE));
    }
 
    nir_rewrite_image_intrinsic(instr, bindless,
@@ -1165,7 +1165,7 @@ struct lower_instr_params {
 static bool
 lower_instr(nir_builder *b, nir_instr *instr, void *cb_data)
 {
-   struct lower_instr_params *params = (struct lower_instr_params *) cb_data;
+   struct lower_instr_params *params = static_cast<struct lower_instr_params *>(cb_data);
    b->cursor = nir_before_instr(instr);
    switch (instr->type) {
    case nir_instr_type_tex:
@@ -1190,7 +1190,7 @@ lower_inline_ubo(nir_builder *b, nir_intrinsic_instr *intrin, void *cb_data)
    if (intrin->intrinsic != nir_intrinsic_load_ubo)
       return false;
 
-   struct lower_instr_params *params = (struct lower_instr_params *) cb_data;
+   struct lower_instr_params *params = static_cast<struct lower_instr_params *>(cb_data);
    struct tu_shader *shader = params->shader;
    const struct tu_pipeline_layout *layout = params->layout;
 
@@ -1257,7 +1257,7 @@ lower_inline_ubo(nir_builder *b, nir_intrinsic_instr *intrin, void *cb_data)
       val = nir_load_global_offset(
          b, intrin->num_components, intrin->def.bit_size,
          nir_pack_64_2x32(b, base_addr), offset,
-         .access = (enum gl_access_qualifier)(
+         .access = static_cast<enum gl_access_qualifier>(
             ACCESS_NON_WRITEABLE | ACCESS_CAN_REORDER | ACCESS_CAN_SPECULATE),
          .align_mul = 16, .align_offset = 0, .range = range);
    } else {
@@ -1371,8 +1371,8 @@ set_speculate_intrinsic(nir_intrinsic_instr *intrin,
         intrin->intrinsic == nir_intrinsic_get_ssbo_size) &&
        can_speculate) {
       nir_intrinsic_set_access(intrin,
-                               (gl_access_qualifier)(nir_intrinsic_access(intrin) |
-                                                     ACCESS_CAN_SPECULATE));
+                               static_cast<gl_access_qualifier>(nir_intrinsic_access(intrin) |
+                                                                ACCESS_CAN_SPECULATE));
    }
 
    /* We need to communicate this to descriptor lowering, which happens in a
@@ -1386,7 +1386,7 @@ set_speculate_intrinsic(nir_intrinsic_instr *intrin,
 static bool
 set_speculate_instr(nir_builder *b, nir_instr *instr, void *cb_data)
 {
-   struct lower_instr_params *params = (struct lower_instr_params *) cb_data;
+   struct lower_instr_params *params = static_cast<struct lower_instr_params *>(cb_data);
    if (instr->type == nir_instr_type_intrinsic) {
       return set_speculate_intrinsic(nir_instr_as_intrinsic(instr),
                                      params->layout);
@@ -1612,7 +1612,8 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
 
       if (dev->physical_device->reserved_set_idx >= 0) {
          const_state->num_bindless_base_addresses =
-            MAX2(layout->num_sets, (unsigned) dev->physical_device->reserved_set_idx + 1);
+            MAX2(layout->num_sets,
+                 static_cast<unsigned>(dev->physical_device->reserved_set_idx) + 1);
       }
 
       if (!dev->compiler->info->props.load_shader_consts_via_preamble) {
@@ -1675,7 +1676,7 @@ static bool
 lower_fdm_filter(const nir_instr *instr, const void *data)
 {
    const struct lower_fdm_options *options =
-      (const struct lower_fdm_options *)data;
+      static_cast<const struct lower_fdm_options *>(data);
 
    if (instr->type != nir_instr_type_intrinsic)
       return false;
@@ -1693,7 +1694,7 @@ static nir_def *
 lower_fdm_instr(struct nir_builder *b, nir_instr *instr, void *data)
 {
    const struct lower_fdm_options *options =
-      (const struct lower_fdm_options *)data;
+      static_cast<const struct lower_fdm_options *>(data);
 
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
 
@@ -1788,14 +1789,15 @@ static bool
 tu_nir_lower_fdm(nir_shader *shader, const struct lower_fdm_options *options)
 {
    return nir_shader_lower_instructions(shader, lower_fdm_filter,
-                                        lower_fdm_instr, (void *)options);
+                                        lower_fdm_instr,
+                                        const_cast<struct lower_fdm_options *>(options));
 }
 
 static bool
 lower_ssbo_descriptor_instr(nir_builder *b, nir_intrinsic_instr *intrin,
                             void *cb_data)
 {
-   struct tu_device *dev = (struct tu_device *)cb_data;
+   struct tu_device *dev = static_cast<struct tu_device *>(cb_data);
 
    /* Descriptor index has to be adjusted in the following cases:
     *  - isam loads, when the 16-bit descriptor cannot also be used for 32-bit
@@ -1845,7 +1847,7 @@ tu_nir_lower_ssbo_descriptor(nir_shader *shader,
 {
    return nir_shader_intrinsics_pass(shader, lower_ssbo_descriptor_instr,
                                      nir_metadata_control_flow,
-                                     (void *)dev);
+                                     dev);
 }
 
 static nir_def *
@@ -1902,7 +1904,7 @@ build_ssbo_global_addr(nir_builder *b,
       11 * 4);
    nir_def *descriptor_words = nir_load_global_offset(
       b, 2, 32, nir_pack_64_2x32(b, set_base), descriptor_offset,
-      .access = (enum gl_access_qualifier)(
+      .access = static_cast<enum gl_access_qualifier>(
          ACCESS_NON_WRITEABLE | ACCESS_CAN_REORDER | ACCESS_CAN_SPECULATE),
       .align_mul = 4, .align_offset = 0);
 
@@ -1979,7 +1981,8 @@ tu_nir_lower_ssbo_address_size(
    nir_shader *shader, const struct lower_ssbo_address_size_state *state)
 {
    return nir_shader_intrinsics_pass(shader, lower_ssbo_address_size,
-                                     nir_metadata_control_flow, (void *) state);
+                                     nir_metadata_control_flow,
+                                     const_cast<struct lower_ssbo_address_size_state *>(state));
 }
 
 struct lower_fdm_state {
@@ -1991,7 +1994,7 @@ static bool
 lower_layered_fdm_instr(nir_builder *b, nir_intrinsic_instr *intrin,
                         void *cb)
 {
-   struct lower_fdm_state *state = (struct lower_fdm_state *)cb;
+   struct lower_fdm_state *state = static_cast<struct lower_fdm_state *>(cb);
    if (intrin->intrinsic != nir_intrinsic_store_deref)
       return false;
 
@@ -2372,7 +2375,7 @@ tu6_emit_xs_constants(
       int size_vec4s = DIV_ROUND_UP(xs->constant_data_size, 16);
       tu_cs_emit_qw(cs,
                     iova |
-                    (uint64_t)A6XX_UBO_1_SIZE(size_vec4s) << 32);
+                    static_cast<uint64_t>(A6XX_UBO_1_SIZE(size_vec4s)) << 32);
    }
 
    /* emit statically-known FS driver param */
@@ -2393,7 +2396,7 @@ tu6_emit_xs_constants(
       tu_cs_emit(cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
       tu_cs_emit(cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
       int size_vec4s = DIV_ROUND_UP(size, 4);
-      tu_cs_emit_qw(cs, iova | ((uint64_t)A6XX_UBO_1_SIZE(size_vec4s) << 32));
+      tu_cs_emit_qw(cs, iova | (static_cast<uint64_t>(A6XX_UBO_1_SIZE(size_vec4s)) << 32));
    } else if (stage == MESA_SHADER_FRAGMENT && const_state->num_driver_params > 0) {
       uint32_t base =
          const_state->allocs.consts[IR3_CONST_ALLOC_DRIVER_PARAMS].offset_vec4;
@@ -2440,7 +2443,7 @@ tu6_emit_cs_config(struct tu_cs *cs,
 
    tu_crb crb = cs->crb(0);
 
-   uint32_t shared_size = MAX2(((int) v->shared_size - 1) / 1024, 1);
+   uint32_t shared_size = MAX2((static_cast<int>(v->shared_size) - 1) / 1024, 1);
    enum a6xx_const_ram_mode mode =
       v->constlen > 256 ? CONSTLEN_512 :
       (v->constlen > 192 ? CONSTLEN_256 :
@@ -2805,7 +2808,7 @@ tu6_emit_fs_outputs(struct tu_cs *cs,
    assert(!fs->color0_mrt);
    for (uint32_t i = 0; i < ARRAY_SIZE(fragdata_regid); i++) {
       int output_idx =
-         ir3_find_output(fs, (gl_varying_slot) (FRAG_RESULT_DATA0 + i));
+         ir3_find_output(fs, static_cast<gl_varying_slot>(FRAG_RESULT_DATA0 + i));
 
       if (output_idx < 0) {
          fragdata_regid[i] = INVALID_REG;
@@ -3026,7 +3029,7 @@ tu6_emit_gs(struct tu_cs *cs,
       uint32_t vertices_out, invocations;
 
       vertices_out = gs->gs.vertices_out - 1;
-      enum a6xx_tess_output output = primitive_to_tess((enum mesa_prim) gs->gs.output_primitive);
+      enum a6xx_tess_output output = primitive_to_tess(static_cast<enum mesa_prim>(gs->gs.output_primitive));
       invocations = gs->gs.invocations - 1;
 
       uint32_t primitive_cntl =
@@ -3901,7 +3904,7 @@ tu_compile_shaders(struct tu_device *device,
    void *mem_ctx = ralloc_context(NULL);
 
    for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (mesa_shader_stage) (stage + 1)) {
+        stage = static_cast<mesa_shader_stage>(stage + 1)) {
       const VkPipelineShaderStageCreateInfo *stage_info = stage_infos[stage];
       if (!stage_info)
          continue;
@@ -3930,7 +3933,7 @@ tu_compile_shaders(struct tu_device *device,
    if (!device->physical_device->info->props.has_hw_multiview) {
       for (mesa_shader_stage stage = MESA_SHADER_VERTEX;
            stage < MESA_SHADER_STAGES;
-           stage = (mesa_shader_stage) (stage + 1)) {
+           stage = static_cast<mesa_shader_stage>(stage + 1)) {
          if (keys[stage].multiview_mask) {
             ir3_key.sw_multiview = true;
             break;
@@ -3941,7 +3944,7 @@ tu_compile_shaders(struct tu_device *device,
    if (nir_initial_disasm) {
       for (mesa_shader_stage stage = MESA_SHADER_VERTEX;
            stage < MESA_SHADER_STAGES;
-           stage = (mesa_shader_stage) (stage + 1)) {
+           stage = static_cast<mesa_shader_stage>(stage + 1)) {
       if (!nir[stage])
          continue;
 
@@ -3951,7 +3954,7 @@ tu_compile_shaders(struct tu_device *device,
    }
 
    for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (mesa_shader_stage) (stage + 1)) {
+        stage = static_cast<mesa_shader_stage>(stage + 1)) {
       if (!nir[stage])
          continue;
 
@@ -3966,7 +3969,7 @@ tu_compile_shaders(struct tu_device *device,
 
    if (nir_out) {
       for (mesa_shader_stage stage = MESA_SHADER_VERTEX;
-           stage < MESA_SHADER_STAGES; stage = (mesa_shader_stage) (stage + 1)) {
+           stage < MESA_SHADER_STAGES; stage = static_cast<mesa_shader_stage>(stage + 1)) {
          if (!nir[stage])
             continue;
 
@@ -4003,7 +4006,7 @@ tu_compile_shaders(struct tu_device *device,
    }
 
    for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (mesa_shader_stage) (stage + 1)) {
+        stage = static_cast<mesa_shader_stage>(stage + 1)) {
       if (!nir[stage])
          continue;
 
@@ -4025,7 +4028,7 @@ tu_compile_shaders(struct tu_device *device,
       ir3_key.tcs_store_primid = true;
 
    for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (mesa_shader_stage) (stage + 1)) {
+        stage = static_cast<mesa_shader_stage>(stage + 1)) {
       if (!nir[stage] || shaders[stage])
          continue;
 
@@ -4033,7 +4036,7 @@ tu_compile_shaders(struct tu_device *device,
 
       unsigned char shader_blake3[BLAKE3_KEY_LEN + 1];
       memcpy(shader_blake3, pipeline_blake3, BLAKE3_KEY_LEN);
-      shader_blake3[BLAKE3_KEY_LEN] = (unsigned char) stage;
+      shader_blake3[BLAKE3_KEY_LEN] = static_cast<unsigned char>(stage);
 
       result = tu_shader_create(device,
                                 &shaders[stage], nir[stage], &keys[stage],
@@ -4055,7 +4058,7 @@ fail:
    ralloc_free(mem_ctx);
 
    for (mesa_shader_stage stage = MESA_SHADER_VERTEX; stage < MESA_SHADER_STAGES;
-        stage = (mesa_shader_stage) (stage + 1)) {
+        stage = static_cast<mesa_shader_stage>(stage + 1)) {
       if (shaders[stage]) {
          tu_shader_destroy(device, shaders[stage]);
       }
@@ -4249,9 +4252,9 @@ tu_shader_destroy(struct tu_device *dev,
       tu_bo_finish(dev, shader->pvtmem_bo);
 
    if (shader->variant)
-      ralloc_free((void *)shader->variant);
+      ralloc_free(const_cast<struct ir3_shader_variant *>(shader->variant));
    if (shader->safe_const_variant)
-      ralloc_free((void *)shader->safe_const_variant);
+      ralloc_free(const_cast<struct ir3_shader_variant *>(shader->safe_const_variant));
 
    vk_free(&dev->vk.alloc, shader);
 }

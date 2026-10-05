@@ -65,7 +65,7 @@ void
 tu_cs_init_suballoc(struct tu_cs *cs, struct tu_device *device,
                     struct tu_suballoc_bo *suballoc_bo)
 {
-   uint32_t *start = (uint32_t *) tu_suballoc_bo_map(suballoc_bo);
+   uint32_t *start = static_cast<uint32_t *>(tu_suballoc_bo_map(suballoc_bo));
    uint32_t *end = start + (suballoc_bo->size >> 2);
 
    memset(cs, 0, sizeof(*cs));
@@ -120,7 +120,7 @@ static uint32_t
 tu_cs_get_offset(const struct tu_cs *cs)
 {
    const struct tu_bo_array *bos = cs->writeable ? &cs->read_write : &cs->read_only;
-   return (cs->refcount_bo || bos->bo_count != 0) ? cs->start - (uint32_t *) tu_cs_current_bo(cs)->map : 0;
+   return (cs->refcount_bo || bos->bo_count != 0) ? cs->start - static_cast<uint32_t *>(tu_cs_current_bo(cs)->map) : 0;
 }
 
 /**
@@ -135,8 +135,9 @@ tu_cs_get_cur_iova(const struct tu_cs *cs)
       return 0;
 
    if (cs->mode == TU_CS_MODE_EXTERNAL)
-      return cs->external_iova + ((char *) cs->cur - (char *) cs->start);
-   return tu_cs_current_bo(cs)->iova + ((char *) cs->cur - (char *) tu_cs_current_bo(cs)->map);
+      return cs->external_iova + (reinterpret_cast<char *>(cs->cur) - reinterpret_cast<char *>(cs->start));
+   return tu_cs_current_bo(cs)->iova +
+          (reinterpret_cast<char *>(cs->cur) - static_cast<char *>(tu_cs_current_bo(cs)->map));
 }
 
 /*
@@ -159,8 +160,8 @@ tu_cs_add_bo(struct tu_cs *cs, uint32_t size)
    /* grow cs->bos if needed */
    if (bos->bo_count == bos->bo_capacity) {
       uint32_t new_capacity = MAX2(4, 2 * bos->bo_capacity);
-      struct tu_bo **new_bos = (struct tu_bo **)
-         realloc(bos->bos, new_capacity * sizeof(struct tu_bo *));
+      struct tu_bo **new_bos = static_cast<struct tu_bo **>(
+         realloc(bos->bos, new_capacity * sizeof(struct tu_bo *)));
       if (!new_bos)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
 
@@ -172,7 +173,7 @@ tu_cs_add_bo(struct tu_cs *cs, uint32_t size)
 
    VkResult result =
       tu_bo_init_new(cs->device, NULL, &new_bo, size * sizeof(uint32_t),
-                     (enum tu_bo_alloc_flags)(COND(!cs->writeable,
+                     static_cast<enum tu_bo_alloc_flags>(COND(!cs->writeable,
                                                    TU_BO_ALLOC_GPU_READ_ONLY) |
                                               TU_BO_ALLOC_ALLOW_DUMP |
                                               tu_bo_ib_flags(cs->device)),
@@ -191,7 +192,7 @@ tu_cs_add_bo(struct tu_cs *cs, uint32_t size)
 
    bos->bos[bos->bo_count++] = new_bo;
 
-   cs->start = cs->cur = cs->reserved_end = (uint32_t *) new_bo->map;
+   cs->start = cs->cur = cs->reserved_end = static_cast<uint32_t *>(new_bo->map);
    cs->end = cs->start + size;
 
    return VK_SUCCESS;
@@ -209,8 +210,8 @@ tu_cs_reserve_entry(struct tu_cs *cs)
    /* grow cs->entries if needed */
    if (cs->entry_count == cs->entry_capacity) {
       uint32_t new_capacity = MAX2(4, cs->entry_capacity * 2);
-      struct tu_cs_entry *new_entries = (struct tu_cs_entry *)
-         realloc(cs->entries, new_capacity * sizeof(struct tu_cs_entry));
+      struct tu_cs_entry *new_entries = static_cast<struct tu_cs_entry *>(
+         realloc(cs->entries, new_capacity * sizeof(struct tu_cs_entry)));
       if (!new_entries)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
 
@@ -322,7 +323,7 @@ tu_cs_set_writeable(struct tu_cs *cs, bool writeable)
       cs->start = cs->cur = cs->reserved_end = new_bos->start;
       if (new_bos->bo_count) {
          struct tu_bo *bo = new_bos->bos[new_bos->bo_count - 1];
-         cs->end = (uint32_t *) bo->map +
+         cs->end = static_cast<uint32_t *>(bo->map) +
                    tu_sanitize_ib_size(bo->size / sizeof(uint32_t));
       } else {
          cs->end = NULL;
@@ -407,11 +408,11 @@ tu_cs_alloc(struct tu_cs *cs,
    struct tu_bo *bo = tu_cs_current_bo(cs);
    size_t offset = align(tu_cs_get_offset(cs), size);
 
-   memory->map = (uint32_t *) bo->map + offset;
+   memory->map = static_cast<uint32_t *>(bo->map) + offset;
    memory->iova = bo->iova + offset * sizeof(uint32_t);
    memory->writeable = cs->writeable;
 
-   cs->start = cs->cur = (uint32_t*) bo->map + offset + count * size;
+   cs->start = cs->cur = static_cast<uint32_t*>(bo->map) + offset + count * size;
 
    return VK_SUCCESS;
 }
@@ -561,7 +562,7 @@ tu_cs_reset(struct tu_cs *cs)
       cs->read_only.bos[0] = cs->read_only.bos[cs->read_only.bo_count - 1];
       cs->read_only.bo_count = 1;
 
-      cs->start = cs->cur = cs->reserved_end = (uint32_t *) cs->read_only.bos[0]->map;
+      cs->start = cs->cur = cs->reserved_end = static_cast<uint32_t *>(cs->read_only.bos[0]->map);
       cs->end = cs->start + tu_sanitize_ib_size(cs->read_only.bos[0]->size /
                                                 sizeof(uint32_t));
    }
@@ -570,7 +571,7 @@ tu_cs_reset(struct tu_cs *cs)
       cs->read_write.bos[0] = cs->read_write.bos[cs->read_write.bo_count - 1];
       cs->read_write.bo_count = 1;
 
-      cs->read_write.start = (uint32_t *) cs->read_write.bos[0]->map;
+      cs->read_write.start = static_cast<uint32_t *>(cs->read_write.bos[0]->map);
    }
 
    cs->entry_count = 0;
@@ -608,7 +609,7 @@ tu_cs_emit_debug_string(struct tu_cs *cs, const char *string, int len)
    len = MIN2(len, 0x3fff * 4);
 
    tu_cs_emit_pkt7(cs, CP_NOP, align(len, 4) / 4);
-   const uint32_t *buf = (const uint32_t *) string;
+   const uint32_t *buf = reinterpret_cast<const uint32_t *>(string);
 
    tu_cs_emit_array(cs, buf, len / 4);
    buf += len / 4;
@@ -630,10 +631,10 @@ tu_cs_emit_debug_magic_strv(struct tu_cs *cs,
 {
    int fmt_len = vsnprintf(NULL, 0, fmt, args);
    int len = 4 + fmt_len + 1;
-   char *string = (char *) malloc(len);
+   char *string = static_cast<char *>(malloc(len));
 
    /* format: <magic><formatted string>\0 */
-   *(uint32_t *) string = magic;
+   *reinterpret_cast<uint32_t *>(string) = magic;
    vsnprintf(string + 4, fmt_len + 1, fmt, args);
 
    tu_cs_emit_debug_string(cs, string, len);
@@ -657,7 +658,7 @@ tu_cs_trace_start(struct u_trace_context *utctx,
 {
    va_list args;
    va_start(args, fmt);
-   tu_cs_emit_debug_magic_strv((struct tu_cs *) cs, CP_NOP_BEGN, fmt, args);
+   tu_cs_emit_debug_magic_strv(static_cast<struct tu_cs *>(cs), CP_NOP_BEGN, fmt, args);
    va_end(args);
 }
 
@@ -666,7 +667,7 @@ tu_cs_trace_end(struct u_trace_context *utctx, void *cs, const char *fmt, ...)
 {
    va_list args;
    va_start(args, fmt);
-   tu_cs_emit_debug_magic_strv((struct tu_cs *) cs, CP_NOP_END, fmt, args);
+   tu_cs_emit_debug_magic_strv(static_cast<struct tu_cs *>(cs), CP_NOP_END, fmt, args);
    va_end(args);
 }
 
@@ -675,7 +676,7 @@ tu_cs_trace_singular(struct u_trace_context *utctx, void *cs, const char *fmt, .
 {
    va_list args;
    va_start(args, fmt);
-   tu_cs_emit_debug_magic_strv((struct tu_cs *) cs, CP_NOP_MESG, fmt, args);
+   tu_cs_emit_debug_magic_strv(static_cast<struct tu_cs *>(cs), CP_NOP_MESG, fmt, args);
    va_end(args);
 }
 

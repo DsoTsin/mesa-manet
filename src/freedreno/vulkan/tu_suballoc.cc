@@ -125,5 +125,5 @@ tu_suballoc_bo_free(struct tu_suballocator *suballoc, struct tu_suballoc_bo *bo)
 void *
 tu_suballoc_bo_map(struct tu_suballoc_bo *bo)
 {
-   return (char *)bo->bo->map + (bo->iova - bo->bo->iova);
+   return static_cast<char *>(bo->bo->map) + (bo->iova - bo->bo->iova);
 }

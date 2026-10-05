@@ -282,7 +282,7 @@ tu_encode(VkCommandBuffer commandBuffer,
       size_t header_size = sizeof(struct tu_accel_struct_header) - base;
       assert(base % sizeof(uint32_t) == 0);
       assert(header_size % sizeof(uint32_t) == 0);
-      uint32_t *header_ptr = (uint32_t *) ((char *) &header + base);
+      uint32_t *header_ptr = reinterpret_cast<uint32_t *>(reinterpret_cast<char *>(&header) + base);
 
       tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 2 + header_size / sizeof(uint32_t));
       tu_cs_emit_qw(cs, header_addr + base);
@@ -545,9 +545,9 @@ tu_init_null_accel_struct(struct tu_device *device)
       node.mantissas[i][0][2] = 0xff;
    }
 
-   memcpy(device->null_accel_struct_bo->map, (void *)&header, sizeof(header));
-   memcpy((char *)device->null_accel_struct_bo->map + sizeof(header),
-          (void *)&node, sizeof(node));
+   memcpy(device->null_accel_struct_bo->map, &header, sizeof(header));
+   memcpy(static_cast<char *>(device->null_accel_struct_bo->map) + sizeof(header),
+          &node, sizeof(node));
    return VK_SUCCESS;
 }
 
@@ -591,7 +591,7 @@ dump_internal(struct tu_internal_node *node, uint32_t *max_child)
             unsigned mantissa = node->mantissas[i][vert][coord];
             if (coord != 0)
                fprintf(stderr, ", ");
-            fprintf(stderr, "%f", base[coord] + ldexp((float)mantissa,
+            fprintf(stderr, "%f", base[coord] + ldexp(static_cast<float>(mantissa),
                                                       exponents[coord]));
          }
          fprintf(stderr, ")\n");
@@ -605,28 +605,28 @@ dump_as(struct vk_acceleration_structure *as)
    VK_FROM_HANDLE(tu_buffer, buf, vk_buffer_to_handle(as->buffer));
 
    struct tu_accel_struct_header *hdr =
-      (struct tu_accel_struct_header *)((char *)buf->bo->map + as->offset);
+      reinterpret_cast<struct tu_accel_struct_header *>(static_cast<char *>(buf->bo->map) + as->offset);
 
    fprintf(stderr, "dumping AS at %" PRIx64 "\n",
            vk_buffer_address(&buf->vk, as->offset));
-   u_hexdump(stderr, (uint8_t *)hdr, sizeof(*hdr), false);
+   u_hexdump(stderr, reinterpret_cast<uint8_t *>(hdr), sizeof(*hdr), false);
 
-   char *base = ((char *)buf->bo->map + (hdr->bvh_ptr - buf->vk.device_address));
-   struct tu_node *node = (struct tu_node *)base;
+   char *base = (static_cast<char *>(buf->bo->map) + (hdr->bvh_ptr - buf->vk.device_address));
+   struct tu_node *node = reinterpret_cast<struct tu_node *>(base);
 
    fprintf(stderr, "dumping nodes at %" PRIx64 "\n", hdr->bvh_ptr);
 
    uint32_t max_child = 1;
    for (unsigned i = 0; i < max_child; i++) {
-      uint32_t *parent_ptr = (uint32_t*)(base - (4 + 4 * i));
+      uint32_t *parent_ptr = reinterpret_cast<uint32_t*>(base - (4 + 4 * i));
       uint32_t parent = *parent_ptr;
       fprintf(stderr, "node %d parent %d\n", i, parent);
-      u_hexdump(stderr, (uint8_t *)node, sizeof(*node), false);
+      u_hexdump(stderr, reinterpret_cast<uint8_t *>(node), sizeof(*node), false);
       if (node->data[15] & TU_NODE_TYPE_LEAF) {
          /* TODO compressed leaves */
-         dump_leaf((struct tu_leaf_node *)node);
+         dump_leaf(reinterpret_cast<struct tu_leaf_node *>(node));
       } else {
-         dump_internal((struct tu_internal_node *)node, &max_child);
+         dump_internal(reinterpret_cast<struct tu_internal_node *>(node), &max_child);
       }
 
       node++;
@@ -640,7 +640,7 @@ as_finished(struct tu_device *dev, struct vk_acceleration_structure *as)
    tu_bo_map(dev, buf->bo, NULL);
 
    struct tu_accel_struct_header *hdr =
-      (struct tu_accel_struct_header *)((char *)buf->bo->map + as->offset);
+      reinterpret_cast<struct tu_accel_struct_header *>(static_cast<char *>(buf->bo->map) + as->offset);
    return hdr->self_ptr == vk_buffer_address(&buf->vk, as->offset);
 }
 

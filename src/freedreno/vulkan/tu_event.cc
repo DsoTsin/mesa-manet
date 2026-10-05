@@ -17,7 +17,7 @@
 static uint64_t *
 tu_event_map(tu_event *event)
 {
-   return (uint64_t *)tu_suballoc_bo_map(&event->bo);
+   return static_cast<uint64_t *>(tu_suballoc_bo_map(&event->bo));
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -28,9 +28,9 @@ tu_CreateEvent(VkDevice _device,
 {
    VK_FROM_HANDLE(tu_device, device, _device);
 
-   struct tu_event *event = (struct tu_event *)
+   struct tu_event *event = static_cast<struct tu_event *>(
          vk_object_alloc(&device->vk, pAllocator, sizeof(*event),
-                         VK_OBJECT_TYPE_EVENT);
+                         VK_OBJECT_TYPE_EVENT));
    if (!event)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 

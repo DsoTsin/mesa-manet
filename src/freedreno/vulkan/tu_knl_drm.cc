@@ -85,8 +85,8 @@ void
 tu_bo_make_zombie(struct tu_device *dev, struct tu_bo *bo)
 {
    mtx_lock(&dev->vma_mutex);
-   struct tu_zombie_vma *vma = (struct tu_zombie_vma *)
-         u_vector_add(&dev->zombie_vmas);
+   struct tu_zombie_vma *vma = static_cast<struct tu_zombie_vma *>(
+         u_vector_add(&dev->zombie_vmas));
    vma->gem_handle = bo->gem_handle;
 #ifdef TU_HAS_VIRTIO
    vma->res_id = bo->res_id;
@@ -118,7 +118,7 @@ msm_submit_finish(struct tu_device *device,
                   void *_submit)
 {
    struct tu_msm_queue_submit *submit =
-      (struct tu_msm_queue_submit *)_submit;
+      static_cast<struct tu_msm_queue_submit *>(_submit);
 
    util_dynarray_fini(&submit->commands);
    util_dynarray_fini(&submit->command_bos);
@@ -131,17 +131,17 @@ msm_submit_add_entries(struct tu_device *device, void *_submit,
                        struct tu_cs_entry *entries, unsigned num_entries)
 {
    struct tu_msm_queue_submit *submit =
-      (struct tu_msm_queue_submit *)_submit;
+      static_cast<struct tu_msm_queue_submit *>(_submit);
 
    bool has_vm_bind = device->physical_device->has_vm_bind;
 
-   struct drm_msm_gem_submit_cmd *cmds = (struct drm_msm_gem_submit_cmd *)
+   struct drm_msm_gem_submit_cmd *cmds = static_cast<struct drm_msm_gem_submit_cmd *>(
       util_dynarray_grow(&submit->commands, struct drm_msm_gem_submit_cmd,
-                         num_entries);
+                         num_entries));
 
-   const struct tu_bo **bos = (const struct tu_bo **)
+   const struct tu_bo **bos = static_cast<const struct tu_bo **>(
       util_dynarray_grow(&submit->command_bos, struct tu_bo *,
-                         num_entries);
+                         num_entries));
 
    for (unsigned i = 0; i < num_entries; i++) {
       cmds[i].type = MSM_SUBMIT_CMD_BUF;
@@ -166,7 +166,7 @@ msm_submit_add_bind(struct tu_device *device,
                     uint64_t size)
 {
    struct tu_msm_queue_submit *submit =
-      (struct tu_msm_queue_submit *)_submit;
+      static_cast<struct tu_msm_queue_submit *>(_submit);
 
    struct drm_msm_vm_bind_op bind = {
       .op = bo ? MSM_VM_BIND_OP_MAP :

@@ -98,14 +98,14 @@ tu_memory_trace_finish(struct tu_device *device)
 static inline uint32_t
 tu_rmv_get_resource_id_locked(struct tu_device *device, const void *resource)
 {
-   return vk_rmv_get_resource_id_locked(&device->vk, (uint64_t) resource);
+   return vk_rmv_get_resource_id_locked(&device->vk, reinterpret_cast<uint64_t>(resource));
 }
 
 static inline void
 tu_rmv_destroy_resource_id_locked(struct tu_device *device,
                                   const void *resource)
 {
-   vk_rmv_destroy_resource_id_locked(&device->vk, (uint64_t) resource);
+   vk_rmv_destroy_resource_id_locked(&device->vk, reinterpret_cast<uint64_t>(resource));
 }
 
 static inline void
@@ -428,7 +428,7 @@ tu_rmv_log_descriptor_pool_create(struct tu_device *device,
    size_t pool_sizes_size =
       create_info->poolSizeCount * sizeof(VkDescriptorPoolSize);
    VkDescriptorPoolSize *pool_sizes =
-      (VkDescriptorPoolSize *) malloc(pool_sizes_size);
+      static_cast<VkDescriptorPoolSize *>(malloc(pool_sizes_size));
    if (!pool_sizes)
       return;
 
@@ -552,7 +552,7 @@ tu_rmv_log_resource_name(struct tu_device *device, const void *resource,
                          const char *resource_name)
 {
    size_t name_len = MIN2(strlen(resource_name) + 1, 128);
-   char *name_buf = (char *) malloc(name_len);
+   char *name_buf = static_cast<char *>(malloc(name_len));
    if (!name_buf)
       return;
 

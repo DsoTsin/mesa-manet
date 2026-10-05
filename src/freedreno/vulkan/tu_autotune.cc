@@ -75,7 +75,7 @@ constexpr bool
 fence_before(uint32_t a, uint32_t b)
 {
    /* Essentially a < b, but handles wrapped values. */
-   return (int32_t) (a - b) < 0;
+   return static_cast<int32_t>(a - b) < 0;
 }
 
 constexpr const char *
@@ -127,13 +127,13 @@ struct PACKED tu_autotune::config_t {
    {
       /* Note: Always keep in sync with rp_history to prevent UB. */
       if (algo == algorithm::BANDWIDTH) {
-         metric_flags |= (uint8_t) metric_flag::SAMPLES;
+         metric_flags |= static_cast<uint8_t>(metric_flag::SAMPLES);
       } else if (algo == algorithm::PROFILED || algo == algorithm::PROFILED_IMM) {
-         metric_flags |= (uint8_t) metric_flag::TS;
+         metric_flags |= static_cast<uint8_t>(metric_flag::TS);
       }
 
-      if (mod_flags & (uint8_t) mod_flag::PREEMPT_OPTIMIZE) {
-         metric_flags |= (uint8_t) metric_flag::TS | (uint8_t) metric_flag::TS_TILE;
+      if (mod_flags & static_cast<uint8_t>(mod_flag::PREEMPT_OPTIMIZE)) {
+         metric_flags |= static_cast<uint8_t>(metric_flag::TS) | static_cast<uint8_t>(metric_flag::TS_TILE);
       }
    }
 
@@ -152,12 +152,12 @@ struct PACKED tu_autotune::config_t {
 
    constexpr bool test(mod_flag f) const
    {
-      return mod_flags & (uint32_t) f;
+      return mod_flags & static_cast<uint32_t>(f);
    }
 
    constexpr bool test(metric_flag f) const
    {
-      return metric_flags & (uint32_t) f;
+      return metric_flags & static_cast<uint32_t>(f);
    }
 
    constexpr bool set_algo(algorithm a)
@@ -172,20 +172,20 @@ struct PACKED tu_autotune::config_t {
 
    constexpr bool disable(mod_flag f)
    {
-      if (!(mod_flags & (uint8_t) f))
+      if (!(mod_flags & static_cast<uint8_t>(f)))
          return false;
 
-      mod_flags &= ~(uint8_t) f;
+      mod_flags &= ~static_cast<uint8_t>(f);
       update_metric_flags();
       return true;
    }
 
    constexpr bool enable(mod_flag f)
    {
-      if (mod_flags & (uint8_t) f)
+      if (mod_flags & static_cast<uint8_t>(f))
          return false;
 
-      mod_flags |= (uint8_t) f;
+      mod_flags |= static_cast<uint8_t>(f);
       update_metric_flags();
       return true;
    }
@@ -196,11 +196,11 @@ struct PACKED tu_autotune::config_t {
    if (algo == algorithm::algo_name)                                                                                   \
       str += #algo_name;
 #define MODF_STR(flag)                                                                                                 \
-   if (mod_flags & (uint8_t) mod_flag::flag) {                                                                         \
+   if (mod_flags & static_cast<uint8_t>(mod_flag::flag)) {                                                             \
       str += #flag " ";                                                                                                \
    }
 #define METRICF_STR(flag)                                                                                              \
-   if (metric_flags & (uint8_t) metric_flag::flag) {                                                                   \
+   if (metric_flags & static_cast<uint8_t>(metric_flag::flag)) {                                                       \
       str += #flag " ";                                                                                                \
    }
 
@@ -298,7 +298,7 @@ tu_autotune::get_env_config()
          }
 
          if (TU_DEBUG(STARTUP))
-            mesa_logi("TU_AUTOTUNE_ALGO=%u (%s)", (uint8_t) algo, algo_strv.data());
+            mesa_logi("TU_AUTOTUNE_ALGO=%u (%s)", static_cast<uint8_t>(algo), algo_strv.data());
       }
 
       /* Parse the flags from the environment variable. */
@@ -306,9 +306,9 @@ tu_autotune::get_env_config()
       uint32_t mod_flags = 0;
       if (flags_env_str) {
          static const struct debug_control tu_at_flags_control[] = {
-            { "big_gmem", (uint32_t) mod_flag::BIG_GMEM },
-            { "tune_small", (uint32_t) mod_flag::TUNE_SMALL },
-            { "preempt_optimize", (uint32_t) mod_flag::PREEMPT_OPTIMIZE },
+            { "big_gmem", static_cast<uint32_t>(mod_flag::BIG_GMEM) },
+            { "tune_small", static_cast<uint32_t>(mod_flag::TUNE_SMALL) },
+            { "preempt_optimize", static_cast<uint32_t>(mod_flag::PREEMPT_OPTIMIZE) },
             { NULL, 0 }
          };
 
@@ -322,8 +322,8 @@ tu_autotune::get_env_config()
          }
       }
 
-      assert((uint8_t) mod_flags == mod_flags);
-      at_config = config_t(algo, (uint8_t) mod_flags);
+      assert(static_cast<uint8_t>(mod_flags) == mod_flags);
+      at_config = config_t(algo, static_cast<uint8_t>(mod_flags));
    });
 
    if (TU_DEBUG(STARTUP))
@@ -335,10 +335,11 @@ tu_autotune::get_env_config()
 uint32_t
 tu_autotune::get_supported_mod_flags(tu_device *device) const
 {
-   uint32_t supported_mod_flags = (uint32_t) mod_flag::BIG_GMEM | (uint32_t) mod_flag::TUNE_SMALL;
+   uint32_t supported_mod_flags =
+      static_cast<uint32_t>(mod_flag::BIG_GMEM) | static_cast<uint32_t>(mod_flag::TUNE_SMALL);
    if (device->physical_device->info->props.max_draw_states > TU_DRAW_STATE_AT_WRITE_RP_HASH &&
        device->physical_device->is_perf_cntr_selectable) {
-      supported_mod_flags |= (uint32_t) mod_flag::PREEMPT_OPTIMIZE;
+      supported_mod_flags |= static_cast<uint32_t>(mod_flag::PREEMPT_OPTIMIZE);
    }
    return supported_mod_flags;
 }
@@ -560,14 +561,14 @@ struct tu_autotune::rp_entry {
          return;
       }
 
-      map = (uint8_t *) tu_suballoc_bo_map(&bo);
+      map = static_cast<uint8_t *>(tu_suballoc_bo_map(&bo));
       memset(map, 0, total_size);
    }
 
    rp_gpu_data &get_gpu_data()
    {
       assert(map);
-      return *(rp_gpu_data *) map;
+      return *reinterpret_cast<rp_gpu_data *>(map);
    }
 
    tile_gpu_data &get_tile_gpu_data(uint32_t tile_index)
@@ -575,7 +576,7 @@ struct tu_autotune::rp_entry {
       assert(map);
       assert(tile_index < tile_count);
       uint64_t offset = tile_gpu_data::offset(tile_index);
-      return *(tile_gpu_data *) (map + offset);
+      return *reinterpret_cast<tile_gpu_data *>(map + offset);
    }
 
    /** Samples-Passed Metric **/
@@ -747,7 +748,7 @@ tu_autotune::rp_batch_preempt_latency::rp_batch_preempt_latency(struct tu_device
       }
    }
 
-   map = (uint8_t *) tu_suballoc_bo_map(&bo);
+   map = static_cast<uint8_t *>(tu_suballoc_bo_map(&bo));
    memset(map, 0, sizeof(rp_batch_preempt_gpu_data));
 }
 
@@ -764,7 +765,7 @@ tu_autotune::rp_batch_preempt_gpu_data
 tu_autotune::rp_batch_preempt_latency::get_gpu_data()
 {
    assert(allocated);
-   return *(rp_batch_preempt_gpu_data *) map;
+   return *reinterpret_cast<rp_batch_preempt_gpu_data *>(map);
 }
 
 tu_autotune::rp_entry_batch::rp_entry_batch(struct tu_device *device, bool track_preempt_latency)
@@ -1039,8 +1040,8 @@ struct tu_autotune::rp_history {
                extent.width * extent.height * MAX2(cmd_state->pass->num_views, cmd_state->framebuffer->layers);
          }
 
-         uint64_t sysmem_bandwidth = (uint64_t) pass->sysmem_bandwidth_per_pixel * pass_pixel_count;
-         uint64_t gmem_bandwidth = (uint64_t) pass->gmem_bandwidth_per_pixel * pass_pixel_count;
+         uint64_t sysmem_bandwidth = static_cast<uint64_t>(pass->sysmem_bandwidth_per_pixel) * pass_pixel_count;
+         uint64_t gmem_bandwidth = static_cast<uint64_t>(pass->gmem_bandwidth_per_pixel) * pass_pixel_count;
 
          uint64_t total_draw_call_bandwidth = 0;
          uint64_t mean_samples = mean_samples_passed.get();
@@ -1073,7 +1074,8 @@ struct tu_autotune::rp_history {
             ", render_areas[0]=%" PRIu32 "x%" PRIu32 ", sysmem_bandwidth_per_pixel=%" PRIu32
             ", gmem_bandwidth_per_pixel=%" PRIu32 ", sysmem_bandwidth=%" PRIu64 ", gmem_bandwidth=%" PRIu64,
             history.hash, rp_state->drawcall_count, render_mode_str(mode), mean_samples,
-            (float) rp_state->drawcall_bandwidth_per_sample_sum / rp_state->drawcall_count, total_draw_call_bandwidth,
+            static_cast<float>(rp_state->drawcall_bandwidth_per_sample_sum) / rp_state->drawcall_count,
+            total_draw_call_bandwidth,
             extent.width, extent.height, pass->sysmem_bandwidth_per_pixel, pass->gmem_bandwidth_per_pixel,
             sysmem_bandwidth, gmem_bandwidth);
 
@@ -1466,7 +1468,7 @@ tu_autotune::create_batch() const
 bool
 tu_autotune::supports_preempt_latency_tracking() const
 {
-   return supported_mod_flags & (uint32_t) mod_flag::PREEMPT_OPTIMIZE;
+   return supported_mod_flags & static_cast<uint32_t>(mod_flag::PREEMPT_OPTIMIZE);
 }
 
 void
@@ -1693,7 +1695,7 @@ tu_autotune::tu_autotune(struct tu_device *device, VkResult &result)
          if (TU_DEBUG(STARTUP) || active_config.load().test(mod_flag::PREEMPT_OPTIMIZE))
             mesa_logw("autotune: %s, preemption optimization not supported", fail_reason);
 
-         supported_mod_flags &= ~((uint32_t) mod_flag::PREEMPT_OPTIMIZE);
+         supported_mod_flags &= ~static_cast<uint32_t>(mod_flag::PREEMPT_OPTIMIZE);
          disable_preempt_optimize();
       }
    }

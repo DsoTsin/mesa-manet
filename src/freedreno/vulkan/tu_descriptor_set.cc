@@ -38,7 +38,7 @@
 static inline uint8_t *
 pool_base(struct tu_descriptor_pool *pool)
 {
-   return pool->host_bo ?: (uint8_t *) pool->bo->map;
+   return pool->host_bo ?: static_cast<uint8_t *>(pool->bo->map);
 }
 
 static uint32_t
@@ -155,8 +155,8 @@ tu_CreateDescriptorSetLayout(
       ycbcr_sampler_count * sizeof(struct vk_ycbcr_conversion);
 
    set_layout =
-      (struct tu_descriptor_set_layout *) vk_descriptor_set_layout_zalloc(
-         &device->vk, size, pCreateInfo);
+      static_cast<struct tu_descriptor_set_layout *>(vk_descriptor_set_layout_zalloc(
+         &device->vk, size, pCreateInfo));
    if (!set_layout)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -165,9 +165,9 @@ tu_CreateDescriptorSetLayout(
 
    /* We just allocate all the immutable samplers at the end of the struct */
    struct tu_sampler *samplers =
-      (struct tu_sampler *) &set_layout->binding[num_bindings];
+      reinterpret_cast<struct tu_sampler *>(&set_layout->binding[num_bindings]);
    struct vk_ycbcr_conversion_state *ycbcr_samplers =
-      (struct vk_ycbcr_conversion_state *) &samplers[immutable_sampler_count];
+      reinterpret_cast<struct vk_ycbcr_conversion_state *>(&samplers[immutable_sampler_count]);
 
    VkDescriptorSetLayoutBinding *bindings = NULL;
    VkResult result = vk_create_sorted_bindings(
@@ -233,7 +233,8 @@ tu_CreateDescriptorSetLayout(
 
          if (has_ycbcr_sampler) {
             set_layout->binding[b].ycbcr_samplers_offset =
-               (const char*)ycbcr_samplers - (const char*)set_layout;
+               reinterpret_cast<const char *>(ycbcr_samplers) -
+               reinterpret_cast<const char *>(set_layout);
             for (uint32_t i = 0; i < binding->descriptorCount; i++) {
                struct tu_sampler *sampler = tu_sampler_from_handle(binding->pImmutableSamplers[i]);
                if (sampler->vk.ycbcr_conversion)
@@ -291,7 +292,7 @@ tu_CreateDescriptorSetLayout(
        VK_DESCRIPTOR_SET_LAYOUT_CREATE_EMBEDDED_IMMUTABLE_SAMPLERS_BIT_EXT) {
       result = tu_bo_init_new(device, &set_layout->vk.base,
                               &set_layout->embedded_samplers, set_layout->size,
-                              (enum tu_bo_alloc_flags) (TU_BO_ALLOC_ALLOW_DUMP |
+                              static_cast<enum tu_bo_alloc_flags>(TU_BO_ALLOC_ALLOW_DUMP |
                                                         TU_BO_ALLOC_INTERNAL_RESOURCE),
                               "embedded samplers");
       if (result != VK_SUCCESS) {
@@ -306,14 +307,14 @@ tu_CreateDescriptorSetLayout(
          return vk_error(device, result);
       }
 
-      char *map = (char *) set_layout->embedded_samplers->map;
+      char *map = static_cast<char *>(set_layout->embedded_samplers->map);
       for (unsigned i = 0; i < set_layout->binding_count; i++) {
          if (!set_layout->binding[i].immutable_samplers_offset)
             continue;
 
          unsigned offset = set_layout->binding[i].offset;
          const struct tu_sampler *sampler =
-            (const struct tu_sampler *)((const char *)set_layout +
+            reinterpret_cast<const struct tu_sampler *>(reinterpret_cast<const char *>(set_layout) +
                                set_layout->binding[i].immutable_samplers_offset);
          assert(set_layout->binding[i].array_size == 1);
          memcpy(map + offset, sampler->descriptor,
@@ -554,9 +555,9 @@ tu_CreatePipelineLayout(VkDevice _device,
    assert(pCreateInfo->sType ==
           VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
 
-   layout = (struct tu_pipeline_layout *) vk_object_alloc(
+   layout = static_cast<struct tu_pipeline_layout *>(vk_object_alloc(
       &device->vk, pAllocator, sizeof(*layout),
-      VK_OBJECT_TYPE_PIPELINE_LAYOUT);
+      VK_OBJECT_TYPE_PIPELINE_LAYOUT));
    if (layout == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -624,12 +625,12 @@ tu_descriptor_set_create(struct tu_device *device,
       if (pool->host_memory_end - pool->host_memory_ptr < mem_size)
          return VK_ERROR_OUT_OF_POOL_MEMORY;
 
-      set = (struct tu_descriptor_set*)pool->host_memory_ptr;
+      set = reinterpret_cast<struct tu_descriptor_set*>(pool->host_memory_ptr);
       pool->host_memory_ptr += mem_size;
    } else {
-      set = (struct tu_descriptor_set *) vk_alloc2(
+      set = static_cast<struct tu_descriptor_set *>(vk_alloc2(
          &device->vk.alloc, NULL, mem_size, 8,
-         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT));
 
       if (!set)
          return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -639,7 +640,7 @@ tu_descriptor_set_create(struct tu_device *device,
    vk_object_base_init(&device->vk, &set->base, VK_OBJECT_TYPE_DESCRIPTOR_SET);
 
    if (layout->dynamic_offset_size) {
-      set->dynamic_descriptors = (uint32_t *)((uint8_t*)set + dynamic_offset);
+      set->dynamic_descriptors = reinterpret_cast<uint32_t *>(reinterpret_cast<uint8_t*>(set) + dynamic_offset);
    }
 
    set->layout = layout;
@@ -689,7 +690,7 @@ tu_descriptor_set_create(struct tu_device *device,
          pool->current_offset += set->size;
       }
 
-      set->mapped_ptr = (uint32_t*)(pool_base(pool) + current_offset);
+      set->mapped_ptr = reinterpret_cast<uint32_t*>(pool_base(pool) + current_offset);
       set->va = pool->host_bo ? 0 : pool->bo->iova + current_offset;
    }
 
@@ -703,7 +704,7 @@ tu_descriptor_set_create(struct tu_device *device,
             offset += FDL6_TEX_CONST_DWORDS;
 
          const struct tu_sampler *samplers =
-            (const struct tu_sampler *)((const char *)layout +
+            reinterpret_cast<const struct tu_sampler *>(reinterpret_cast<const char *>(layout) +
                                layout->binding[i].immutable_samplers_offset);
          for (unsigned j = 0; j < layout->binding[i].array_size; ++j) {
             memcpy(set->mapped_ptr + offset, samplers[j].descriptor,
@@ -730,7 +731,7 @@ tu_descriptor_set_destroy(struct tu_device *device,
 
    if (set->size) {
       util_vma_heap_free(&pool->bo_heap,
-                         (uint64_t) set->offset + TU_POOL_HEAP_OFFSET,
+                         static_cast<uint64_t>(set->offset) + TU_POOL_HEAP_OFFSET,
                          set->size);
    }
 
@@ -809,15 +810,15 @@ tu_CreateDescriptorPool(VkDevice _device,
       size += host_size;
    }
 
-   pool = (struct tu_descriptor_pool *) vk_object_zalloc(
-      &device->vk, pAllocator, size, VK_OBJECT_TYPE_DESCRIPTOR_POOL);
+   pool = static_cast<struct tu_descriptor_pool *>(vk_object_zalloc(
+      &device->vk, pAllocator, size, VK_OBJECT_TYPE_DESCRIPTOR_POOL));
    if (!pool)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    if (!(pCreateInfo->flags & VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT)) {
-      pool->host_memory_base = (uint8_t*)pool + sizeof(struct tu_descriptor_pool);
+      pool->host_memory_base = reinterpret_cast<uint8_t*>(pool) + sizeof(struct tu_descriptor_pool);
       pool->host_memory_ptr = pool->host_memory_base;
-      pool->host_memory_end = (uint8_t*)pool + size;
+      pool->host_memory_end = reinterpret_cast<uint8_t*>(pool) + size;
    } else {
       if (bo_size) {
          util_vma_heap_init(&pool->bo_heap, TU_POOL_HEAP_OFFSET,
@@ -838,8 +839,8 @@ tu_CreateDescriptorPool(VkDevice _device,
             goto fail_map;
       } else {
          pool->host_bo =
-            (uint8_t *) vk_alloc2(&device->vk.alloc, pAllocator, bo_size, 8,
-                                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+            static_cast<uint8_t *>(vk_alloc2(&device->vk.alloc, pAllocator, bo_size, 8,
+                                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT));
          if (!pool->host_bo) {
             ret = VK_ERROR_OUT_OF_HOST_MEMORY;
             goto fail_alloc;
@@ -1022,7 +1023,7 @@ write_emulated_texel_buffer_descriptor_common(uint32_t *dst,
    uint32_t blocksize_B = util_format_get_blocksize(format);
 
    const uint32_t aligment = 64;
-   uint64_t aligned_addr = addr & ~(uint64_t) (aligment - 1);
+   uint64_t aligned_addr = addr & ~static_cast<uint64_t>(aligment - 1);
    uint32_t offset_texels = uint32_t(addr - aligned_addr) / blocksize_B;
    uint32_t elements_with_offset = elements + offset_texels;
 
@@ -1325,7 +1326,7 @@ tu_GetDescriptorEXT(
    void *pDescriptor)
 {
    VK_FROM_HANDLE(tu_device, device, _device);
-   uint32_t *dest = (uint32_t *) pDescriptor;
+   uint32_t *dest = static_cast<uint32_t *>(pDescriptor);
 
    switch (pDescriptorInfo->type) {
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
@@ -1436,10 +1437,10 @@ tu_update_descriptor_sets(const struct tu_device *device,
             vk_find_struct_const(writeset->pNext,
                                  WRITE_DESCRIPTOR_SET_INLINE_UNIFORM_BLOCK);
          uint32_t remaining = inline_write->dataSize;
-         const uint8_t *src = (const uint8_t *) inline_write->pData;
+         const uint8_t *src = static_cast<const uint8_t *>(inline_write->pData);
          uint32_t dst_offset = writeset->dstArrayElement;
          do {
-            uint8_t *dst = (uint8_t *)(ptr) + dst_offset;
+            uint8_t *dst = reinterpret_cast<uint8_t *>(ptr) + dst_offset;
             uint32_t binding_size = binding_layout->size - dst_offset;
             uint32_t to_write = MIN2(remaining, binding_size);
             memcpy(dst, src, to_write);
@@ -1547,8 +1548,8 @@ tu_update_descriptor_sets(const struct tu_device *device,
          uint32_t remaining = copyset->descriptorCount;
          uint32_t src_start = copyset->srcArrayElement;
          uint32_t dst_start = copyset->dstArrayElement;
-         uint8_t *src = (uint8_t *)(src_ptr) + src_start;
-         uint8_t *dst = (uint8_t *)(dst_ptr) + dst_start;
+         uint8_t *src = reinterpret_cast<uint8_t *>(src_ptr) + src_start;
+         uint8_t *dst = reinterpret_cast<uint8_t *>(dst_ptr) + dst_start;
          uint32_t src_remaining =
             src_binding_layout->size - src_start;
          uint32_t dst_remaining =
@@ -1568,14 +1569,14 @@ tu_update_descriptor_sets(const struct tu_device *device,
             if (src_remaining == 0) {
                src_binding_layout++;
                src_ptr = src_set->mapped_ptr + src_binding_layout->offset / 4;
-               src = (uint8_t *) src_ptr;
+               src = reinterpret_cast<uint8_t *>(src_ptr);
                src_remaining = src_binding_layout->size;
             }
 
             if (dst_remaining == 0) {
                dst_binding_layout++;
                dst_ptr = dst_set->mapped_ptr + dst_binding_layout->offset / 4;
-               dst = (uint8_t *) dst_ptr;
+               dst = reinterpret_cast<uint8_t *>(dst_ptr);
                dst_remaining = dst_binding_layout->size;
             }
          } while (remaining > 0);
@@ -1682,14 +1683,15 @@ tu_CreateDescriptorUpdateTemplate(
                                             alignof(struct tu_descriptor_update_template_sampler));
    const size_t size = samplers_offset + immutable_sampler_count * sizeof(templ_samplers[0]);
 
-   templ = (struct tu_descriptor_update_template *) vk_object_alloc(
+   templ = static_cast<struct tu_descriptor_update_template *>(vk_object_alloc(
       &device->vk, pAllocator, size,
-      VK_OBJECT_TYPE_DESCRIPTOR_UPDATE_TEMPLATE);
+      VK_OBJECT_TYPE_DESCRIPTOR_UPDATE_TEMPLATE));
    if (!templ)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    templ->entry_count = dst_entry_count;
-   templ_samplers = (struct tu_descriptor_update_template_sampler *) ((char *) templ + samplers_offset);
+   templ_samplers = reinterpret_cast<struct tu_descriptor_update_template_sampler *>(
+      reinterpret_cast<char *>(templ) + samplers_offset);
 
    if (pCreateInfo->templateType == VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_PUSH_DESCRIPTORS_KHR) {
       templ->bind_point = pCreateInfo->pipelineBindPoint;
@@ -1812,11 +1814,11 @@ tu_update_descriptor_set_with_template(
 
    for (uint32_t i = 0; i < templ->entry_count; i++) {
       uint32_t *ptr = set->mapped_ptr;
-      const void *src = ((const char *) pData) + templ->entry[i].src_offset;
+      const void *src = static_cast<const char *>(pData) + templ->entry[i].src_offset;
       const struct tu_descriptor_update_template_sampler *samplers = templ->entry[i].immutable_samplers;
 
       if (templ->entry[i].descriptor_type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
-         memcpy(((uint8_t *) ptr) + templ->entry[i].dst_offset, src,
+         memcpy(reinterpret_cast<uint8_t *>(ptr) + templ->entry[i].dst_offset, src,
                 templ->entry[i].descriptor_count);
          continue;
       }
@@ -1828,30 +1830,30 @@ tu_update_descriptor_set_with_template(
          case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: {
             assert(!(set->layout->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR));
             write_ubo_descriptor(set->dynamic_descriptors + dst_offset,
-                                 (const VkDescriptorBufferInfo *) src);
+                                 static_cast<const VkDescriptorBufferInfo *>(src));
             break;
          }
          case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
-            write_ubo_descriptor(ptr, (const VkDescriptorBufferInfo *) src);
+            write_ubo_descriptor(ptr, static_cast<const VkDescriptorBufferInfo *>(src));
             break;
          case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
             assert(!(set->layout->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR));
             write_buffer_descriptor<CHIP>(device,
                                           set->dynamic_descriptors + dst_offset,
-                                          (const VkDescriptorBufferInfo *) src);
+                                          static_cast<const VkDescriptorBufferInfo *>(src));
             break;
          }
          case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
             write_buffer_descriptor<CHIP>(device, ptr,
-                                          (const VkDescriptorBufferInfo *) src);
+                                          static_cast<const VkDescriptorBufferInfo *>(src));
             break;
          case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
          case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
             if (device->physical_device->compiler_options.enable_texel_buffer_emulation) {
                write_emulated_texel_buffer_descriptor<CHIP>(
-                  ptr, *(VkBufferView *) src);
+                  ptr, *static_cast<const VkBufferView *>(src));
             } else {
-               write_texel_buffer_descriptor(ptr, *(VkBufferView *) src);
+               write_texel_buffer_descriptor(ptr, *static_cast<const VkBufferView *>(src));
             }
             break;
          case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -1860,24 +1862,25 @@ tu_update_descriptor_set_with_template(
          case VK_DESCRIPTOR_TYPE_BLOCK_MATCH_IMAGE_QCOM:
          case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: {
             write_image_descriptor(ptr, templ->entry[i].descriptor_type,
-                                   (const VkDescriptorImageInfo *) src);
+                                   static_cast<const VkDescriptorImageInfo *>(src));
             break;
          }
          case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
             write_combined_image_sampler_descriptor(ptr, templ->entry[i].descriptor_type,
-                                                    (const VkDescriptorImageInfo *) src, !samplers,
+                                                    static_cast<const VkDescriptorImageInfo *>(src), !samplers,
                                                     sampler_has_subsampled_bit(samplers, j));
             if (templ->entry[i].copy_immutable_samplers)
                write_sampler_push(ptr + FDL6_TEX_CONST_DWORDS, &samplers[j]);
             break;
          case VK_DESCRIPTOR_TYPE_SAMPLER:
             if (!templ->entry[i].immutable_samplers)
-               write_sampler_descriptor(ptr, ((const VkDescriptorImageInfo *)src)->sampler);
+               write_sampler_descriptor(ptr, static_cast<const VkDescriptorImageInfo *>(src)->sampler);
             else if (templ->entry[i].copy_immutable_samplers)
                write_sampler_push(ptr, &samplers[j]);
             break;
          case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
-            VK_FROM_HANDLE(vk_acceleration_structure, accel_struct, *(const VkAccelerationStructureKHR *)src);
+            VK_FROM_HANDLE(vk_acceleration_structure, accel_struct,
+                           *static_cast<const VkAccelerationStructureKHR *>(src));
             uint32_t max_texel_elements = device->physical_device->info->props.max_texel_buffer_range_elements;
             if (accel_struct) {
                write_accel_struct<CHIP>(ptr,
@@ -1891,7 +1894,7 @@ tu_update_descriptor_set_with_template(
             UNREACHABLE("unimplemented descriptor type");
             break;
          }
-         src = (char *) src + templ->entry[i].src_stride;
+         src = static_cast<const char *>(src) + templ->entry[i].src_stride;
          ptr += templ->entry[i].dst_stride;
          dst_offset += templ->entry[i].dst_stride;
       }
