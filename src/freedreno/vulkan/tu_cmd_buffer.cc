@@ -8993,6 +8993,53 @@ vs_params_offset(struct tu_cmd_buffer *cmd)
    return param_offset;
 }
 
+static struct ir3_driver_params_vs
+tu6_build_driver_params_vs(uint32_t draw_id,
+                           uint32_t vertex_offset,
+                           uint32_t first_instance,
+                           uint32_t view_index)
+{
+   return (struct ir3_driver_params_vs) {
+      .draw_id = draw_id,
+      .vtxid_base = vertex_offset,
+      .instid_base = first_instance,
+      .view_index = view_index,
+   };
+}
+
+static bool
+tu6_allocate_driver_params_vs(struct tu_cmd_buffer *cmd,
+                              const struct ir3_driver_params_vs *params,
+                              uint64_t *iova)
+{
+   const unsigned num_vec4 = DIV_ROUND_UP(sizeof(*params), 16);
+   struct tu_cs_memory mem;
+   VkResult result = tu_cs_alloc(&cmd->sub_cs, num_vec4, 4, &mem);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd->vk, result);
+      return false;
+   }
+
+   memcpy(mem.map, params, sizeof(*params));
+   *iova = mem.iova;
+   return true;
+}
+
+static void
+tu6_emit_driver_params_consts(struct tu_cs *cs,
+                              uint32_t offset,
+                              unsigned num_vec4,
+                              uint64_t consts_iova)
+{
+   tu_cs_emit_pkt7(cs, CP_LOAD_STATE6_GEOM, 3);
+   tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+                   CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                   CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+                   CP_LOAD_STATE6_0_STATE_BLOCK(SB6_VS_SHADER) |
+                   CP_LOAD_STATE6_0_NUM_UNIT(num_vec4));
+   tu_cs_emit_qw(cs, consts_iova);
+}
+
 static void
 tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
                    uint32_t draw_id,
@@ -9027,26 +9074,14 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
       return;
    }
 
+   struct ir3_driver_params_vs params = tu6_build_driver_params_vs(
+      draw_id, vertex_offset, first_instance, view_index);
+
    uint64_t consts_iova = 0;
    if (offset) {
-      struct tu_cs_memory consts;
-      VkResult result = tu_cs_alloc(&cmd->sub_cs, num_vec4, 4, &consts);
-      if (result != VK_SUCCESS) {
-         vk_command_buffer_set_error(&cmd->vk, result);
+      if (!tu6_allocate_driver_params_vs(cmd, &params, &consts_iova)) {
          return;
       }
-      consts.map[0] = draw_id;
-      consts.map[1] = vertex_offset;
-      consts.map[2] = first_instance;
-      consts.map[3] = 0;
-      if (sw_multiview) {
-         consts.map[4] = 0;
-         consts.map[5] = view_index;
-         consts.map[6] = 0;
-         consts.map[7] = 0;
-      }
-
-      consts_iova = consts.iova;
    }
 
    struct tu_cs cs;
@@ -9069,13 +9104,7 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
     * TODO/A7XX: Rework vs params to use UBO lowering.
     */
    if (offset) {
-      tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3);
-      tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
-            CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-            CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
-            CP_LOAD_STATE6_0_STATE_BLOCK(SB6_VS_SHADER) |
-            CP_LOAD_STATE6_0_NUM_UNIT(num_vec4));
-      tu_cs_emit_qw(&cs, consts_iova);
+      tu6_emit_driver_params_consts(&cs, offset, num_vec4, consts_iova);
    }
 
    cmd->state.last_vs_params.vertex_offset = vertex_offset;
