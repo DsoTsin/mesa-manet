@@ -300,7 +300,7 @@ struct tu_vs_params {
     * state depend on it, so it has to invalidate the cache below.
     */
    bool sw_multiview;
-   bool skip_vfd;
+   bool indirect;
    bool empty;
 };
 

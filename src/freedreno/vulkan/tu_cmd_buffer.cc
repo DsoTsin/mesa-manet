@@ -8998,7 +8998,7 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
                    uint32_t draw_id,
                    uint32_t vertex_offset,
                    uint32_t first_instance,
-                   bool skip_vfd = false)
+                   bool indirect = false)
 {
    uint32_t offset = vs_params_offset(cmd);
 
@@ -9023,7 +9023,7 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
        first_instance == cmd->state.last_vs_params.first_instance &&
        sw_multiview == cmd->state.last_vs_params.sw_multiview &&
        view_index == cmd->state.last_vs_params.view_index &&
-       skip_vfd == cmd->state.last_vs_params.skip_vfd) {
+       indirect == cmd->state.last_vs_params.indirect) {
       return;
    }
 
@@ -9051,13 +9051,13 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
 
    struct tu_cs cs;
    VkResult result = tu_cs_begin_sub_stream(&cmd->sub_cs,
-      (skip_vfd ? 0 : 3) + (offset ? 4 : 0), &cs);
+      (indirect ? 0 : 3) + (offset ? 4 : 0), &cs);
    if (result != VK_SUCCESS) {
       vk_command_buffer_set_error(&cmd->vk, result);
       return;
    }
 
-   if (!skip_vfd) {
+   if (!indirect) {
       tu_cs_emit_regs(&cs,
                       A6XX_VFD_INDEX_OFFSET(vertex_offset),
                       A6XX_VFD_INSTANCE_START_OFFSET(first_instance));
@@ -9083,7 +9083,7 @@ tu6_emit_vs_params(struct tu_cmd_buffer *cmd,
    cmd->state.last_vs_params.draw_id = draw_id;
    cmd->state.last_vs_params.view_index = view_index;
    cmd->state.last_vs_params.sw_multiview = sw_multiview;
-   cmd->state.last_vs_params.skip_vfd = skip_vfd;
+   cmd->state.last_vs_params.indirect = indirect;
    cmd->state.last_vs_params.empty = false;
 
    struct tu_cs_entry entry = tu_cs_end_sub_stream(&cmd->sub_cs, &cs);
@@ -9102,7 +9102,7 @@ tu6_emit_empty_vs_params(struct tu_cmd_buffer *cmd)
        * and VFD_INSTANCE_START_OFFSET from the indirect buffer, and a draw
        * state writing them would clobber those values.
        */
-      tu6_emit_vs_params(cmd, 0, 0, 0, /* skip_vfd = */ true);
+      tu6_emit_vs_params(cmd, 0, 0, 0, /* indirect = */ true);
       return;
    }
 
