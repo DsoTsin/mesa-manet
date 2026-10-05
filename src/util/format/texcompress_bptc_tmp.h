@@ -1356,7 +1356,7 @@ get_rgba_endpoints_unorm(int width, int height,
          for (i = 0; i < 3; i++)
             sums[endpoint][i] += p[i];
 
-         if (p[2] < average_alpha) {
+         if (p[3] < average_alpha) {
             endpoint = 0;
             alpha_left_endpoint_count++;
          } else {
