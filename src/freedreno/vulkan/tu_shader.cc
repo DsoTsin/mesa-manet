@@ -550,7 +550,7 @@ can_speculate_descriptor_load(nir_src array_index,
 {
    return nir_src_is_const(array_index) &&
        (!set_layout->has_variable_descriptors ||
-        binding == set_layout->binding_count - 1) &&
+        binding != set_layout->binding_count - 1) &&
        nir_src_as_uint(array_index) < set_layout->binding[binding].array_size;
 }
 
