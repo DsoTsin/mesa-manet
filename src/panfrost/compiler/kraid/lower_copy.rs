@@ -163,6 +163,28 @@ fn lower_copy(b: &mut impl Builder, copy: OpCopy) {
                 dst_type: DataType::I32,
                 src: copy.src,
             });
+        } else if copy.dst_type.total_bits() > 32
+            && matches!(copy.src.src_ref, SrcRef::FAU(_))
+            && !b.model().fau().is_zero_free
+        {
+            // For 64-bit FAU copies, we can't use IADD.u64 on v9-11 because
+            // it adds with zero and, since zero isn't free, this brings the
+            // total number of FAU and small constants used to 3 words, which
+            // is above the limit.  Instead, we need to emit two MOVs, one for
+            // each word.  There's no way to move a 64-bit FAU in a single
+            // instruction.
+            debug_assert_eq!(copy.dst_type.total_bits(), 64);
+            debug_assert_eq!(copy.src.swizzle, Swizzle::NONE);
+            b.push_op(OpMov {
+                dst: copy.dst.clone().word(0),
+                dst_type: DataType::I32,
+                src: copy.src.clone().word(0),
+            });
+            b.push_op(OpMov {
+                dst: copy.dst.clone().word(1),
+                dst_type: DataType::I32,
+                src: copy.src.clone().word(1),
+            });
         } else {
             // Upgrade to a 32-bit type.  The lane mask will take care of
             // masking off the unused components
