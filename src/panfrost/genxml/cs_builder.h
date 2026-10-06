@@ -237,7 +237,6 @@ cs_builder_init(struct cs_builder *b, const struct cs_builder_conf *conf,
                 struct cs_buffer root_buffer)
 {
    memset(b, 0, sizeof(*b));
-   util_dynarray_init(&b->blocks.instrs, NULL);
    b->conf = *conf;
    b->root_chunk.buffer = root_buffer;
    b->cur_chunk.buffer = root_buffer;
