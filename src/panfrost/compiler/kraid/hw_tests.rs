@@ -12,6 +12,7 @@ use crate::foldable::{FoldData, Foldable};
 use crate::ir::*;
 use crate::model::{Model, model_for_gpu_id};
 use crate::ops::*;
+use crate::parallel_copy::ParallelCopy;
 use crate::ssa_value::{AllocSSA, SSAValueAllocator};
 use crate::swizzle::{AsmSwizzleWiden, SwizzleByte, SwizzleWord};
 use acorn::Acorn;
@@ -947,6 +948,89 @@ fn test_lower_copy() {
             assert_eq!(
                 expected, got,
                 "lane {lanes} expected {expected:08x} got {got:08x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_parallel_copy() {
+    let run = RunSingleton::get();
+
+    const INIT_A: u32 = 0x89ABCDEF;
+    const INIT_B: u32 = 0x41424344;
+    const RANGES: &[RegRange] = &[
+        RegRange::Byte0,
+        RegRange::Byte1,
+        RegRange::Byte2,
+        RegRange::Byte3,
+        RegRange::Half0,
+        RegRange::Half1,
+        RegRange::Regs(1),
+    ];
+
+    for &range_a in RANGES {
+        for &range_b in RANGES {
+            // We want different ranges of the same size
+            if range_a.bytes() != range_b.bytes() {
+                continue;
+            }
+
+            let bin = {
+                let mut b = RawTestShaderBuilder::new(&*run.model);
+
+                let r2 = RegRef::new(2, RegRange::Regs(1));
+                b.ld_test_data_to(r2.into(), 0, 32);
+
+                let r3 = RegRef::new(3, RegRange::Regs(1));
+                b.ld_test_data_to(r3.into(), 4, 32);
+
+                let mut pcopy = ParallelCopy::new(&*run.model, false);
+
+                let r2_sub = RegRef::new(2, range_a);
+                let r3_sub = RegRef::new(3, range_b);
+
+                pcopy.add_copy(r2_sub.into(), r3_sub.into());
+                pcopy.add_copy(r3_sub.into(), r2_sub.into());
+
+                for instr in pcopy.into_instrs::<SSAValueAllocator>(None) {
+                    b.push_instr(instr);
+                }
+
+                b.st_test_data(8, r2);
+                b.st_test_data(12, r3);
+
+                b.compile()
+            };
+
+            let mut data = [[INIT_A, INIT_B, 0xDEFDEFDE, 0xDEFDEFDE]; 1];
+            let case = bin.with_data(&mut data);
+            run.execute(case);
+
+            let lanes_a = DstLanes::from(range_a);
+            let lanes_b = DstLanes::from(range_b);
+            let shift_a = lanes_a.as_byte_range().unwrap().start * 8;
+            let shift_b = lanes_b.as_byte_range().unwrap().start * 8;
+            let mask_a = lanes_a.u32_mask().unwrap();
+            let mask_b = lanes_b.u32_mask().unwrap();
+
+            let swap_data_a = (INIT_A & mask_a) >> shift_a;
+            let swap_data_b = (INIT_B & mask_b) >> shift_b;
+
+            let expected_a = (INIT_A & !mask_a) | (swap_data_b << shift_a);
+            let expected_b = (INIT_B & !mask_b) | (swap_data_a << shift_b);
+
+            let got_a = data[0][2];
+            let got_b = data[0][3];
+
+            assert_eq!(
+                expected_a, got_a,
+                "lane {lanes_a}, r2: expected {expected_a:08x} got {got_a:08x}"
+            );
+
+            assert_eq!(
+                expected_b, got_b,
+                "lane {lanes_b}, r3: expected {expected_b:08x} got {got_b:08x}"
             );
         }
     }
