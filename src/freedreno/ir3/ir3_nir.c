@@ -363,9 +363,6 @@ ir3_optimize_loop(struct ir3_compiler *compiler,
       progress |= OPT(s, nir_opt_constant_folding);
       progress |= OPT(s, nir_opt_uub, &options->opt_uub_options);
 
-      /* Remove unused components from IO loads. */
-      progress |= OPT(s, nir_opt_shrink_vectors, true);
-
       const nir_opt_offsets_options offset_options = {
          /* How large an offset we can encode in the instr's immediate field.
           */
@@ -816,8 +813,11 @@ ir3_finalize_nir(struct ir3_compiler *compiler,
    nir_lower_idiv_options idiv_options = {
       .allow_fp16 = true,
    };
-   bool idiv_progress = OPT(s, nir_opt_idiv_const, 8);
-   idiv_progress |= OPT(s, nir_lower_idiv, &idiv_options);
+   bool progress = OPT(s, nir_opt_idiv_const, 8);
+   progress |= OPT(s, nir_lower_idiv, &idiv_options);
+
+   /* Remove unused components from IO loads. */
+   progress |= OPT(s, nir_opt_shrink_vectors, true);
 
    /* Do load/store vectorization after the first opt loop to give us a chance
     * to optimize lowered SSBO pointers. Without the first opt loop every
@@ -831,9 +831,9 @@ ir3_finalize_nir(struct ir3_compiler *compiler,
       .robust_modes = options->robust_modes,
       .cb_data = compiler,
    };
-   bool vectorize_progress = OPT(s, nir_opt_load_store_vectorize, &vectorize_opts);
+   progress |= OPT(s, nir_opt_load_store_vectorize, &vectorize_opts);
 
-   if (idiv_progress || vectorize_progress)
+   if (progress)
       ir3_optimize_loop(compiler, &optimize_options, s);
 
    OPT(s, nir_remove_dead_variables, nir_var_function_temp, NULL);
