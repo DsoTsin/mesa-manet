@@ -307,7 +307,7 @@ pub struct TestShaderBuilder<'a> {
     ssa_alloc: SSAValueAllocator,
     start_block: BasicBlock,
     data_addr: SrcRef,
-    max_data_offset: u16,
+    max_data_addr: u16,
 }
 
 const WARP_SIZE: u32 = 16;
@@ -367,14 +367,15 @@ impl<'a> TestShaderBuilder<'a> {
             ssa_alloc,
             start_block,
             data_addr: data_addr.into(),
-            max_data_offset: 0,
+            max_data_addr: 0,
         }
     }
 
     pub fn ld_test_data(&mut self, offset: u16, bits: u8) -> SSARef {
         let dst = self.alloc_ref(bits.into());
 
-        self.max_data_offset = self.max_data_offset.max(offset);
+        self.max_data_addr =
+            self.max_data_addr.max(offset + u16::from(bits / 8));
 
         self.push_op(OpLoad {
             dst: dst.clone().into(),
@@ -389,7 +390,8 @@ impl<'a> TestShaderBuilder<'a> {
     }
 
     pub fn st_test_data(&mut self, offset: u16, data: SSARef) {
-        self.max_data_offset = self.max_data_offset.max(offset);
+        self.max_data_addr =
+            self.max_data_addr.max(offset + u16::from(data.bytes()));
 
         self.push_op(OpStore {
             src_type: DataType::get(1, NumericType::Integer, data.bytes() * 8),
@@ -409,7 +411,7 @@ impl<'a> TestShaderBuilder<'a> {
             info,
             ssa_alloc,
             mut start_block,
-            max_data_offset,
+            max_data_addr,
             ..
         } = self;
 
@@ -447,7 +449,7 @@ impl<'a> TestShaderBuilder<'a> {
 
         CompiledTestCase {
             code: bin,
-            max_data_offset,
+            max_data_addr,
             // ABI: we always load the CB0 args at offset 0 for now
             fau_args_offset: 0,
             info: s.info,
@@ -488,7 +490,7 @@ pub struct RawTestShaderBuilder<'a> {
     info: ShaderInfo,
     start_block: BasicBlock,
     data_addr: RegRef,
-    max_data_offset: u16,
+    max_data_addr: u16,
 }
 
 impl<'a> RawTestShaderBuilder<'a> {
@@ -540,13 +542,14 @@ impl<'a> RawTestShaderBuilder<'a> {
             info,
             start_block,
             data_addr,
-            max_data_offset: 0,
+            max_data_addr: 0,
         }
     }
 
     #[allow(dead_code)]
     pub fn ld_test_data_to(&mut self, dst: Dst, offset: u16, bits: u8) {
-        self.max_data_offset = self.max_data_offset.max(offset);
+        self.max_data_addr =
+            self.max_data_addr.max(offset + u16::from(bits / 8));
 
         let instr = self.push_op(OpLoad {
             dst,
@@ -561,7 +564,8 @@ impl<'a> RawTestShaderBuilder<'a> {
     }
 
     pub fn st_test_data(&mut self, offset: u16, data: RegRef) {
-        self.max_data_offset = self.max_data_offset.max(offset);
+        self.max_data_addr =
+            self.max_data_addr.max(offset + u16::from(data.bytes()));
 
         let instr = self.push_op(OpStore {
             src_type: DataType::get(1, NumericType::Integer, data.bytes() * 8),
@@ -585,7 +589,7 @@ impl<'a> RawTestShaderBuilder<'a> {
             mut b,
             info,
             mut start_block,
-            max_data_offset,
+            max_data_addr,
             ..
         } = self;
 
@@ -616,7 +620,7 @@ impl<'a> RawTestShaderBuilder<'a> {
 
         CompiledTestCase {
             code: bin,
-            max_data_offset,
+            max_data_addr,
             // ABI: we always load the CB0 args at offset 0 for now
             fau_args_offset: 0,
             info: s.info,
@@ -662,7 +666,7 @@ struct CompiledTestCase {
     code: Vec<u32>,
     info: ShaderInfo,
     #[allow(dead_code)]
-    max_data_offset: u16,
+    max_data_addr: u16,
     fau_args_offset: usize,
 }
 
@@ -673,6 +677,10 @@ impl CompiledTestCase {
         data_stride: u32,
         invocations: u32,
     ) -> InvocationArgs<'a> {
+        let last_invoc = invocations.saturating_sub(1);
+        let last_offset = usize::try_from(last_invoc * data_stride).unwrap();
+        let last_addr = last_offset + usize::from(self.max_data_addr);
+        assert!(last_addr <= data.len(), "OOB data access");
         InvocationArgs(InvocationInfo {
             code: transmute_slice_to_u8(&self.code),
             fau: FAU_ONLY_ARGS,
@@ -690,6 +698,10 @@ impl CompiledTestCase {
         let invocations = data.len().try_into().expect("Too many invocations");
         let data_stride = size_of::<T>().try_into().unwrap();
         let data_raw = transmute_mut_slice_to_u8(data);
+        assert!(
+            u32::from(self.max_data_addr) <= data_stride,
+            "OOB data access"
+        );
         self.with_data_raw(data_raw, data_stride, invocations)
     }
 }
@@ -925,12 +937,12 @@ fn test_lower_copy() {
                 b.compile_with(|s| s.lower_copy())
             };
 
-            let mut data = [SOURCE, INIT_DST, 0xDEFDEFDE];
+            let mut data = [[SOURCE, INIT_DST, 0xDEFDEFDE]; 1];
             let case = bin.with_data(&mut data);
             run.execute(case);
 
             let expected = (INIT_DST & !mask) | (SOURCE & mask);
-            let got = data[2];
+            let got = data[0][2];
 
             assert_eq!(
                 expected, got,
