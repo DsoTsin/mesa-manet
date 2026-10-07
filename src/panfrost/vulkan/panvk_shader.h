@@ -12,19 +12,45 @@
 
 #include "compiler/pan_compiler.h"
 
+#include "pan_compute.h"
+#ifndef PANVK_OFFLINE_ONLY
 #include "pan_desc.h"
+#endif
 #include "pan_earlyzs.h"
+
+#include "vk_shader.h"
+#include "panvk_macros.h"
 
 #include "panvk_cmd_push_constant.h"
 #include "panvk_descriptor_set.h"
-#include "panvk_macros.h"
+#ifdef PANVK_OFFLINE_ONLY
+struct panvk_priv_mem {
+   uintptr_t bo;
+   unsigned offset;
+};
+#else
 #include "panvk_mempool.h"
+#endif
 
 #include "vk_pipeline_layout.h"
 
-#include "vk_shader.h"
-
 extern const struct vk_device_shader_ops panvk_per_arch(device_shader_ops);
+
+struct panvk_device;
+
+extern const struct vk_device_shader_ops panvk_per_arch(offline_shader_ops);
+
+VkResult panvk_per_arch(compile_shader_offline)(
+   struct panvk_device *dev, struct vk_shader_compile_info *info,
+   const struct vk_graphics_pipeline_state *state,
+   const uint32_t *noperspective_varyings, bool enable_preamble,
+   struct vk_shader **shader_out);
+
+struct kraidoc_variant;
+
+unsigned panvk_per_arch(offline_shader_variants)(
+   const struct vk_shader *shader, struct kraidoc_variant *variants,
+   unsigned max);
 
 #define MAX_RTS 8
 #define MAX_VS_ATTRIBS 16
@@ -111,12 +137,32 @@ struct panvk_common_sysvals_inner {
 
    /* Address of the shader constant data buffer */
    aligned_u64 constant_data;
+
+   aligned_u64 instr_counters;
+   aligned_u64 ray_query_state;
 } __attribute__((aligned(FAU_WORD_SIZE)));
 
 struct panvk_common_sysvals {
    uint32_t _pad[4];
    struct panvk_common_sysvals_inner common;
 } __attribute__((aligned(FAU_WORD_SIZE)));
+
+/*
+ * libpoly parameter buffers.
+ *
+ * Keep this block at the same offset in graphics and compute sysvals.
+ * It intentionally lives outside panvk_common_sysvals_inner because
+ * prepare_push_uniforms() synthesizes the common block instead of copying
+ * it from command-buffer state.
+ */
+struct panvk_poly_sysvals {
+   aligned_u64 vertex_param_buffer;
+   aligned_u64 tess_param_buffer;
+   aligned_u64 geometry_param_buffer;
+} __attribute__((aligned(FAU_WORD_SIZE)));
+
+static_assert((sizeof(struct panvk_poly_sysvals) % FAU_WORD_SIZE) == 0,
+              "struct panvk_poly_sysvals must be 8-byte aligned");
 
 static_assert((offsetof(struct panvk_common_sysvals, common) %
                FAU_WORD_SIZE) == 0,
@@ -144,6 +190,9 @@ struct panvk_graphics_sysvals {
    /* This must be at the same offset for both compute and graphics */
    struct panvk_common_sysvals_inner common;
 
+   /* libpoly draw/tessellation parameter buffers */
+   struct panvk_poly_sysvals poly;
+
    struct {
       struct {
          float x, y, z;
@@ -160,7 +209,16 @@ struct panvk_graphics_sysvals {
    } vs;
 
    struct {
+      aligned_u64 base[MAX_XFB_BUFFERS];
+      aligned_u64 offset_ptr[MAX_XFB_BUFFERS];
+      uint32_t num_vertices;
+      uint32_t _pad;
+   } xfb;
+
+   struct {
       aligned_u64 blend_descs[MAX_RTS];
+      uint32_t clip_cull;
+      uint32_t _pad;
    } fs;
 
    struct panvk_input_attachment_info iam[INPUT_ATTACHMENT_MAP_SIZE];
@@ -200,12 +258,17 @@ struct panvk_compute_sysvals {
    /* This must be at the same offset for both compute and graphics */
    struct panvk_common_sysvals_inner common;
 
+   /* libpoly draw/tessellation parameter buffers */
+   struct panvk_poly_sysvals poly;
+
    struct {
       uint32_t x, y, z;
    } num_work_groups;
    struct {
       uint32_t x, y, z;
    } local_group_size;
+
+   aligned_u64 rt_dispatch;
 
 #if PAN_ARCH < 9
    struct {
@@ -217,6 +280,10 @@ struct panvk_compute_sysvals {
 static_assert(offsetof(struct panvk_compute_sysvals, common) ==
                  offsetof(struct panvk_common_sysvals, common),
               "Common sysvals must be at the same offset everywhere");
+
+static_assert(offsetof(struct panvk_graphics_sysvals, poly) ==
+                 offsetof(struct panvk_compute_sysvals, poly),
+              "Poly sysvals must be at the same offset for graphics and compute");
 static_assert((sizeof(struct panvk_compute_sysvals) % FAU_WORD_SIZE) == 0,
               "struct panvk_compute_sysvals must be 8-byte aligned");
 #if PAN_ARCH < 9
@@ -386,6 +453,8 @@ struct panvk_shader_desc_info {
 
 struct panvk_shader_variant {
    struct pan_shader_info info;
+   struct panvk_shader_variant *preamble;
+   uint16_t xfb_stride[MAX_XFB_BUFFERS];
 
    union {
       struct {
@@ -441,13 +510,84 @@ enum panvk_vs_variant {
    /* Hardware vertex shader, when next stage is fragment */
    PANVK_VS_VARIANT_HW,
 
+   /* Vertex shader dispatched as compute for transform feedback. */
+   PANVK_VS_VARIANT_XFB,
+
    PANVK_VS_VARIANTS,
 };
+
+enum panvk_gs_variant {
+   PANVK_GS_VARIANT_RAST,
+   PANVK_GS_VARIANT_MAIN,
+   PANVK_GS_VARIANT_COUNT,
+   PANVK_GS_VARIANT_PRE,
+   PANVK_GS_VARIANTS,
+};
+
+struct panvk_gs_info {
+   uint8_t present;
+   uint8_t mode;
+   uint8_t shape;
+   uint8_t xfb;
+   uint8_t prefix_sum;
+   uint8_t count_words;
+   uint16_t max_indices;
+   uint16_t vertex_stride;
+   uint8_t dynamic_vertices;
+   struct pan_varying_layout varyings;
+   struct panvk_shader_desc_info count_desc;
+};
+
+#define PANVK_GS_RASTER_PARAMS_OFFSET 320
+
+struct panvk_gs_raster_params {
+   uint64_t index_buffer;
+   uint64_t position_buffer;
+   uint64_t varying_buffer;
+   uint32_t index_count;
+   float viewport_scale[3];
+   float viewport_offset[3];
+};
+
+/*
+ * Original Vulkan tessellation metadata retained before libpoly lowers
+ * TCS to compute and TES to a hardware vertex shader.
+ *
+ * Keep this in panvk_shader rather than pan_shader_info: these values are
+ * consumed by the PanVK/libpoly runtime, not by the Panfrost backend.
+ */
+struct panvk_tess_info {
+   /* Original VS outputs before VS->COMPUTE libpoly lowering. */
+   uint64_t vs_outputs;
+
+   uint64_t tcs_per_vertex_outputs;
+
+   uint32_t tcs_output_patch_size;
+   uint32_t tcs_nr_patch_outputs;
+   uint32_t tcs_output_stride;
+
+   uint8_t mode;
+   uint8_t spacing;
+   uint8_t points;
+   uint8_t ccw;
+};
+
+struct panvk_shader_fallback;
 
 struct panvk_shader {
    struct vk_shader vk;
 
+   struct panvk_shader *no_preamble;
+
+   struct panvk_shader_fallback *bg_no_preamble;
+
+   struct panvk_shader *tess_vs;
+
    struct panvk_shader_desc_info desc_info;
+
+   struct panvk_tess_info tess;
+
+   struct panvk_gs_info gs;
 
    struct panvk_shader_variant variants[];
 };
@@ -458,11 +598,22 @@ panvk_shader_num_variants(mesa_shader_stage stage)
    if (stage == MESA_SHADER_VERTEX)
       return PANVK_VS_VARIANTS;
 
+   if (stage == MESA_SHADER_GEOMETRY)
+      return PANVK_GS_VARIANTS;
+
    return 1;
 }
 
 static const char *panvk_vs_shader_variant_name[] = {
    [PANVK_VS_VARIANT_HW] = NULL,
+   [PANVK_VS_VARIANT_XFB] = "xfb",
+};
+
+static const char *panvk_gs_shader_variant_name[] = {
+   [PANVK_GS_VARIANT_RAST] = NULL,
+   [PANVK_GS_VARIANT_MAIN] = "main",
+   [PANVK_GS_VARIANT_COUNT] = "count",
+   [PANVK_GS_VARIANT_PRE] = "pre",
 };
 
 static const char *
@@ -475,6 +626,11 @@ panvk_shader_variant_name(const struct panvk_shader *shader,
    if (shader->vk.stage == MESA_SHADER_VERTEX) {
       assert(i < ARRAY_SIZE(panvk_vs_shader_variant_name));
       return panvk_vs_shader_variant_name[i];
+   }
+
+   if (shader->vk.stage == MESA_SHADER_GEOMETRY) {
+      assert(i < ARRAY_SIZE(panvk_gs_shader_variant_name));
+      return panvk_gs_shader_variant_name[i];
    }
 
    assert(panvk_shader_num_variants(shader->vk.stage) == 1);
@@ -501,11 +657,22 @@ panvk_shader_hw_variant(const struct panvk_shader *shader)
    return &shader->variants[0];
 }
 
+static const struct panvk_shader_variant *
+panvk_shader_xfb_variant(const struct panvk_shader *shader)
+{
+   if (!shader)
+      return NULL;
+
+   return &shader->variants[PANVK_VS_VARIANT_XFB];
+}
+
+#ifndef PANVK_OFFLINE_ONLY
 static inline uint64_t
 panvk_shader_variant_get_dev_addr(const struct panvk_shader_variant *shader)
 {
    return shader != NULL ? panvk_priv_mem_dev_addr(shader->code_mem) : 0;
 }
+#endif
 
 #define panvk_shader_foreach_variant(__shader, __var)                          \
    for (struct panvk_shader_variant *__var = (__shader)->variants;             \

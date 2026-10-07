@@ -1,7 +1,6 @@
 // Copyright © 2026 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
-use std::f32::consts::PI;
 
 use crate::data_type::*;
 use crate::ir::*;
@@ -350,72 +349,12 @@ pub trait SSABuilder: Builder + AllocSSA {
         dst
     }
 
-    /// Computes base**arg
     fn fexp_32_to(&mut self, dst: Dst, arg: Src, log2_base: Src) {
-        // OpFExp actually expects the scale as a fixed-point 24.8 input
-        let scale = self.alloc_ssa(32);
-
-        // So first scale by 2^24
-        self.push_op(OpFmaRScale {
-            dst: scale.into(),
-            round: FRound::NearestEven,
-            clamp: FClamp::None,
-            srcs: [arg.clone(), log2_base, Src::fneg_zero(32)],
-            scale: 24_u32.into(),
-        });
-
-        // Convert to int
-        let scale_fixp = self.alloc_ssa(32);
-        self.push_op(OpF32ToI32 {
-            dst: scale_fixp.into(),
-            dst_type: DataType::S32,
-            src: scale.into(),
-            round: FRound::NearestEven,
-        });
-
-        // Then to the real fexp, keeping the original for NaN handling
-        self.push_op(OpFExp32 {
-            dst,
-            expx: scale_fixp.into(),
-            // The expf field is only used for NaN propagation.  By passing
-            // `scale` in here, we ensure that the result is NaN if either
-            // `arg` or `log2_base` are NaN.
-            expf: scale.into(),
-        });
+        self.push_op(OpFMath { dst, kind: FMathKind::Exp2, srcs: [arg, log2_base] });
     }
 
-    // Computes log2(x)
-    fn flog2_32_to(&mut self, dst: Dst, arg: Src) {
-        let frexp = self.alloc_ssa(32);
-        self.push_op(OpFrexpE {
-            dst: frexp.into(),
-            src_type: DataType::F32,
-            src: arg.clone(),
-            mode: FrexpMode::Log,
-            neg_result: false,
-        });
-        let frexpi = self.alloc_ssa(32);
-        self.push_op(OpIToF32 {
-            dst: frexpi.into(),
-            src_type: DataType::S32,
-            src: frexp.into(),
-            round: FRound::NearestEven,
-        });
-
-        let flogd = self.alloc_ssa(32);
-        self.push_op(OpFLogD {
-            dst: flogd.into(),
-            src: arg.clone(),
-        });
-        let lscale = self.alloc_ssa(32);
-        self.push_op(OpFAddLScale {
-            dst: lscale.into(),
-            round: FRound::NearestEven,
-            clamp: FClamp::None,
-            srcs: [Src::from(-1.0), arg],
-        });
-
-        self.fma_32_to(dst, flogd.into(), lscale.into(), frexpi.into());
+    fn flog2_32_to(&mut self, dst: Dst, src: Src) {
+        self.push_op(OpFMath { dst, kind: FMathKind::Log2, srcs: [src, 0_u32.into()] });
     }
 
     fn flog2_32(&mut self, src: Src) -> SSAValue {
@@ -425,72 +364,13 @@ pub trait SSABuilder: Builder + AllocSSA {
     }
 
     fn fsincos_32_to(&mut self, dst: Dst, src: Src, is_cos: bool) {
-        // The hardware has extremely coarse tables for approximating sin/cos,
-        // accessible as FSIN/COS_TABLE.u6, which multiplies the bottom 6-bits by
-        // pi/32 and calculates the results. We use them to calculate sin/cos via
-        // a Taylor approximation:
-        //
-        // f(x + e) = f(x) + e f'(x) + (e^2)/2 f''(x)
-        // sin(x + e) = sin(x) + e cos(x) - (e^2)/2 sin(x)
-        // cos(x + e) = cos(x) - e sin(x) - (e^2)/2 cos(x)
-        let two_over_pi: f32 = 2.0 / PI;
-        let mpi_over_two: f32 = -PI / 2.0;
-        let sincos_bias: f32 = 786432.0;
-
-        // Compute x (the lower b)
-        let x_u6 =
-            self.fma_32(src.clone(), two_over_pi.into(), sincos_bias.into());
-        let e_part = self.fadd_32(x_u6.into(), Src::from(sincos_bias).fneg());
-        let e = self.fma_32(e_part.into(), mpi_over_two.into(), src);
-
-        let sinx = self.alloc_ssa(32);
-        let cosx = self.alloc_ssa(32);
-        self.push_op(OpFSinTable {
-            dst: sinx.into(),
-            src: x_u6.into(),
-            offset: false,
+        self.push_op(OpFMath {
+            dst,
+            kind: if is_cos { FMathKind::Cos } else { FMathKind::Sin },
+            srcs: [src, 0_u32.into()],
         });
-        self.push_op(OpFCosTable {
-            dst: cosx.into(),
-            src: x_u6.into(),
-            offset: false,
-        });
-
-        let sinx = Src::from(sinx);
-        let cosx = Src::from(cosx);
-
-        let f = if is_cos { cosx.clone() } else { sinx.clone() };
-        let fd = if is_cos { sinx.fneg() } else { cosx };
-        // f''(x) = -f(x)
-        let mfdd = f.clone();
-
-        // e^2 / 2
-        let e2_over2 = self.alloc_ssa(32);
-        self.push_op(OpFmaRScale {
-            dst: e2_over2.into(),
-            round: FRound::NearestEven,
-            clamp: FClamp::None,
-            srcs: [e.into(), e.into(), Src::from(-0.0)],
-            scale: Src::from(-1i32 as u32),
-        });
-
-        // (e^2)/2 f''(x)
-        let quadratic =
-            self.fma_32(Src::from(e2_over2).fneg(), mfdd, Src::from(-0.0));
-
-        // e f'(x) + (e^2/2) f''(x)
-        let partial = self.alloc_ssa(32);
-        self.push_op(OpFma {
-            dst: partial.into(),
-            dst_type: DataType::F32,
-            round: FRound::NearestEven,
-            clamp: FClamp::NegOneToOne,
-            srcs: [e.into(), fd, quadratic.into()],
-        });
-
-        // f(x) + e f'(x) + (e^2/2) f''(x)
-        self.fadd_32_to(dst, partial.into(), f);
     }
+
 }
 
 impl<T: Builder + AllocSSA> SSABuilder for T {}

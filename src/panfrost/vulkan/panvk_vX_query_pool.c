@@ -71,6 +71,14 @@ panvk_per_arch(CreateQueryPool)(VkDevice _device,
       break;
    }
 #endif
+#if PAN_ARCH >= 15
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
+      reports_per_query = 1;
+      break;
+#endif
    default:
       UNREACHABLE("Unsupported query type");
    }
@@ -283,6 +291,15 @@ panvk_per_arch(GetQueryPoolResults)(VkDevice _device, VkQueryPool queryPool,
                cpu_write_query_result(dst, 0, flags, src[0].value);
             break;
          }
+#endif
+#if PAN_ARCH >= 15
+         case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR:
+         case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
+         case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
+         case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
+            if (write_results)
+               cpu_write_query_result(dst, 0, flags, src[0].value);
+            break;
 #endif
          default:
             UNREACHABLE("Unsupported query type");

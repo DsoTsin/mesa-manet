@@ -20,11 +20,18 @@
 #include "panvk_utrace_perfetto.h"
 
 #include "kmod/pan_kmod.h"
+#include "kmod/panthor_kmod.h"
+#ifdef HAVE_PAN_KMOD_KBASE
+#include "kmod/kbase_kmod.h"
+#endif
 #include "util/perf/u_trace.h"
 
 #include "util/simple_mtx.h"
+#include "util/u_dynarray.h"
 #include "util/u_call_once.h"
+#include "util/u_atomic.h"
 #include "util/u_printf.h"
+#include "util/u_queue.h"
 #include "util/vma.h"
 
 /* On JM hardware, we need to allocate a buffer depending on vertex count.
@@ -128,6 +135,20 @@ struct panvk_device {
       struct panvk_priv_bo *bo;
    } printf;
 
+   struct {
+      simple_mtx_t lock;
+      struct panvk_priv_bo *bo;
+      uint32_t slots;
+      struct util_dynarray retired;
+   } ray_query;
+
+   struct {
+      util_once_flag once;
+      struct util_queue queue;
+      bool ready;
+      uint32_t pending;
+   } bg_compile;
+
    union {
       struct {
          struct {
@@ -139,6 +160,34 @@ struct panvk_device {
       } csf;
    };
 
+   uint32_t shader_core_count;
+
+   struct {
+      uint64_t submits;
+      uint64_t cmdbufs;
+      uint64_t ring_entries[3];
+      uint64_t barriers;
+      uint64_t self_waits[3];
+      uint64_t flush_others_only[3];
+      uint64_t flush_other[3];
+      uint64_t flush_deferred[3];
+      uint64_t others_covered;
+      uint64_t others_restored;
+      uint64_t sync_signals[3];
+      uint64_t sync_waits[3];
+      uint64_t cb_tails_drained;
+      uint64_t cb_tails_merged;
+      uint64_t handoffs_shared_sb;
+      uint64_t handoffs_mem;
+      uint64_t dispatch_direct;
+      uint64_t dispatch_indirect;
+      uint64_t dispatch_inferred;
+      uint64_t pilot_batches;
+      int64_t last_print_ns;
+   } csstats;
+
+   bool dvs_enabled;
+
    int drm_fd;
 };
 
@@ -148,6 +197,63 @@ static inline struct panvk_device *
 to_panvk_device(struct vk_device *dev)
 {
    return container_of(dev, struct panvk_device, vk);
+}
+
+/* CSF interface information, sourced from the panthor uAPI or from the
+ * kbase GLB interface depending on which backend the device came from.
+ * Always use this instead of calling panthor_kmod_get_csif_props()
+ * directly, which reads garbage on a kbase device. */
+static inline const struct drm_panthor_csif_info *
+panvk_get_csif_props(const struct panvk_device *dev)
+{
+#if defined(HAVE_PAN_KMOD_KBASE) && !defined(HAVE_PAN_KMOD_PANTHOR)
+   return kbase_kmod_get_csif_props(dev->kmod.dev);
+#elif defined(HAVE_PAN_KMOD_KBASE)
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+
+   if (phys_dev->kbase_node_path[0])
+      return kbase_kmod_get_csif_props(dev->kmod.dev);
+
+   return panthor_kmod_get_csif_props(dev->kmod.dev);
+#else
+   return panthor_kmod_get_csif_props(dev->kmod.dev);
+#endif
+}
+
+#define panvk_csstat_add(dev, field, val)                                      \
+   do {                                                                        \
+      if (PANVK_DEBUG(CSSTATS))                                                \
+         p_atomic_add(&(dev)->csstats.field, (val));                           \
+   } while (0)
+
+#define panvk_csstat_inc(dev, field) panvk_csstat_add(dev, field, 1)
+
+/* Latest cache-flush ID, sourced from the panthor uAPI or the kbase CSF
+ * USER register page depending on which backend the device came from. */
+static inline uint32_t
+panvk_get_flush_id(const struct panvk_device *dev)
+{
+#if defined(HAVE_PAN_KMOD_KBASE) && !defined(HAVE_PAN_KMOD_PANTHOR)
+   return kbase_kmod_get_flush_id(dev->kmod.dev);
+#elif defined(HAVE_PAN_KMOD_KBASE)
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+
+   if (phys_dev->kbase_node_path[0])
+      return kbase_kmod_get_flush_id(dev->kmod.dev);
+
+   return panthor_kmod_get_flush_id(dev->kmod.dev);
+#else
+   return panthor_kmod_get_flush_id(dev->kmod.dev);
+#endif
+}
+
+static inline void
+panvk_device_finish_bg_compile(struct panvk_device *dev)
+{
+   if (util_queue_is_initialized(&dev->bg_compile.queue))
+      util_queue_destroy(&dev->bg_compile.queue);
 }
 
 static inline void
@@ -186,6 +292,10 @@ panvk_device_adjust_bo_flags(const struct panvk_device *device,
    if (!(device->kmod.dev->props.supported_bo_flags &
          PAN_KMOD_BO_FLAG_GPU_UNCACHED))
       bo_flags &= ~PAN_KMOD_BO_FLAG_GPU_UNCACHED;
+
+   if (!(device->kmod.dev->props.supported_bo_flags &
+         PAN_KMOD_BO_FLAG_GPU_PRIVATE))
+      bo_flags &= ~PAN_KMOD_BO_FLAG_GPU_PRIVATE;
 
    return bo_flags;
 }

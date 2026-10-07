@@ -12,6 +12,20 @@
 
 struct util_format_description;
 
+bool pan_nir_opt_phi_alu(nir_shader *shader);
+bool pan_nir_lower_robust_image_access2(nir_shader *shader);
+
+nir_shader *pan_nir_opt_preamble(nir_shader *nir,
+                               const struct pan_compile_inputs *inputs,
+                               nir_shader **preamble,
+                               struct pan_fau_virtual *virt);
+
+void pan_nir_pilot_place_results(nir_shader *pilot,
+                                 const struct pan_fau_virtual *virt);
+
+bool pan_nir_pilot_add_fau_copies(nir_shader **pilot, const nir_shader *nir,
+                                  const struct pan_fau_layout *fau);
+
 #define PAN_NIR_SET_BLAKE3_INTERNAL(nir, key)                                  \
    _mesa_blake3_compute(key, sizeof(*key), nir->info.source_blake3)
 
@@ -252,6 +266,8 @@ pan_nir_def_as_add_imm(nir_def *def, uint8_t imm_bits, bool imm_sign)
 
 bool pan_nir_lower_bool_to_bitsize(nir_shader *shader);
 
+bool pan_nir_lower_bf16(nir_shader *shader);
+
 bool pan_nir_lower_vertex_id(nir_shader *shader);
 
 bool pan_nir_lower_image_ms(nir_shader *shader);
@@ -275,6 +291,8 @@ bool pan_nir_lower_helper_invocation(nir_shader *shader);
 bool pan_nir_lower_sample_pos(nir_shader *shader);
 bool pan_nir_remove_xfb(nir_shader *nir);
 
+bool pan_nir_instrument(nir_shader *nir, unsigned counters_fau);
+
 bool pan_nir_lower_image_index(nir_shader *shader,
                                unsigned vs_img_attrib_offset);
 bool pan_nir_lower_texel_buffer_fetch_index(nir_shader *shader,
@@ -291,8 +309,8 @@ bool pan_nir_lower_divergent_scratch(nir_shader *shader, unsigned arch);
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_bi_tex_flags {
-   bool skip : 1;
-   bool explicit_lod : 1;
+   unsigned skip : 1;
+   unsigned explicit_lod : 1;
    unsigned _pad : 14;
    unsigned sampler_idx : 8;
    unsigned texture_idx : 8;
@@ -312,22 +330,22 @@ nir_intrinsic_pan_bi_tex_flags(const nir_intrinsic_instr *instr)
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_va_tex_flags {
-   bool skip : 1;
-   bool wide_indices : 1;
-   bool array_enable : 1;
-   bool texel_offset : 1;
-   bool compare_enable : 1;
+   unsigned skip : 1;
+   unsigned wide_indices : 1;
+   unsigned array_enable : 1;
+   unsigned texel_offset : 1;
+   unsigned compare_enable : 1;
    unsigned lod_mode : 3;
-   bool derivative_enable : 1;
-   bool force_delta_enable : 1;
-   bool lod_bias_disable : 1;
-   bool lod_clamp_disable : 1;
+   unsigned derivative_enable : 1;
+   unsigned force_delta_enable : 1;
+   unsigned lod_bias_disable : 1;
+   unsigned lod_clamp_disable : 1;
    /* For 1D, 2D and 3D textures, this makes the hardware read an extra q
     * coordinate and divide the other coordinates by it. For cube maps, it
     * instead makes the hardware build the cube map descriptor internally
     * from the raw direction vector.
     */
-   bool projection_enable : 1;
+   unsigned projection_enable : 1;
    unsigned _pad : 19;
 };
 PRAGMA_DIAGNOSTIC_POP
@@ -349,8 +367,8 @@ enum pan_bi_varying_name {
 PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_bi_var_special_flags {
-   enum pan_bi_varying_name name : 2;
-   enum pan_bi_sample_loc sample_loc : 2;
+   unsigned name : 2;
+   unsigned sample_loc : 2;
    unsigned _pad : 28;
 };
 PRAGMA_DIAGNOSTIC_POP
@@ -359,7 +377,8 @@ static_assert(sizeof(struct pan_bi_var_special_flags) == 4, "Must fit in uint32_
 void pan_nir_lower_mediump_io(nir_shader *nir);
 
 bool pan_nir_lower_tex(nir_shader *nir, uint64_t gpu_id);
-bool pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id);
+bool pan_nir_lower_image(nir_shader *nir, uint64_t gpu_id, bool in_bounds);
+bool pan_nir_lower_tensor(nir_shader *nir);
 
 bool pan_nir_lower_mem_to_global(nir_shader *nir);
 
@@ -385,8 +404,12 @@ bool pan_nir_fuse_io_cvt(nir_shader *nir, uint64_t gpu_id,
                          const struct pan_varying_layout *layout);
 
 bool pan_nir_opt_push_ubo(nir_shader *nir,
-                          uint32_t pushable_ubos,
-                          struct pan_fau_layout *fau,
+                          const struct pan_compile_inputs *inputs,
+                          struct pan_fau_virtual *virt, unsigned budget,
                           uint32_t *ubo_mask_out);
+
+#define PAN_UBO_PUSH_CONST_RATIO 4
+
+bool pan_nir_opt_shadd(nir_shader *nir, unsigned arch);
 
 #endif /* __PAN_NIR_H__ */

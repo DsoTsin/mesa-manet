@@ -52,7 +52,7 @@ static const struct debug_named_value pan_use_kraid_flags[] = {
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(use_kraid, "PAN_USE_KRAID",
-                            pan_use_kraid_flags, 0)
+                            pan_use_kraid_flags, USE_KRAID_ALL)
 #endif
 
 bool
@@ -68,14 +68,13 @@ pan_use_kraid(unsigned arch, mesa_shader_stage stage, bool internal)
 
    switch (stage) {
    case MESA_SHADER_VERTEX:
+   case MESA_SHADER_TESS_EVAL:
+   case MESA_SHADER_GEOMETRY:
       return use_kraid & USE_KRAID_VS;
    case MESA_SHADER_FRAGMENT:
       return use_kraid & USE_KRAID_FS;
-   case MESA_SHADER_COMPUTE:
-   case MESA_SHADER_KERNEL:
-      return use_kraid & USE_KRAID_CS;
    default:
-      return false;
+      return use_kraid & USE_KRAID_CS;
    }
 #else
    return false;

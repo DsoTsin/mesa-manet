@@ -78,6 +78,12 @@ fn validate_instr(instr: &Instr, ssa_vals: &mut FxHashSet<SSAValue>) {
             continue;
         }
 
+        if dst_type == DataType::SR {
+            assert_eq!(dst.lanes, DstLanes::All);
+            assert!(dst.dst_ref.bytes_written() % 4 == 0);
+            continue;
+        }
+
         let dst_type_bits = dst_type.bits();
         let dst_type_comps = dst_type.comps();
         if dst_type_bits >= 32 {

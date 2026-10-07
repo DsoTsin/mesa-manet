@@ -147,6 +147,84 @@ impl Shader<'_> {
         self.blocks = cfg.as_cfg(false);
     }
 
+    pub fn opt_branch_invert(&mut self) {
+        let mut skip = vec![false; self.blocks.len()];
+        let mut progress = false;
+        for bi in 0..self.blocks.len().saturating_sub(2) {
+            if skip[bi] || skip[bi + 1] {
+                continue;
+            }
+            let after_label = self.blocks[bi + 2].label;
+            let jump = &self.blocks[bi + 1];
+            if jump.instrs.len() != 1
+                || self.blocks.pred_indices(bi + 1).len() != 1
+            {
+                continue;
+            }
+            let Op::Branch(jump_op) = &jump.instrs[0].op else {
+                continue;
+            };
+            if !jump_op.is_unconditional()
+                || jump.instrs[0].flow != FlowCtrl::NONE
+                || jump_op.label == after_label
+            {
+                continue;
+            }
+            let target = jump_op.label;
+
+            let last = self.blocks[bi].instrs.last_mut().unwrap();
+            let Op::Branch(op) = &mut last.op else {
+                continue;
+            };
+            if op.is_unconditional()
+                || last.flow != FlowCtrl::NONE
+                || op.label != after_label
+            {
+                continue;
+            }
+            op.not = !op.not;
+            op.label = target;
+            skip[bi + 1] = true;
+            progress = true;
+        }
+
+        if !progress {
+            return;
+        }
+
+        let mut cfg = CFGBuilder::<_, _, FxBuildHasher>::new();
+        for bi in 0..self.blocks.len() {
+            if skip[bi] {
+                continue;
+            }
+            let block = &self.blocks[bi];
+            let last = block.instrs.last().unwrap();
+            match &last.op {
+                Op::Branch(op) => {
+                    if !op.is_unconditional() {
+                        let next = (bi + 1..self.blocks.len())
+                            .find(|&n| !skip[n])
+                            .unwrap();
+                        cfg.add_edge(block.label, self.blocks[next].label);
+                    }
+                    cfg.add_edge(block.label, op.label);
+                }
+                Op::Nop(_) => {
+                    assert!(last.flow.get_end_shader());
+                }
+                _ => panic!("All blocks must end in BRANCH or NOP.end"),
+            }
+        }
+
+        for (bi, block) in self.blocks.drain().enumerate() {
+            if !skip[bi] {
+                cfg.add_node(block.label, block);
+            }
+        }
+
+        self.blocks = cfg.as_cfg(false);
+    }
+
     /// This pass replaces jumps to the following block with fall-through
     pub fn opt_fall_through(&mut self) {
         for bi in (0..self.blocks.len()).into_iter().rev() {

@@ -1,6 +1,7 @@
 /*
  * Copyright © 2024 Collabora Ltd.
  * Copyright © 2024 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Derived from tu_cmd_buffer.c which is:
  * Copyright © 2016 Red Hat.
@@ -16,6 +17,7 @@
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_cmd_desc_state.h"
+#include "panvk_cmd_dgc.h"
 #include "panvk_cmd_meta.h"
 #include "panvk_cmd_push_constant.h"
 #include "panvk_device.h"
@@ -24,6 +26,7 @@
 #include "panvk_macros.h"
 #include "panvk_meta.h"
 #include "panvk_physical_device.h"
+#include "panvk_shader_instrumentation.h"
 #include "panvk_tracepoints.h"
 
 #include "pan_desc.h"
@@ -31,6 +34,13 @@
 #include "pan_props.h"
 
 #include <vulkan/vulkan_core.h>
+
+#include "util/u_debug.h"
+
+#if PAN_ARCH >= 15
+DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_inferred_axis,
+                           "PANVK_CSF_OPT_INFERRED_AXIS", false)
+#endif
 
 void panvk_per_arch(cmd_signal_barrier)(
    struct panvk_cmd_buffer *cmdbuf, enum panvk_csf_barrier barrier)
@@ -79,6 +89,7 @@ void panvk_per_arch(cmd_signal_barrier)(
    }
 
    case PANVK_CSF_BARRIER_WAIT: {
+      panvk_per_arch(cmd_pilot_close)(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
 #if PAN_ARCH >= 11
       cs_wait_indirect(b);
 #else
@@ -198,6 +209,7 @@ panvk_per_arch(cmd_dispatch_shader)(
 {
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(cmdbuf->vk.base.device->physical);
+   struct panvk_device *csstat_dev = to_panvk_device(cmdbuf->vk.base.device);
    const struct cs_tracing_ctx *tracing_ctx =
       &cmdbuf->state.cs[PANVK_SUBQUEUE_COMPUTE].tracing;
 
@@ -217,6 +229,9 @@ panvk_per_arch(cmd_dispatch_shader)(
 
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_ENTER);
    cs_update_compute_ctx(b) {
       if (compute_state_dirty(cmdbuf, CS) ||
           compute_state_dirty(cmdbuf, DESC_STATE))
@@ -252,7 +267,8 @@ panvk_per_arch(cmd_dispatch_shader)(
 
       struct mali_compute_size_workgroup_packed wg_size;
       pan_pack(&wg_size, COMPUTE_SIZE_WORKGROUP, cfg) {
-         cfg.workgroup_size_x = cs->cs.local_size.x;
+         cfg.workgroup_size_x =
+            info->wg_size_x ? info->wg_size_x : cs->cs.local_size.x;
          cfg.workgroup_size_y = cs->cs.local_size.y;
          cfg.workgroup_size_z = cs->cs.local_size.z;
          cfg.allow_merging_workgroups = cs->info.cs.allow_merging_workgroups;
@@ -309,12 +325,48 @@ panvk_per_arch(cmd_dispatch_shader)(
       }
    }
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_BEFORE_ITER);
    cs_next_iter_sb(cmdbuf, PANVK_SUBQUEUE_COMPUTE,
                    cs_scratch_reg_tuple(b, 0, 2));
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_BEFORE_RUN);
+
    panvk_cond_render(cmdbuf, b)
    {
+      if (cs->preamble && !info->pilot_queued) {
+         struct cs_index count = cs_scratch_reg32(b, 0);
+         cs_umin32(b, count, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
+                   cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y));
+         cs_umin32(b, count, count, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z));
+         cs_if(b, MALI_CS_CONDITION_NEQUAL, count) {
+            panvk_per_arch(cmd_pilot_run)(
+               cmdbuf, PANVK_SUBQUEUE_COMPUTE, cs,
+               cs_reg64(b, PANVK_COMPUTE_FAU),
+               cs_reg64(b, PANVK_COMPUTE_SRT));
+         }
+      }
+#if PAN_ARCH >= 15
+      if (indirect && info->infer_task_axis) {
+         struct cs_index wg_count = cs_scratch_reg32(b, 0);
+
+         panvk_csstat_inc(csstat_dev, dispatch_inferred);
+
+         cs_umin32(b, wg_count, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
+                   cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y));
+         cs_umin32(b, wg_count, wg_count, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z));
+         cs_if(b, MALI_CS_CONDITION_NEQUAL, wg_count) {
+            cs_trace_run_compute(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
+                                 1, MALI_TASK_AXIS_INFERRED,
+                                 PANVK_COMPUTE_RES_SEL, true);
+         }
+      } else
+#endif
       if (indirect) {
+         panvk_csstat_inc(csstat_dev, dispatch_indirect);
          /* Use run_compute with a set task axis instead of
           * run_compute_indirect as run_compute_indirect has been found to
           * cause intermittent hangs. This is safe, as the task increment
@@ -326,25 +378,34 @@ panvk_per_arch(cmd_dispatch_shader)(
          unsigned task_axis = MALI_TASK_AXIS_X;
          cs_trace_run_compute(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
                               wg_per_task, task_axis,
-                              PANVK_COMPUTE_RES_SEL);
+                              PANVK_COMPUTE_RES_SEL, true);
       } else {
          unsigned task_axis = MALI_TASK_AXIS_X;
          unsigned task_increment = 0;
+         panvk_csstat_inc(csstat_dev, dispatch_direct);
          panvk_per_arch(calculate_task_axis_and_increment)(
             cs, phys_dev, &dim, &task_axis, &task_increment);
          cs_trace_run_compute(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
                               task_increment, task_axis,
-                              PANVK_COMPUTE_RES_SEL);
+                              PANVK_COMPUTE_RES_SEL, true);
       }
    }
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_AFTER_RUN);
    panvk_per_arch(cmd_signal_barrier)(cmdbuf, info->barrier);
+
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+      PANVK_KBASE_PROGRESS_COMPUTE_AFTER_SIGNAL);
 
    clear_dirty_after_dispatch(cmdbuf);
 }
 
 static void
-cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
+cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
+             const struct panvk_dispatch_info *info)
 {
    const struct panvk_shader_variant *cs =
       panvk_shader_only_variant(cmdbuf->state.compute.shader);
@@ -393,6 +454,8 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
    if (result != VK_SUCCESS)
       return;
    cmdbuf->state.compute.push_uniforms = push_uniforms.gpu;
+   if (cs->preamble)
+      compute_state_set_dirty(cmdbuf, PUSH_UNIFORMS);
 
    if (compute_state_dirty(cmdbuf, CS) ||
        compute_state_dirty(cmdbuf, DESC_STATE)) {
@@ -415,9 +478,116 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
       cs_flush_stores(b);
    }
 
+   struct panvk_dispatch_info dispatch = *info;
+   const struct panvk_pilot_guard indirect_guard = {
+      .params = info->indirect.buffer_dev_addr,
+      .words = 3,
+   };
+   const bool has_work = indirect || (info->direct.wg_count.x &&
+                                      info->direct.wg_count.y &&
+                                      info->direct.wg_count.z);
+   if (indirect && cs->preamble)
+      panvk_per_arch(cmd_pilot_close)(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   dispatch.pilot_queued =
+      cs->preamble && has_work &&
+      panvk_per_arch(cmd_pilot_queue)(cmdbuf, PANVK_SUBQUEUE_COMPUTE, cs,
+                                      cmdbuf->state.compute.push_uniforms,
+                                      cs_desc_state->res_table,
+                                      indirect ? &indirect_guard : NULL);
+
    panvk_per_arch(cmd_dispatch_shader)(cmdbuf, cs, cs_desc_state,
                                        cmdbuf->state.compute.push_uniforms,
-                                       tsd, info);
+                                       tsd, &dispatch);
+}
+
+#if PAN_ARCH >= 15
+void
+panvk_per_arch(cmd_dispatch_rt)(
+   struct panvk_cmd_buffer *cmdbuf, const struct panvk_shader *shader,
+   const struct panvk_dispatch_info *info, uint64_t dispatch_addr)
+{
+   const struct panvk_cmd_compute_state saved = cmdbuf->state.compute;
+   cmdbuf->state.compute = (struct panvk_cmd_compute_state){
+      .shader = shader,
+      .desc_state = cmdbuf->state.ray_tracing.desc_state,
+      .sysvals.rt_dispatch = dispatch_addr,
+   };
+   BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,
+                    PANVK_CMD_COMPUTE_DIRTY_STATE_COUNT - 1);
+   cmd_dispatch(cmdbuf, info);
+   cmdbuf->state.ray_tracing.desc_state = cmdbuf->state.compute.desc_state;
+   cmdbuf->state.compute = saved;
+   BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,
+                    PANVK_CMD_COMPUTE_DIRTY_STATE_COUNT - 1);
+}
+#endif
+
+VkResult
+panvk_per_arch(cmd_prepare_dgc_dispatch)(
+   struct panvk_cmd_buffer *cmdbuf, struct panlib_dgc_execute *params)
+{
+   const struct panvk_shader *shader = cmdbuf->state.compute.shader;
+   struct panvk_descriptor_state *desc_state = &cmdbuf->state.compute.desc_state;
+   struct panvk_shader_desc_state *desc = &cmdbuf->state.compute.cs.desc;
+
+   VkResult result = panvk_per_arch(cmd_prepare_push_descs)(
+      cmdbuf, desc_state, shader->desc_info.used_set_mask);
+   if (result != VK_SUCCESS)
+      return result;
+   const struct panvk_dispatch_info dispatch = {0};
+   panvk_per_arch(cmd_prepare_dispatch_sysvals)(cmdbuf, &dispatch);
+   result = prepare_driver_set(cmdbuf);
+   if (result != VK_SUCCESS)
+      return result;
+   result = panvk_per_arch(cmd_prepare_shader_res_table)(
+      cmdbuf, desc_state, &shader->desc_info, desc, 1);
+   if (result != VK_SUCCESS)
+      return result;
+
+   struct pan_ptr sysvals = panvk_cmd_upload_dev_mem(
+      cmdbuf, desc, &cmdbuf->state.compute.sysvals,
+      sizeof(cmdbuf->state.compute.sysvals), 8);
+   if (!sysvals.gpu)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   params->sysvals[PANLIB_DGC_CS] = sysvals.gpu;
+   params->num_workgroups_sysval = sysval_offset(compute, num_work_groups.x);
+   params->local_group_size_sysval = sysval_offset(compute, local_group_size.x);
+   params->driver_set[PANLIB_DGC_CS] = desc->driver_set.dev_addr;
+   params->driver_set_size[PANLIB_DGC_CS] = desc->driver_set.size;
+   params->resource_table[PANLIB_DGC_CS] = desc->res_table;
+   return VK_SUCCESS;
+}
+
+static void
+cmd_dispatch_direct(struct panvk_cmd_buffer *cmdbuf,
+                    const struct panvk_dispatch_info *info)
+{
+   const struct panvk_shader_variant *shader =
+      panvk_shader_only_variant(cmdbuf->state.compute.shader);
+
+   panvk_per_arch(cmd_instrument_dispatch)(cmdbuf);
+   panvk_per_arch(panvk_instr_begin_work)(PANVK_SUBQUEUE_COMPUTE, cmdbuf,
+                                          PANVK_INSTR_WORK_TYPE_DISPATCH);
+
+   cmd_dispatch(cmdbuf, info);
+
+   struct panvk_instr_end_args instr_info = {
+      .dispatch = {
+         .base_group_x = info->wg_base.x,
+         .base_group_y = info->wg_base.y,
+         .base_group_z = info->wg_base.z,
+         .group_count_x = info->direct.wg_count.x,
+         .group_count_y = info->direct.wg_count.y,
+         .group_count_z = info->direct.wg_count.z,
+         .group_size_x =
+            info->wg_size_x ? info->wg_size_x : shader->cs.local_size.x,
+         .group_size_y = shader->cs.local_size.y,
+         .group_size_z = shader->cs.local_size.z,
+      }};
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   panvk_per_arch(panvk_instr_end_work_async)(
+      PANVK_SUBQUEUE_COMPUTE, cmdbuf, PANVK_INSTR_WORK_TYPE_DISPATCH,
+      &instr_info, cs_defer(dev->csf.sb.all_iters_mask, 0));
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -427,35 +597,51 @@ panvk_per_arch(CmdDispatchBase)(VkCommandBuffer commandBuffer,
                                 uint32_t groupCountY, uint32_t groupCountZ)
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
-   const struct panvk_shader_variant *shader =
-      panvk_shader_only_variant(cmdbuf->state.compute.shader);
-   struct panvk_dispatch_info info = {
+   const struct panvk_dispatch_info info = {
       .wg_base = {baseGroupX, baseGroupY, baseGroupZ},
       .direct.wg_count = {groupCountX, groupCountY, groupCountZ},
       .barrier = PANVK_CSF_BARRIER_SYNC,
    };
 
-   panvk_per_arch(panvk_instr_begin_work)(PANVK_SUBQUEUE_COMPUTE, cmdbuf,
-                                          PANVK_INSTR_WORK_TYPE_DISPATCH);
+   cmd_dispatch_direct(cmdbuf, &info);
+}
 
-   cmd_dispatch(cmdbuf, &info);
+void
+panvk_per_arch(cmd_dispatch_unaligned)(VkCommandBuffer commandBuffer,
+                                       uint32_t invocations_x,
+                                       uint32_t invocations_y,
+                                       uint32_t invocations_z)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   const struct panvk_shader_variant *shader =
+      panvk_shader_only_variant(cmdbuf->state.compute.shader);
+   const uint32_t wg_size = shader->cs.local_size.x;
 
-   struct panvk_instr_end_args instr_info = {
-      .dispatch = {
-         .base_group_x = baseGroupX,
-         .base_group_y = baseGroupY,
-         .base_group_z = baseGroupZ,
-         .group_count_x = groupCountX,
-         .group_count_y = groupCountY,
-         .group_count_z = groupCountZ,
-         .group_size_x = shader->cs.local_size.x,
-         .group_size_y = shader->cs.local_size.y,
-         .group_size_z = shader->cs.local_size.z,
-      }};
-   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
-   panvk_per_arch(panvk_instr_end_work_async)(
-      PANVK_SUBQUEUE_COMPUTE, cmdbuf, PANVK_INSTR_WORK_TYPE_DISPATCH,
-      &instr_info, cs_defer(dev->csf.sb.all_iters_mask, 0));
+   assert(invocations_y == 1 && invocations_z == 1);
+   assert(shader->cs.local_size.y == 1 && shader->cs.local_size.z == 1);
+
+   const uint32_t full_wgs = invocations_x / wg_size;
+   const uint32_t partial_wg_size = invocations_x % wg_size;
+
+   if (full_wgs) {
+      const struct panvk_dispatch_info info = {
+         .direct.wg_count = {full_wgs, 1, 1},
+         .barrier = PANVK_CSF_BARRIER_SYNC,
+      };
+
+      cmd_dispatch_direct(cmdbuf, &info);
+   }
+
+   if (partial_wg_size) {
+      const struct panvk_dispatch_info info = {
+         .wg_base = {full_wgs, 0, 0},
+         .direct.wg_count = {1, 1, 1},
+         .wg_size_x = partial_wg_size,
+         .barrier = PANVK_CSF_BARRIER_SYNC,
+      };
+
+      cmd_dispatch_direct(cmdbuf, &info);
+   }
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -468,8 +654,12 @@ panvk_per_arch(CmdDispatchIndirect)(VkCommandBuffer commandBuffer,
    struct panvk_dispatch_info info = {
       .indirect.buffer_dev_addr = buffer_gpu,
       .barrier = PANVK_CSF_BARRIER_SYNC,
+#if PAN_ARCH >= 15
+      .infer_task_axis = debug_get_option_panvk_csf_opt_inferred_axis(),
+#endif
    };
 
+   panvk_per_arch(cmd_instrument_dispatch)(cmdbuf);
    panvk_per_arch(panvk_instr_begin_work)(
       PANVK_SUBQUEUE_COMPUTE, cmdbuf, PANVK_INSTR_WORK_TYPE_DISPATCH_INDIRECT);
 

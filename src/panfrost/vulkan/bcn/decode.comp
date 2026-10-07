@@ -1,0 +1,1274 @@
+/*
+ * Copyright © 2026 Pix Philosophy (HK) Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+
+#ifdef BC_ENCODE_ASTC
+layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+#else
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+#endif
+
+layout(constant_id = 0) const uint FORMAT = 0;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer block8_ref
+{
+   uvec2 v;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer block16_ref
+{
+   uvec4 v;
+};
+
+layout(push_constant) uniform consts
+{
+   uint64_t src;
+   uint row_stride;
+   uint layer_stride;
+   ivec2 block_offset;
+   ivec2 block_extent;
+   ivec2 size;
+   int layer_offset;
+   uint dst_row_stride;
+   uint64_t dst_addr;
+   uint64_t dst_layer_stride;
+   uint dst_tiled;
+};
+
+#if defined(BC_ENCODE_ASTC)
+const uint TEXELS = 4u;
+uint astc_row;
+
+uint
+texel(uint j)
+{
+   return astc_row * 4u + j;
+}
+#else
+#ifdef BC_DECODE_3D
+layout(set = 0, binding = 0) uniform writeonly uimage3D dst;
+#else
+layout(set = 0, binding = 0) uniform writeonly uimage2DArray dst;
+#endif
+
+const uint TEXELS = 16u;
+
+uint
+texel(uint j)
+{
+   return j;
+}
+#endif
+
+const uint bc_partition2[64] = uint[](
+   0x50505050u, 0x40404040u, 0x54545454u, 0x54505040u, 0x50404000u, 0x55545450u,
+   0x55545040u, 0x54504000u, 0x50400000u, 0x55555450u, 0x55544000u, 0x54400000u,
+   0x55555440u, 0x55550000u, 0x55555500u, 0x55000000u, 0x55150100u, 0x00004054u,
+   0x15010000u, 0x00405054u, 0x00004050u, 0x15050100u, 0x05010000u, 0x40505054u,
+   0x00404050u, 0x05010100u, 0x14141414u, 0x05141450u, 0x01155440u, 0x00555500u,
+   0x15014054u, 0x05414150u, 0x44444444u, 0x55005500u, 0x11441144u, 0x05055050u,
+   0x05500550u, 0x11114444u, 0x41144114u, 0x44111144u, 0x15055054u, 0x01055040u,
+   0x05041050u, 0x05455150u, 0x14414114u, 0x50050550u, 0x41411414u, 0x00141400u,
+   0x00041504u, 0x00105410u, 0x10541000u, 0x04150400u, 0x50410514u, 0x41051450u,
+   0x05415014u, 0x14054150u, 0x41050514u, 0x41505014u, 0x40011554u, 0x54150140u,
+   0x50505500u, 0x00555050u, 0x15151010u, 0x54540404u
+);
+
+const uint bc_partition3[64] = uint[](
+   0xaa685050u, 0x6a5a5040u, 0x5a5a4200u, 0x5450a0a8u, 0xa5a50000u, 0xa0a05050u,
+   0x5555a0a0u, 0x5a5a5050u, 0xaa550000u, 0xaa555500u, 0xaaaa5500u, 0x90909090u,
+   0x94949494u, 0xa4a4a4a4u, 0xa9a59450u, 0x2a0a4250u, 0xa5945040u, 0x0a425054u,
+   0xa5a5a500u, 0x55a0a0a0u, 0xa8a85454u, 0x6a6a4040u, 0xa4a45000u, 0x1a1a0500u,
+   0x0050a4a4u, 0xaaa59090u, 0x14696914u, 0x69691400u, 0xa08585a0u, 0xaa821414u,
+   0x50a4a450u, 0x6a5a0200u, 0xa9a58000u, 0x5090a0a8u, 0xa8a09050u, 0x24242424u,
+   0x00aa5500u, 0x24924924u, 0x24499224u, 0x50a50a50u, 0x500aa550u, 0xaaaa4444u,
+   0x66660000u, 0xa5a0a5a0u, 0x50a050a0u, 0x69286928u, 0x44aaaa44u, 0x66666600u,
+   0xaa444444u, 0x54a854a8u, 0x95809580u, 0x96969600u, 0xa85454a8u, 0x80959580u,
+   0xaa141414u, 0x96960000u, 0xaaaa1414u, 0xa05050a0u, 0xa0a5a5a0u, 0x96000000u,
+   0x40804080u, 0xa9a8a9a8u, 0xaaaaaa44u, 0x2a4a5254u
+);
+
+const uint bc_anchor[24] = uint[](
+   0xffffffffu, 0xffffffffu, 0xf882282fu, 0x22882282u, 0xff8286ffu, 0x6ff22282u,
+   0x22ff8626u, 0xf22fffffu, 0xff38ff33u, 0x33566688u, 0xa633f833u, 0xff586885u,
+   0xf8a653f8u, 0xffff5f3fu, 0xa58555f3u, 0x33cfd8a5u, 0x83ff388fu, 0x8fffffffu,
+   0x8f8f3f8fu, 0x8affa6f3u, 0xa98aaf3fu, 0x8663f8f6u, 0xffffff3fu, 0x8ff3ffffu
+);
+
+const uint bc6_mode[18] = uint[](
+   0x26aaad57u, 0x2eccccf7u, 0x2488ad77u, 0x0d555141u, 0x288a8d77u, 0x13333163u,
+   0x28a88d77u, 0x13111183u, 0x26aaad37u, 0x12889203u, 0x26aacd17u, 0x00000000u,
+   0x2aacad17u, 0x00000000u, 0x2acaad17u, 0x00000000u, 0x2eccccd5u, 0x00000000u
+);
+
+const uint bc6_field_base[18] = uint[](
+   0u, 19u, 42u, 60u, 66u, 86u, 95u, 115u, 124u,
+   143u, 152u, 171u, 171u, 192u, 192u, 213u, 213u, 236u
+);
+
+const uint bc6_field[236] = uint[](
+   0x0146u, 0x014au, 0x014bu, 0x0a00u, 0x0a04u, 0x0a08u, 0x0501u, 0x0147u,
+   0x0406u, 0x0505u, 0x010bu, 0x0407u, 0x0509u, 0x011bu, 0x040au, 0x0502u,
+   0x012bu, 0x0503u, 0x013bu, 0x0156u, 0x0147u, 0x0157u, 0x0700u, 0x010bu,
+   0x011bu, 0x014au, 0x0704u, 0x015au, 0x012bu, 0x0146u, 0x0708u, 0x013bu,
+   0x015bu, 0x014bu, 0x0601u, 0x0406u, 0x0605u, 0x0407u, 0x0609u, 0x040au,
+   0x0602u, 0x0603u, 0x0a00u, 0x0a04u, 0x0a08u, 0x0501u, 0x01a0u, 0x0406u,
+   0x0405u, 0x01a4u, 0x010bu, 0x0407u, 0x0409u, 0x01a8u, 0x011bu, 0x040au,
+   0x0502u, 0x012bu, 0x0503u, 0x013bu, 0x0a00u, 0x0a04u, 0x0a08u, 0x0a01u,
+   0x0a05u, 0x0a09u, 0x0a00u, 0x0a04u, 0x0a08u, 0x0401u, 0x01a0u, 0x0147u,
+   0x0406u, 0x0505u, 0x01a4u, 0x0407u, 0x0409u, 0x01a8u, 0x011bu, 0x040au,
+   0x0402u, 0x010bu, 0x012bu, 0x0403u, 0x0146u, 0x013bu, 0x0a00u, 0x0a04u,
+   0x0a08u, 0x0901u, 0x01a0u, 0x0905u, 0x01a4u, 0x0909u, 0x01a8u, 0x0a00u,
+   0x0a04u, 0x0a08u, 0x0401u, 0x01a0u, 0x014au, 0x0406u, 0x0405u, 0x01a4u,
+   0x010bu, 0x0407u, 0x0509u, 0x01a8u, 0x040au, 0x0402u, 0x011bu, 0x012bu,
+   0x0403u, 0x014bu, 0x013bu, 0x0a00u, 0x0a04u, 0x0a08u, 0x0801u, 0x22a0u,
+   0x0805u, 0x22a4u, 0x0809u, 0x22a8u, 0x0900u, 0x014au, 0x0904u, 0x0146u,
+   0x0908u, 0x014bu, 0x0501u, 0x0147u, 0x0406u, 0x0505u, 0x010bu, 0x0407u,
+   0x0509u, 0x011bu, 0x040au, 0x0502u, 0x012bu, 0x0503u, 0x013bu, 0x0a00u,
+   0x0a04u, 0x0a08u, 0x0401u, 0x26a0u, 0x0405u, 0x26a4u, 0x0409u, 0x26a8u,
+   0x0800u, 0x0147u, 0x014au, 0x0804u, 0x012bu, 0x0146u, 0x0808u, 0x013bu,
+   0x014bu, 0x0601u, 0x0406u, 0x0505u, 0x010bu, 0x0407u, 0x0509u, 0x011bu,
+   0x040au, 0x0602u, 0x0603u, 0x0800u, 0x010bu, 0x014au, 0x0804u, 0x0156u,
+   0x0146u, 0x0808u, 0x0157u, 0x014bu, 0x0501u, 0x0147u, 0x0406u, 0x0605u,
+   0x0407u, 0x0509u, 0x011bu, 0x040au, 0x0502u, 0x012bu, 0x0503u, 0x013bu,
+   0x0800u, 0x011bu, 0x014au, 0x0804u, 0x015au, 0x0146u, 0x0808u, 0x015bu,
+   0x014bu, 0x0501u, 0x0147u, 0x0406u, 0x0505u, 0x010bu, 0x0407u, 0x0609u,
+   0x040au, 0x0502u, 0x012bu, 0x0503u, 0x013bu, 0x0600u, 0x0147u, 0x010bu,
+   0x011bu, 0x014au, 0x0604u, 0x0156u, 0x015au, 0x012bu, 0x0146u, 0x0608u,
+   0x0157u, 0x013bu, 0x015bu, 0x014bu, 0x0601u, 0x0406u, 0x0605u, 0x0407u,
+   0x0609u, 0x040au, 0x0602u, 0x0603u
+);
+
+const uint BC1_RGB = 1;
+const uint BC1_RGBA = 2;
+const uint BC2 = 3;
+const uint BC3 = 4;
+const uint BC4_UNORM = 5;
+const uint BC4_SNORM = 6;
+const uint BC5_UNORM = 7;
+const uint BC5_SNORM = 8;
+const uint BC6H_UF16 = 9;
+const uint BC6H_SF16 = 10;
+const uint BC7 = 11;
+
+const uint bc7_mode[8] = uint[](
+   0x00068213u, 0x0007031au, 0x0004029bu, 0x0004839au, 0x003432e1u, 0x002443a1u, 0x0008bb81u, 0x0004aa9au
+);
+
+#ifdef BC_ENCODE_ASTC
+
+layout(buffer_reference, std430, buffer_reference_align = 16) writeonly buffer astc_block_ref
+{
+   uvec4 v;
+};
+
+const uint astc_cq[256] = uint[](
+   0u, 0u, 32u, 32u, 64u, 64u, 64u, 2u, 2u, 2u, 34u, 34u, 66u, 66u, 66u, 4u,
+   4u, 4u, 36u, 36u, 68u, 68u, 68u, 6u, 6u, 6u, 38u, 38u, 70u, 70u, 70u, 8u,
+   8u, 8u, 40u, 40u, 40u, 72u, 72u, 10u, 10u, 10u, 42u, 42u, 42u, 74u, 74u, 12u,
+   12u, 12u, 44u, 44u, 44u, 76u, 76u, 14u, 14u, 14u, 46u, 46u, 46u, 78u, 78u, 16u,
+   16u, 16u, 48u, 48u, 48u, 80u, 80u, 18u, 18u, 18u, 50u, 50u, 50u, 82u, 82u, 20u,
+   20u, 20u, 52u, 52u, 52u, 84u, 84u, 22u, 22u, 22u, 54u, 54u, 54u, 86u, 86u, 24u,
+   24u, 24u, 56u, 56u, 56u, 88u, 88u, 26u, 26u, 26u, 58u, 58u, 58u, 90u, 90u, 28u,
+   28u, 28u, 60u, 60u, 60u, 92u, 92u, 30u, 30u, 30u, 62u, 62u, 62u, 94u, 94u, 94u,
+   95u, 95u, 95u, 63u, 63u, 63u, 31u, 31u, 31u, 93u, 93u, 61u, 61u, 61u, 29u, 29u,
+   29u, 91u, 91u, 59u, 59u, 59u, 27u, 27u, 27u, 89u, 89u, 57u, 57u, 57u, 25u, 25u,
+   25u, 87u, 87u, 55u, 55u, 55u, 23u, 23u, 23u, 85u, 85u, 53u, 53u, 53u, 21u, 21u,
+   21u, 83u, 83u, 51u, 51u, 51u, 19u, 19u, 19u, 81u, 81u, 49u, 49u, 49u, 17u, 17u,
+   17u, 79u, 79u, 47u, 47u, 47u, 15u, 15u, 15u, 77u, 77u, 45u, 45u, 45u, 13u, 13u,
+   13u, 75u, 75u, 43u, 43u, 43u, 11u, 11u, 11u, 73u, 73u, 41u, 41u, 41u, 9u, 9u,
+   9u, 71u, 71u, 71u, 39u, 39u, 7u, 7u, 7u, 69u, 69u, 69u, 37u, 37u, 5u, 5u,
+   5u, 67u, 67u, 67u, 35u, 35u, 3u, 3u, 3u, 65u, 65u, 65u, 33u, 33u, 1u, 1u);
+
+const uint astc_cu[96] = uint[](
+   0u, 255u, 8u, 247u, 16u, 239u, 24u, 231u, 32u, 223u, 40u, 215u, 48u, 207u, 56u, 199u,
+   64u, 191u, 72u, 183u, 80u, 175u, 88u, 167u, 96u, 159u, 104u, 151u, 112u, 143u, 120u, 135u,
+   2u, 253u, 10u, 245u, 18u, 237u, 26u, 229u, 35u, 220u, 43u, 212u, 51u, 204u, 59u, 196u,
+   67u, 188u, 75u, 180u, 83u, 172u, 91u, 164u, 99u, 156u, 107u, 148u, 115u, 140u, 123u, 132u,
+   5u, 250u, 13u, 242u, 21u, 234u, 29u, 226u, 37u, 218u, 45u, 210u, 53u, 202u, 61u, 194u,
+   70u, 185u, 78u, 177u, 86u, 169u, 94u, 161u, 102u, 153u, 110u, 145u, 118u, 137u, 126u, 129u);
+
+const uint astc_trits[243] = uint[](
+   0u, 128u, 96u, 32u, 160u, 224u, 64u, 192u, 28u, 16u, 144u, 112u, 48u, 176u, 240u, 80u,
+   208u, 156u, 3u, 131u, 99u, 35u, 163u, 227u, 67u, 195u, 31u, 4u, 132u, 100u, 36u, 164u,
+   228u, 68u, 196u, 60u, 20u, 148u, 116u, 52u, 180u, 244u, 84u, 212u, 188u, 19u, 147u, 115u,
+   51u, 179u, 243u, 83u, 211u, 159u, 8u, 136u, 104u, 40u, 168u, 232u, 72u, 200u, 92u, 24u,
+   152u, 120u, 56u, 184u, 248u, 88u, 216u, 220u, 12u, 140u, 108u, 44u, 172u, 236u, 76u, 204u,
+   252u, 1u, 129u, 97u, 33u, 161u, 225u, 65u, 193u, 29u, 17u, 145u, 113u, 49u, 177u, 241u,
+   81u, 209u, 157u, 7u, 135u, 103u, 39u, 167u, 231u, 71u, 199u, 63u, 5u, 133u, 101u, 37u,
+   165u, 229u, 69u, 197u, 61u, 21u, 149u, 117u, 53u, 181u, 245u, 85u, 213u, 189u, 23u, 151u,
+   119u, 55u, 183u, 247u, 87u, 215u, 191u, 9u, 137u, 105u, 41u, 169u, 233u, 73u, 201u, 93u,
+   25u, 153u, 121u, 57u, 185u, 249u, 89u, 217u, 221u, 13u, 141u, 109u, 45u, 173u, 237u, 77u,
+   205u, 253u, 2u, 130u, 98u, 34u, 162u, 226u, 66u, 194u, 30u, 18u, 146u, 114u, 50u, 178u,
+   242u, 82u, 210u, 158u, 15u, 143u, 111u, 47u, 175u, 239u, 79u, 207u, 127u, 6u, 134u, 102u,
+   38u, 166u, 230u, 70u, 198u, 62u, 22u, 150u, 118u, 54u, 182u, 246u, 86u, 214u, 190u, 27u,
+   155u, 123u, 59u, 187u, 251u, 91u, 219u, 255u, 10u, 138u, 106u, 42u, 170u, 234u, 74u, 202u,
+   94u, 26u, 154u, 122u, 58u, 186u, 250u, 90u, 218u, 222u, 14u, 142u, 110u, 46u, 174u, 238u,
+   78u, 206u, 254u);
+
+const float ASTC_LIMIT = 0.998;
+const float ASTC_FLT_MAX = 3.402823466e+38;
+const uint ASTC_BLOCK_MODE = 0x251u;
+const uvec3 ASTC_LEVELS = uvec3(0x110b0500u, 0x29241c17u, 0x403b352fu);
+const uint ASTC_LEVEL_ISE_LO = 0x7ba62840u;
+const uint ASTC_LEVEL_ISE_HI = 0x1593u;
+const uint ASTC_CEMS_OPAQUE = 0x09080600u;
+const uint ASTC_CEMS_ALPHA = 0x0d0c0a04u;
+
+uint astc_rgba[4];
+float astc_proj[4];
+uint astc_lvl[4];
+
+struct astc_cand {
+   uint v[8];
+   ivec4 lo;
+   ivec4 hi;
+   bool swapped;
+};
+
+float
+astc_sum(float x)
+{
+   x += subgroupShuffleXor(x, 1u);
+   return x + subgroupShuffleXor(x, 2u);
+}
+
+vec2
+astc_sum(vec2 x)
+{
+   return vec2(astc_sum(x.x), astc_sum(x.y));
+}
+
+vec4
+astc_sum(vec4 x)
+{
+   return vec4(astc_sum(x.x), astc_sum(x.y), astc_sum(x.z), astc_sum(x.w));
+}
+
+float
+astc_min(float x)
+{
+   x = min(x, subgroupShuffleXor(x, 1u));
+   return min(x, subgroupShuffleXor(x, 2u));
+}
+
+float
+astc_max(float x)
+{
+   x = max(x, subgroupShuffleXor(x, 1u));
+   return max(x, subgroupShuffleXor(x, 2u));
+}
+
+uint
+astc_or(uint x)
+{
+   x |= subgroupShuffleXor(x, 1u);
+   return x | subgroupShuffleXor(x, 2u);
+}
+
+uvec2
+astc_or(uvec2 x)
+{
+   return uvec2(astc_or(x.x), astc_or(x.y));
+}
+
+uint
+astc_umin(uint x)
+{
+   x = min(x, subgroupShuffleXor(x, 1u));
+   return min(x, subgroupShuffleXor(x, 2u));
+}
+
+bool
+astc_any(bool x)
+{
+   return astc_or(x ? 1u : 0u) != 0u;
+}
+
+vec4
+astc_texel(uint j)
+{
+   return unpackUnorm4x8(astc_rgba[j]);
+}
+
+float
+astc_sat(float x)
+{
+   return x > 0.0 ? min(x, 1.0) : 0.0;
+}
+
+uint
+astc_level_value(uint l)
+{
+   uint w = l < 4u ? ASTC_LEVELS.x : (l < 8u ? ASTC_LEVELS.y : ASTC_LEVELS.z);
+   return bitfieldExtract(w, int((l & 3u) * 8u), 8);
+}
+
+uint
+astc_level_ise(uint l)
+{
+   return l < 8u ? bitfieldExtract(ASTC_LEVEL_ISE_LO, int(l * 4u), 4)
+                 : bitfieldExtract(ASTC_LEVEL_ISE_HI, int((l - 8u) * 4u), 4);
+}
+
+uint
+astc_weight_level(float value)
+{
+   float x = astc_sat(value) * 64.0;
+   uint l = uint(min(x * (11.0 / 64.0) + 0.5, 11.0));
+   float d = abs(float(astc_level_value(l)) - x);
+   uint below = l > 0u ? l - 1u : 0u;
+   uint above = min(l + 1u, 11u);
+   float db = abs(float(astc_level_value(below)) - x);
+   float da = abs(float(astc_level_value(above)) - x);
+   if (db < d && db <= da)
+      return below;
+   if (da < d)
+      return above;
+   return l;
+}
+
+int
+astc_byte(float value)
+{
+   return int(roundEven(astc_sat(value) * 255.0));
+}
+
+uint
+astc_cunq(uint range, uint v)
+{
+   return range == 20u ? v : astc_cu[v];
+}
+
+uint
+astc_clookup(uint range, uint code)
+{
+   return range == 20u ? (code & 255u) : astc_cq[code & 255u];
+}
+
+uint
+astc_cindex(uint range, float value)
+{
+   uint code = uint(astc_byte(value));
+   if (range == 20u)
+      return code;
+   uint cur = astc_cq[code];
+   float here = abs(float(astc_cu[cur]) * (1.0 / 255.0) - value);
+   uint before_i = code >= 1u ? astc_cq[code - 1u] : cur;
+   uint after_i = code <= 254u ? astc_cq[code + 1u] : cur;
+   float before_d = abs(float(astc_cu[before_i]) * (1.0 / 255.0) - value);
+   float after_d = abs(float(astc_cu[after_i]) * (1.0 / 255.0) - value);
+   if (!(here > after_d) && !(here > before_d))
+      return cur;
+   return before_d > after_d ? after_i : before_i;
+}
+
+float
+astc_contracted(vec4 e, uint c)
+{
+   return (e[c] + e[c]) - e.b;
+}
+
+bool
+astc_unit(float v)
+{
+   return v >= 0.0 && v <= 1.0;
+}
+
+bool
+astc_contractible(vec4 lo, vec4 hi)
+{
+   return astc_unit(astc_contracted(lo, 0u)) && astc_unit(astc_contracted(lo, 1u)) &&
+          astc_unit(astc_contracted(hi, 0u)) && astc_unit(astc_contracted(hi, 1u));
+}
+
+void
+astc_luminance(uint r, vec4 lo, vec4 hi, inout astc_cand c)
+{
+   const float third = 0.33333334;
+   c.v[0] = astc_cindex(r, (lo.b + (lo.r + lo.g)) * third);
+   c.v[1] = astc_cindex(r, (hi.b + (hi.r + hi.g)) * third);
+   c.lo.rgb = ivec3(int(astc_cunq(r, c.v[0])));
+   c.hi.rgb = ivec3(int(astc_cunq(r, c.v[1])));
+}
+
+void
+astc_rgb_scale(uint r, vec4 lo, vec4 hi, inout astc_cand c)
+{
+   vec3 sum = lo.rgb + hi.rgb;
+   float len = dot(sum, sum);
+   if (!(len > 0.0))
+      return;
+   float d0 = dot(lo.rgb, sum), d1 = dot(hi.rgb, sum);
+   bool first = d0 > d1;
+   float maximum = first ? d0 : d1, minimum = first ? d1 : d0;
+   float t = maximum / len;
+   [[unroll]] for (uint i = 0u; i < 3u; i++)
+      c.v[i] = astc_cindex(r, sum[i] * t);
+   c.v[3] = astc_cindex(r, maximum != 0.0 ? minimum / maximum : 0.0);
+   int s = int(astc_cunq(r, c.v[3]));
+   [[unroll]] for (uint i = 0u; i < 3u; i++) {
+      int full = int(astc_cunq(r, c.v[i]));
+      int scaled = (full * s) >> 8;
+      c.lo[i] = first ? full : scaled;
+      c.hi[i] = first ? scaled : full;
+   }
+   c.swapped = first;
+}
+
+void
+astc_rgb_direct(uint r, vec4 lo, vec4 hi, bool alpha, inout astc_cand c)
+{
+   bool blue = astc_contractible(lo, hi);
+   float x[8] = float[](
+      blue ? astc_contracted(hi, 0u) : lo.r, blue ? astc_contracted(lo, 0u) : hi.r,
+      blue ? astc_contracted(hi, 1u) : lo.g, blue ? astc_contracted(lo, 1u) : hi.g,
+      blue ? hi.b : lo.b, blue ? lo.b : hi.b,
+      blue ? hi.a : lo.a, blue ? lo.a : hi.a);
+   uint v[8];
+   int u[8];
+   [[unroll]] for (uint i = 0u; i < 8u; i++) {
+      v[i] = i < 6u || alpha ? astc_cindex(r, x[i]) : 0u;
+      u[i] = int(astc_cunq(r, v[i]));
+   }
+   int sum = (u[1] + u[3] + u[5]) - (u[0] + u[2] + u[4]);
+   bool mismatch = (sum < 0) != blue;
+   bool blue_decode = mismatch ? sum > 0 : blue;
+   [[unroll]] for (uint i = 0u; i < 8u; i++)
+      c.v[i] = mismatch ? v[i ^ 1u] : v[i];
+   if (blue_decode) {
+      c.lo = ivec4((u[1] + u[5]) >> 1, (u[3] + u[5]) >> 1, u[5], u[7]);
+      c.hi = ivec4((u[0] + u[4]) >> 1, (u[2] + u[4]) >> 1, u[4], u[6]);
+   } else {
+      c.lo = ivec4(u[0], u[2], u[4], u[6]);
+      c.hi = ivec4(u[1], u[3], u[5], u[7]);
+   }
+   c.swapped = mismatch;
+}
+
+void
+astc_transfer(uint r, float base, int offset, out uint even, out uint odd, out int pbase, out int poffset)
+{
+   int b = astc_byte(base);
+   even = astc_clookup(r, uint((b << 1) & 0xfe));
+   odd = astc_clookup(r, uint((b & 0x80) | ((offset * 2) & 0x7e)));
+   int e = int(astc_cunq(r, even)), o = int(astc_cunq(r, odd));
+   pbase = (o & 0x80) | (e >> 1);
+   poffset = bitfieldExtract(o >> 1, 0, 7);
+}
+
+void
+astc_base_offset(uint r, vec4 lo, vec4 hi, bool alpha, inout astc_cand c)
+{
+   vec4 base = lo, other = hi;
+   ivec4 offset;
+   bool blue = false;
+   if (astc_contractible(lo, hi)) {
+      vec4 b0 = vec4(astc_contracted(hi, 0u), astc_contracted(hi, 1u), hi.b, hi.a);
+      vec4 b1 = vec4(astc_contracted(lo, 0u), astc_contracted(lo, 1u), lo.b, lo.a);
+      blue = true;
+      [[unroll]] for (uint i = 0u; i < 4u; i++) {
+         offset[i] = astc_byte(b1[i]) - astc_byte(b0[i]);
+         blue = blue && uint(offset[i] + 31) < 63u;
+      }
+      if (blue) {
+         base = b0;
+         other = b1;
+      }
+   }
+   if (!blue) {
+      [[unroll]] for (uint i = 0u; i < 4u; i++)
+         offset[i] = astc_byte(hi[i]) - astc_byte(lo[i]);
+   }
+   uint even[4], odd[4];
+   ivec4 pb, po;
+   [[unroll]] for (uint i = 0u; i < 4u; i++)
+      astc_transfer(r, base[i], offset[i], even[i], odd[i], pb[i], po[i]);
+   if (!alpha) {
+      even[3] = 0u;
+      odd[3] = 0u;
+      pb[3] = 0;
+      po[3] = 0;
+   }
+   bool mismatch = (po[0] + po[1] + po[2] < 0) != blue;
+   ivec4 start = pb, delta = po;
+   bool blue_decode = blue;
+   if (mismatch) {
+      [[unroll]] for (uint i = 0u; i < 4u; i++)
+         astc_transfer(r, other[i], -offset[i], even[i], odd[i], pb[i], po[i]);
+      if (!alpha) {
+         even[3] = 0u;
+         odd[3] = 0u;
+         pb[3] = 0;
+         po[3] = 0;
+      }
+      blue_decode = po[0] + po[1] + po[2] < 0;
+      start = pb + po;
+      delta = -po;
+   }
+   [[unroll]] for (uint i = 0u; i < 4u; i++) {
+      c.v[2u * i] = even[i];
+      c.v[2u * i + 1u] = odd[i];
+   }
+   ivec4 moved = start + delta;
+   if (blue_decode) {
+      c.lo = ivec4((moved[0] + moved[2]) >> 1, (moved[1] + moved[2]) >> 1, moved[2], moved[3]);
+      c.hi = ivec4((start[0] + start[2]) >> 1, (start[1] + start[2]) >> 1, start[2], start[3]);
+   } else {
+      c.lo = start;
+      c.hi = moved;
+   }
+   c.lo = clamp(c.lo, ivec4(0), ivec4(255));
+   c.hi = clamp(c.hi, ivec4(0), ivec4(255));
+   c.swapped = mismatch;
+}
+
+astc_cand
+astc_encode_colors(uint cem, uint r, vec4 lo, vec4 hi)
+{
+   astc_cand c;
+   [[unroll]] for (uint i = 0u; i < 8u; i++)
+      c.v[i] = 0u;
+   c.lo = ivec4(0);
+   c.hi = ivec4(0);
+   c.swapped = false;
+   if (cem == 0u || cem == 4u)
+      astc_luminance(r, lo, hi, c);
+   else if (cem == 6u || cem == 10u)
+      astc_rgb_scale(r, lo, hi, c);
+   else if (cem == 8u || cem == 12u)
+      astc_rgb_direct(r, lo, hi, cem == 12u, c);
+   else
+      astc_base_offset(r, lo, hi, cem == 13u, c);
+   if (cem == 0u || cem == 6u || cem == 8u || cem == 9u) {
+      c.lo.a = 255;
+      c.hi.a = 255;
+   } else if (cem == 4u || cem == 10u) {
+      uint a0 = astc_cindex(r, lo.a), a1 = astc_cindex(r, hi.a);
+      uint s0 = c.swapped ? a1 : a0, s1 = c.swapped ? a0 : a1;
+      if (cem == 4u) {
+         c.v[2] = s0;
+         c.v[3] = s1;
+      } else {
+         c.v[4] = s0;
+         c.v[5] = s1;
+      }
+      c.lo.a = int(astc_cunq(r, a0));
+      c.hi.a = int(astc_cunq(r, a1));
+   }
+   return c;
+}
+
+void
+astc_put(inout uvec4 blk, uint pos, uint width, uint value)
+{
+   uint w = pos >> 5, s = pos & 31u;
+   value &= (1u << width) - 1u;
+   blk[w] |= value << s;
+   if (s + width > 32u)
+      blk[w + 1u] |= value >> (32u - s);
+}
+
+uint
+astc_put_trits(inout uvec4 blk, uint cursor, uint bits, uint vals[16], uint count, uint first)
+{
+   uint index = 0u;
+   [[unroll]] for (uint i = 0u; i < 5u; i++)
+      index = index * 3u + (first + i < count ? vals[first + i] >> bits : 0u);
+   uint packed = astc_trits[index];
+   uint mask = (1u << bits) - 1u;
+   const uint widths[5] = uint[](2u, 2u, 1u, 2u, 1u);
+   [[unroll]] for (uint i = 0u; i < 5u; i++) {
+      if (first + i < count) {
+         astc_put(blk, cursor, bits, vals[first + i] & mask);
+         cursor += bits;
+         astc_put(blk, cursor, widths[i], packed);
+         cursor += widths[i];
+         packed >>= widths[i];
+      }
+   }
+   return cursor;
+}
+
+vec4
+astc_principal_axis(mat4 m)
+{
+   vec4 lengths = vec4(dot(m[0], m[0]), dot(m[1], m[1]), dot(m[2], m[2]), dot(m[3], m[3]));
+   uint column = 0u;
+   [[unroll]] for (uint i = 1u; i < 4u; i++) {
+      if (lengths[i] > lengths[column])
+         column = i;
+   }
+   vec4 axis = m[column];
+   [[dont_unroll]] for (uint it = 0u; it < 8u; it++) {
+      vec4 next = m * axis;
+      if (it == 0u && column == 3u)
+         next.w = lengths[3];
+      float maximum = max(max(next.x, next.y), max(next.z, next.w));
+      axis = next;
+      if (maximum == 0.0)
+         break;
+      axis *= 1.0 / maximum;
+   }
+   return axis;
+}
+
+float
+astc_forced_alpha(float fitted, float refined)
+{
+   return fitted == 0.0 ? 0.0 : (fitted > ASTC_LIMIT ? 1.0 : refined);
+}
+
+void
+astc_project(vec4 lo, vec4 hi, bool pin)
+{
+   vec4 dir = hi - lo;
+   float len = dot(dir, dir);
+   float inv = len > 0.0 ? 1.0 / len : len;
+   bool zero_pin = pin && ((lo.a != 0.0) != (hi.a != 0.0));
+   bool one_pin = pin && ((lo.a > ASTC_LIMIT) != (hi.a > ASTC_LIMIT));
+   float zero_value = lo.a != 0.0 ? 1.0 : 0.0;
+   float one_value = lo.a > ASTC_LIMIT ? 0.0 : 1.0;
+   [[unroll]] for (uint j = 0u; j < 4u; j++) {
+      vec4 p = astc_texel(j);
+      float value = dot(dir, p - lo) * inv;
+      value = one_pin && p.a > ASTC_LIMIT ? one_value : value;
+      value = zero_pin && p.a == 0.0 ? zero_value : value;
+      astc_proj[j] = value;
+   }
+}
+
+void
+astc_fit_weights(void)
+{
+   float lo = 0.0, hi = 1.0, incumbent = ASTC_FLT_MAX;
+   bool done = false;
+   [[dont_unroll]] for (uint iter = 0u; iter < 3u; iter++) {
+      float inv = 1.0 / (hi - lo);
+      vec4 s0 = vec4(0.0);
+      vec2 s1 = vec2(0.0);
+      float last_a = 0.0, last_b = 0.0;
+      [[unroll]] for (uint j = 0u; j < 4u; j++) {
+         float b = float(astc_level_value(astc_weight_level((astc_proj[j] - lo) * inv))) * (1.0 / 64.0);
+         float a = 1.0 - b;
+         float g = astc_proj[j];
+         s0 += vec4(abs(g - (hi * b + lo * a)), a * a, b * b, a * b);
+         s1 += vec2(g * a, g * b);
+         last_a = a;
+         last_b = b;
+      }
+      s0 = astc_sum(s0);
+      s1 = astc_sum(s1);
+      vec2 last = astc_sum(astc_row == 3u ? vec2(last_a, last_b) : vec2(0.0));
+      last_a = last.x;
+      last_b = last.y;
+      float error = s0.x, aa = s0.y, bb = s0.z, ab = s0.w, ax = s1.x, bx = s1.y;
+      done = done || error >= incumbent;
+      float det = bb * aa - ab * ab;
+      incumbent = done ? incumbent : error;
+      float idet = 1.0 / det;
+      float offset = (bx + ax) * (1.0 / 16.0) - (lo * last_a + hi * last_b);
+      float next_lo = det != 0.0 ? (bb * ax - ab * bx) * idet : lo + offset;
+      float next_hi = det != 0.0 ? (aa * bx - ab * ax) * idet : hi + offset;
+      lo = done ? lo : next_lo;
+      hi = done ? hi : next_hi;
+      done = done || (det != 0.0 && lo == hi);
+   }
+   float inv = 1.0 / (hi - lo);
+   [[unroll]] for (uint j = 0u; j < 4u; j++)
+      astc_lvl[j] = astc_weight_level((astc_proj[j] - lo) * inv);
+}
+
+uvec4
+astc_encode(bool may_have_alpha)
+{
+   uint row = astc_row;
+   vec4 sum = vec4(0.0), sq = vec4(0.0), cross0 = vec4(0.0);
+   vec2 cross1 = vec2(0.0);
+   bool has_zero = false, has_opaque = false, translucent = false;
+   [[unroll]] for (uint j = 0u; j < 4u; j++) {
+      vec4 p = astc_texel(j);
+      sum += p;
+      sq += p * p;
+      cross0 += vec4(p.r * p.g, p.r * p.b, p.r * p.a, p.g * p.b);
+      cross1 += vec2(p.g * p.a, p.b * p.a);
+      has_zero = has_zero || p.a == 0.0;
+      has_opaque = has_opaque || p.a > ASTC_LIMIT;
+      translucent = translucent || !(p.a >= ASTC_LIMIT);
+   }
+   sum = astc_sum(sum);
+   sq = astc_sum(sq);
+   cross0 = astc_sum(cross0);
+   cross1 = astc_sum(cross1);
+   has_zero = astc_any(has_zero);
+   has_opaque = astc_any(has_opaque);
+   bool alpha = may_have_alpha && astc_any(translucent);
+
+   vec4 mean = sum * (1.0 / 16.0);
+   vec4 var = sq * (1.0 / 16.0) - mean * mean;
+   vec4 c0 = cross0 * (1.0 / 16.0) - vec4(mean.r * mean.g, mean.r * mean.b, mean.r * mean.a, mean.g * mean.b);
+   vec2 c1 = cross1 * (1.0 / 16.0) - vec2(mean.g * mean.a, mean.b * mean.a);
+   mat4 cov = mat4(var.x, c0.x, c0.y, c0.z,
+                   c0.x, var.y, c0.w, c1.x,
+                   c0.y, c0.w, var.z, c1.y,
+                   c0.z, c1.x, c1.y, var.w);
+
+   vec4 axis = astc_principal_axis(cov);
+   if (axis.b + (axis.r + axis.g) < 0.0)
+      axis = -axis;
+   float len = dot(axis, axis);
+   if (!(len > 0.0)) {
+      axis = vec4(1.0);
+      len = 4.0;
+   }
+   float inv_len = 1.0 / len;
+   float mn = ASTC_FLT_MAX, mx = -ASTC_FLT_MAX;
+   [[unroll]] for (uint j = 0u; j < 4u; j++) {
+      float v = inv_len * dot(astc_texel(j) - mean, axis);
+      mn = min(mn, v);
+      mx = max(mx, v);
+   }
+   mn = astc_min(mn);
+   mx = astc_max(mx);
+   vec4 fit_lo = clamp(mean + mn * axis, vec4(0.0), vec4(1.0));
+   vec4 fit_hi = clamp(mean + mx * axis, vec4(0.0), vec4(1.0));
+   float lo_a = fit_lo.a, hi_a = fit_hi.a;
+   if (has_zero) {
+      if (lo_a > hi_a)
+         hi_a = 0.0;
+      else
+         lo_a = 0.0;
+   }
+   if (has_opaque) {
+      if (lo_a > hi_a)
+         lo_a = 1.0;
+      else
+         hi_a = 1.0;
+   }
+   fit_lo.a = lo_a;
+   fit_hi.a = hi_a;
+
+   astc_project(fit_lo, fit_hi, false);
+   astc_fit_weights();
+
+   vec4 s0 = vec4(0.0), ax = vec4(0.0), bx = vec4(0.0);
+   [[unroll]] for (uint j = 0u; j < 4u; j++) {
+      float b = float(astc_level_value(astc_lvl[j])) * (1.0 / 64.0);
+      float a = 1.0 - b;
+      vec4 p = astc_texel(j);
+      s0 += vec4(a * a, b * b, a * b, dot(p, p));
+      ax += a * p;
+      bx += b * p;
+   }
+   s0 = astc_sum(s0);
+   ax = astc_sum(ax);
+   bx = astc_sum(bx);
+   float aa = s0.x, bb = s0.y, ab = s0.z, energy = s0.w;
+   vec4 lo = fit_lo, hi = fit_hi;
+   float det = aa * bb - ab * ab;
+   if (det != 0.0) {
+      float idet = 1.0 / det;
+      lo = idet * (bb * ax - ab * bx);
+      hi = idet * (aa * bx - ab * ax);
+   }
+   lo.a = astc_forced_alpha(fit_lo.a, lo.a);
+   hi.a = astc_forced_alpha(fit_hi.a, hi.a);
+
+   uint cem = bitfieldExtract(alpha ? ASTC_CEMS_ALPHA : ASTC_CEMS_OPAQUE, int(row * 8u), 8);
+   uint range = alpha && row >= 2u ? 16u : 20u;
+   astc_cand c = astc_encode_colors(cem, range, lo, hi);
+   vec4 e0 = vec4(c.lo) * (1.0 / 255.0), e1 = vec4(c.hi) * (1.0 / 255.0);
+   float error = dot(e0, e0) * aa + energy;
+   error += dot(e1, e1) * bb;
+   error -= 2.0 * dot(e0, ax);
+   error -= 2.0 * dot(e1, bx);
+   error += (ab + ab) * dot(e0, e1);
+   float best = astc_min(error);
+   uint winner = astc_umin(error == best ? row : 3u);
+   uint pv0 = c.v[0] | (c.v[1] << 8) | (c.v[2] << 16) | (c.v[3] << 24);
+   uint pv1 = c.v[4] | (c.v[5] << 8) | (c.v[6] << 16) | (c.v[7] << 24);
+   ivec4 blo = c.swapped ? c.hi : c.lo, bhi = c.swapped ? c.lo : c.hi;
+   uint plo = uint(blo.r) | (uint(blo.g) << 8) | (uint(blo.b) << 16) | (uint(blo.a) << 24);
+   uint phi = uint(bhi.r) | (uint(bhi.g) << 8) | (uint(bhi.b) << 16) | (uint(bhi.a) << 24);
+   bool mine = row == winner;
+   pv0 = astc_or(mine ? pv0 : 0u);
+   pv1 = astc_or(mine ? pv1 : 0u);
+   plo = astc_or(mine ? plo : 0u);
+   phi = astc_or(mine ? phi : 0u);
+   uint best_cem = bitfieldExtract(alpha ? ASTC_CEMS_ALPHA : ASTC_CEMS_OPAQUE, int(winner * 8u), 8);
+   uint best_range = alpha && winner >= 2u ? 16u : 20u;
+
+   astc_project(unpackUnorm4x8(plo), unpackUnorm4x8(phi), true);
+   uint wise = 0u;
+   [[unroll]] for (uint j = 0u; j < 4u; j++)
+      wise |= astc_level_ise(astc_weight_level(astc_proj[j])) << (4u * j);
+   uvec2 wall = astc_or(uvec2(row == 0u ? wise : row == 1u ? wise << 16 : 0u,
+                                          row == 2u ? wise : row == 3u ? wise << 16 : 0u));
+
+   uvec4 blk = uvec4(ASTC_BLOCK_MODE | (best_cem << 13), 0u, 0u, 0u);
+   uint count = 2u * (best_cem >> 2) + 2u;
+   uint cvals[16];
+   [[unroll]] for (uint i = 0u; i < 16u; i++)
+      cvals[i] = i < 4u ? bitfieldExtract(pv0, int(i * 8u), 8) : i < 8u ? bitfieldExtract(pv1, int((i - 4u) * 8u), 8) : 0u;
+   if (best_range == 20u) {
+      [[unroll]] for (uint i = 0u; i < 8u; i++) {
+         if (i < count)
+            astc_put(blk, 17u + 8u * i, 8u, cvals[i]);
+      }
+   } else {
+      uint cursor = astc_put_trits(blk, 17u, 5u, cvals, count, 0u);
+      astc_put_trits(blk, cursor, 5u, cvals, count, 5u);
+   }
+
+   uint wvals[16];
+   [[unroll]] for (uint t = 0u; t < 16u; t++)
+      wvals[t] = bitfieldExtract(wall[t >> 3], int((t & 7u) * 4u), 4);
+   uvec4 wb = uvec4(0u);
+   uint cursor = 0u;
+   [[unroll]] for (uint g = 0u; g < 16u; g += 5u)
+      cursor = astc_put_trits(wb, cursor, 2u, wvals, 16u, g);
+   blk |= uvec4(bitfieldReverse(wb.w), bitfieldReverse(wb.z), bitfieldReverse(wb.y), bitfieldReverse(wb.x));
+   return blk;
+}
+
+void
+astc_store(ivec2 bpos, uvec4 blk)
+{
+   if (astc_row != 0u)
+      return;
+   uint bx = uint(bpos.x), by = uint(bpos.y);
+   uint64_t addr = dst_addr + uint64_t(gl_GlobalInvocationID.z) * dst_layer_stride;
+   if (dst_tiled != 0u) {
+      uint swz = bitfieldExtract(0xfc30u, int((by & 3u) * 4u), 4) ^ bitfieldExtract(0x5410u, int((bx & 3u) * 4u), 4);
+      addr += uint64_t(by >> 2) * dst_row_stride + uint64_t(bx >> 2) * 256u + uint64_t(swz) * 16u;
+   } else {
+      addr += uint64_t(by) * dst_row_stride + uint64_t(bx) * 16u;
+   }
+   astc_block_ref(addr).v = blk;
+}
+
+#endif
+
+uint
+bits(uvec4 b, uint off, uint n)
+{
+   uint w = off >> 5;
+   uint s = off & 31u;
+   uint v = b[w] >> s;
+   if (s != 0u && w < 3u)
+      v |= b[w + 1u] << (32u - s);
+   return n >= 32u ? v : v & ((1u << n) - 1u);
+}
+
+uint
+anchor(uint table, uint part)
+{
+   return (bc_anchor[table * 8u + (part >> 3)] >> ((part & 7u) * 4u)) & 0xfu;
+}
+
+void
+put(ivec2 bpos, uint j, uint i, uvec4 v)
+{
+#ifdef BC_ENCODE_ASTC
+   astc_rgba[j] = v.r | (v.g << 8) | (v.b << 16) | (v.a << 24);
+#else
+   ivec2 px = bpos * 4 + ivec2(i & 3u, i >> 2);
+   if (px.x < size.x && px.y < size.y)
+      imageStore(dst, ivec3(px, int(gl_GlobalInvocationID.z) + layer_offset), v);
+#endif
+}
+
+uvec3
+rgb565(uint c)
+{
+   uvec3 v = uvec3(c >> 11, (c >> 5) & 63u, c & 31u);
+   return uvec3((v.x << 3) | (v.x >> 2), (v.y << 2) | (v.y >> 4), (v.z << 3) | (v.z >> 2));
+}
+
+void
+bc1_palette(uvec2 c, bool four, uint punch_alpha, out uvec4 pal[4])
+{
+   uint c0 = c.x & 0xffffu;
+   uint c1 = c.x >> 16;
+   uvec3 e0 = rgb565(c0);
+   uvec3 e1 = rgb565(c1);
+
+   pal[0] = uvec4(e0, 255u);
+   pal[1] = uvec4(e1, 255u);
+   if (four || c0 > c1) {
+      pal[2] = uvec4((2u * e0 + e1 + 1u) / 3u, 255u);
+      pal[3] = uvec4((e0 + 2u * e1 + 1u) / 3u, 255u);
+   } else {
+      pal[2] = uvec4((e0 + e1 + 1u) / 2u, 255u);
+      pal[3] = uvec4(0u, 0u, 0u, punch_alpha);
+   }
+}
+
+uint
+bc4_unorm(uvec2 a, uint i)
+{
+   uint r0 = a.x & 0xffu;
+   uint r1 = (a.x >> 8) & 0xffu;
+   uint idx = bits(uvec4(a, 0u, 0u), 16u + 3u * i, 3u);
+
+   if (idx == 0u)
+      return r0;
+   if (idx == 1u)
+      return r1;
+   if (r0 > r1)
+      return ((8u - idx) * r0 + (idx - 1u) * r1 + 3u) / 7u;
+   if (idx == 6u)
+      return 0u;
+   if (idx == 7u)
+      return 255u;
+   return ((6u - idx) * r0 + (idx - 1u) * r1 + 2u) / 5u;
+}
+
+uint
+bc4_snorm(uvec2 a, uint i)
+{
+   int r0 = max(bitfieldExtract(int(a.x), 0, 8), -127);
+   int r1 = max(bitfieldExtract(int(a.x), 8, 8), -127);
+   uint idx = bits(uvec4(a, 0u, 0u), 16u + 3u * i, 3u);
+   int v;
+
+   if (idx == 0u)
+      v = r0;
+   else if (idx == 1u)
+      v = r1;
+   else if (r0 > r1)
+      v = int(round(float((8 - int(idx)) * r0 + (int(idx) - 1) * r1) / 7.0));
+   else if (idx == 6u)
+      v = -127;
+   else if (idx == 7u)
+      v = 127;
+   else
+      v = int(round(float((6 - int(idx)) * r0 + (int(idx) - 1) * r1) / 5.0));
+
+   return uint(v) & 0xffu;
+}
+
+int
+bc_interpolate(int a, int b, uint index, uint index_bits)
+{
+   uint w;
+   if (index_bits == 2u)
+      w = index == 0u ? 0u : index == 1u ? 21u : index == 2u ? 43u : 64u;
+   else if (index_bits == 3u)
+      w = (index < 4u ? (0x1b120900u >> (index * 8u)) : (0x40372e25u >> ((index - 4u) * 8u))) & 0xffu;
+   else
+      w = (index < 4u    ? (0x0d090400u >> (index * 8u))
+           : index < 8u  ? (0x1e1a1511u >> ((index - 4u) * 8u))
+           : index < 12u ? (0x2f2b2622u >> ((index - 8u) * 8u))
+                         : (0x403c3733u >> ((index - 12u) * 8u))) & 0xffu;
+   return ((64 - int(w)) * a + int(w) * b + 32) >> 6;
+}
+
+int
+bc6_signed_unquantize(int value, uint n)
+{
+   if (n >= 16u || value == 0)
+      return value;
+
+   bool neg = value < 0;
+   int v = abs(value);
+   if (v >= (1 << (n - 1u)) - 1)
+      v = 0x7fff;
+   else
+      v = ((v << 15) + 0x4000) >> (n - 1u);
+   return neg ? -v : v;
+}
+
+int
+bc6_unsigned_unquantize(int value, uint n)
+{
+   if (n >= 15u || value == 0)
+      return value;
+   if (value == (1 << n) - 1)
+      return 0xffff;
+   return ((value << 15) + 0x4000) >> (n - 1u);
+}
+
+void
+bc6(uvec4 b, bool is_signed, ivec2 bpos)
+{
+   uint mode_num;
+   uint off;
+   if ((b.x & 2u) != 0u) {
+      mode_num = (((b.x >> 1) & 0xeu) | (b.x & 1u)) + 2u;
+      off = 5u;
+   } else {
+      mode_num = b.x & 3u;
+      off = 2u;
+   }
+
+   uint mw = bc6_mode[mode_num];
+   if ((mw & 1u) == 0u) {
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, uvec4(0u, 0u, 0u, 0x3c00u));
+      return;
+   }
+
+   bool transformed = (mw & 2u) != 0u;
+   uint npart = (mw >> 2) & 7u;
+   uint nep = (mw >> 5) & 31u;
+   uint nidx = (mw >> 10) & 7u;
+   uvec3 delta = uvec3((mw >> 13) & 15u, (mw >> 17) & 15u, (mw >> 21) & 15u);
+   uint nfields = (mw >> 25) & 31u;
+   uint base = bc6_field_base[mode_num];
+
+   ivec3 ep[4] = ivec3[4](ivec3(0), ivec3(0), ivec3(0), ivec3(0));
+   for (uint f = 0u; f < nfields; f++) {
+      uint fw = bc6_field[base + f];
+      uint e = fw & 3u;
+      uint c = (fw >> 2) & 3u;
+      uint o = (fw >> 4) & 15u;
+      uint n = (fw >> 8) & 31u;
+      uint v = bits(b, off, n);
+      off += n;
+      if ((fw & (1u << 13)) != 0u)
+         v = bitfieldReverse(v) >> (32u - n);
+      ep[e][c] |= int(v << o);
+   }
+
+   uint nend = npart != 0u ? 4u : 2u;
+   if (transformed) {
+      for (uint e = 1u; e < nend; e++) {
+         for (uint c = 0u; c < 3u; c++) {
+            int d = bitfieldExtract(ep[e][c], 0, int(delta[c]));
+            ep[e][c] = (ep[0][c] + d) & ((1 << nep) - 1);
+         }
+      }
+   }
+
+   for (uint e = 0u; e < nend; e++) {
+      for (uint c = 0u; c < 3u; c++) {
+         if (is_signed)
+            ep[e][c] = bc6_signed_unquantize(bitfieldExtract(ep[e][c], 0, int(nep)), nep);
+         else
+            ep[e][c] = bc6_unsigned_unquantize(ep[e][c], nep);
+      }
+   }
+
+   uint part = 0u;
+   uint subsets = 0u;
+   uint anchor2 = 16u;
+   if (npart != 0u) {
+      part = bits(b, off, npart);
+      off += npart;
+      subsets = bc_partition2[part];
+      anchor2 = anchor(0u, part);
+   }
+
+   for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j)) {
+      uint before = i == 0u ? 0u : 1u + (i > anchor2 ? 1u : 0u);
+      bool is_anchor = i == 0u || i == anchor2;
+      uint idx = bits(b, off + nidx * i - before, is_anchor ? nidx - 1u : nidx);
+      uint s = (subsets >> (2u * i)) & 3u;
+      uvec4 h = uvec4(0u, 0u, 0u, 0x3c00u);
+      for (uint c = 0u; c < 3u; c++) {
+         int v = bc_interpolate(ep[2u * s][c], ep[2u * s + 1u][c], idx, nidx);
+         if (is_signed)
+            h[c] = v < 0 ? uint(((-v) * 31) / 32) | 0x8000u : uint((v * 31) / 32);
+         else
+            h[c] = uint((v * 31) / 64);
+      }
+      put(bpos, j, i, h);
+   }
+}
+
+uint
+bc7_expand(uint v, uint n)
+{
+   return ((v << (8u - n)) | (v >> (2u * n - 8u))) & 0xffu;
+}
+
+void
+bc7(uvec4 b, ivec2 bpos)
+{
+   if ((b.x & 0xffu) == 0u) {
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, uvec4(0u));
+      return;
+   }
+
+   uint mode = findLSB(b.x & 0xffu);
+   uint mw = bc7_mode[mode];
+   uint nsub = mw & 3u;
+   uint npart = (mw >> 2) & 7u;
+   bool has_rot = (mw & (1u << 5)) != 0u;
+   bool has_sel = (mw & (1u << 6)) != 0u;
+   uint ncolor = (mw >> 7) & 15u;
+   uint nalpha = (mw >> 11) & 15u;
+   bool ep_pbits = (mw & (1u << 15)) != 0u;
+   bool shared_pbits = (mw & (1u << 16)) != 0u;
+   uint nidx = (mw >> 17) & 7u;
+   uint nsec = (mw >> 20) & 7u;
+
+   uint off = mode + 1u;
+   uint part = bits(b, off, npart);
+   off += npart;
+
+   uint subsets = nsub == 2u ? bc_partition2[part] : nsub == 3u ? bc_partition3[part] : 0u;
+
+   uint rotation = 0u;
+   if (has_rot) {
+      rotation = bits(b, off, 2u);
+      off += 2u;
+   }
+
+   uint sel = 0u;
+   if (has_sel) {
+      sel = bits(b, off, 1u);
+      off += 1u;
+   }
+
+   uvec4 ep[6];
+   for (uint c = 0u; c < 3u; c++) {
+      for (uint e = 0u; e < nsub * 2u; e++) {
+         ep[e][c] = bits(b, off, ncolor);
+         off += ncolor;
+      }
+   }
+
+   uint ncomp = 3u;
+   if (nalpha > 0u) {
+      for (uint e = 0u; e < nsub * 2u; e++) {
+         ep[e][3] = bits(b, off, nalpha);
+         off += nalpha;
+      }
+      ncomp = 4u;
+   } else {
+      for (uint e = 0u; e < nsub * 2u; e++)
+         ep[e][3] = 255u;
+   }
+
+   if (ep_pbits) {
+      for (uint e = 0u; e < nsub * 2u; e++) {
+         uint p = bits(b, off, 1u);
+         off += 1u;
+         for (uint c = 0u; c < ncomp; c++)
+            ep[e][c] = (ep[e][c] << 1) | p;
+      }
+   } else if (shared_pbits) {
+      for (uint s = 0u; s < nsub; s++) {
+         uint p = bits(b, off, 1u);
+         off += 1u;
+         for (uint e = 0u; e < 2u; e++) {
+            for (uint c = 0u; c < ncomp; c++)
+               ep[s * 2u + e][c] = (ep[s * 2u + e][c] << 1) | p;
+         }
+      }
+   }
+
+   uint pb = (ep_pbits || shared_pbits) ? 1u : 0u;
+   for (uint e = 0u; e < nsub * 2u; e++) {
+      for (uint c = 0u; c < 3u; c++)
+         ep[e][c] = bc7_expand(ep[e][c], ncolor + pb);
+      if (nalpha > 0u)
+         ep[e][3] = bc7_expand(ep[e][3], nalpha + pb);
+   }
+
+   uint a1 = nsub == 2u ? anchor(0u, part) : nsub == 3u ? anchor(1u, part) : 16u;
+   uint a2 = nsub == 3u ? anchor(2u, part) : 16u;
+
+   for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j)) {
+      uint before = i == 0u ? 0u : 1u + (i > a1 ? 1u : 0u) + (i > a2 ? 1u : 0u);
+      bool is_anchor = i == 0u || i == a1 || i == a2;
+      uint sec_off = off + 16u * nidx - nsub + nsec * i - before;
+      uint idx0 = bits(b, off + nidx * i - before, is_anchor ? nidx - 1u : nidx);
+      uint idx1 = nsec != 0u ? bits(b, sec_off, is_anchor ? nsec - 1u : nsec) : 0u;
+      uint s = (subsets >> (2u * i)) & 3u;
+
+      uint cidx = sel != 0u ? idx1 : idx0;
+      uint cbits = sel != 0u ? nsec : nidx;
+      uint aidx = (nsec != 0u && sel == 0u) ? idx1 : idx0;
+      uint abits = (nsec != 0u && sel == 0u) ? nsec : nidx;
+
+      uvec4 r;
+      for (uint c = 0u; c < 3u; c++)
+         r[c] = uint(bc_interpolate(int(ep[2u * s][c]), int(ep[2u * s + 1u][c]), cidx, cbits));
+      r[3] = uint(bc_interpolate(int(ep[2u * s][3]), int(ep[2u * s + 1u][3]), aidx, abits));
+
+      if (rotation != 0u) {
+         uint t = r[rotation - 1u];
+         r[rotation - 1u] = r[3];
+         r[3] = t;
+      }
+      put(bpos, j, i, r);
+   }
+}
+
+void
+main()
+{
+#ifdef BC_ENCODE_ASTC
+   astc_row = gl_GlobalInvocationID.x & 3u;
+   ivec2 bpos = ivec2(gl_GlobalInvocationID.x >> 2, gl_GlobalInvocationID.y);
+   bool inside = all(lessThan(bpos, block_extent));
+   bpos = min(bpos, block_extent - 1);
+#else
+   ivec2 bpos = ivec2(gl_GlobalInvocationID.xy);
+   if (any(greaterThanEqual(bpos, block_extent)))
+      return;
+#endif
+   bpos += block_offset;
+
+   bool small = FORMAT == BC1_RGB || FORMAT == BC1_RGBA || FORMAT == BC4_UNORM || FORMAT == BC4_SNORM;
+   uint64_t addr = src + uint64_t(gl_GlobalInvocationID.z) * layer_stride + uint64_t(bpos.y) * row_stride +
+                   uint64_t(bpos.x) * (small ? 8u : 16u);
+   uvec4 b = small ? uvec4(block8_ref(addr).v, 0u, 0u) : block16_ref(addr).v;
+
+   if (FORMAT == BC1_RGB || FORMAT == BC1_RGBA) {
+      uvec4 pal[4];
+      bc1_palette(b.xy, false, FORMAT == BC1_RGBA ? 0u : 255u, pal);
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, pal[(b.y >> (2u * i)) & 3u]);
+   } else if (FORMAT == BC2) {
+      uvec4 pal[4];
+      bc1_palette(b.zw, true, 255u, pal);
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j)) {
+         uvec4 v = pal[(b.w >> (2u * i)) & 3u];
+         v.a = bits(b, 4u * i, 4u) * 17u;
+         put(bpos, j, i, v);
+      }
+   } else if (FORMAT == BC3) {
+      uvec4 pal[4];
+      bc1_palette(b.zw, true, 255u, pal);
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j)) {
+         uvec4 v = pal[(b.w >> (2u * i)) & 3u];
+         v.a = bc4_unorm(b.xy, i);
+         put(bpos, j, i, v);
+      }
+   } else if (FORMAT == BC4_UNORM) {
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, uvec4(bc4_unorm(b.xy, i), 0u, 0u, 0u));
+   } else if (FORMAT == BC4_SNORM) {
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, uvec4(bc4_snorm(b.xy, i), 0u, 0u, 0u));
+   } else if (FORMAT == BC5_UNORM) {
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, uvec4(bc4_unorm(b.xy, i), bc4_unorm(b.zw, i), 0u, 0u));
+   } else if (FORMAT == BC5_SNORM) {
+      for (uint j = 0u, i = texel(0u); j < TEXELS; j++, i = texel(j))
+         put(bpos, j, i, uvec4(bc4_snorm(b.xy, i), bc4_snorm(b.zw, i), 0u, 0u));
+   } else if (FORMAT == BC6H_UF16 || FORMAT == BC6H_SF16) {
+      bc6(b, FORMAT == BC6H_SF16, bpos);
+   } else if (FORMAT == BC7) {
+      bc7(b, bpos);
+   }
+
+#ifdef BC_ENCODE_ASTC
+   uvec4 astc_blk = astc_encode(FORMAT == BC1_RGBA || FORMAT == BC2 || FORMAT == BC3 || FORMAT == BC7);
+   if (inside)
+      astc_store(bpos, astc_blk);
+#endif
+}

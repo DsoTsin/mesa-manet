@@ -96,10 +96,11 @@ u_memstream_close(struct u_memstream *mem)
 
 #ifdef _WIN32
    u_memstream_update_buffer(mem);
-   remove(mem->temp);
-#endif
-
    fclose(f);
+   remove(mem->temp);
+#else
+   fclose(f);
+#endif
 }
 
 int

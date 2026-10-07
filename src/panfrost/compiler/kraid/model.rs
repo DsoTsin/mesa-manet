@@ -59,6 +59,10 @@ pub struct FAUModel {
 }
 
 impl FAUModel {
+    pub fn user_page_words(&self) -> u16 {
+        self.user_fau_page_words
+    }
+
     pub fn user_page_idx(&self, word_idx: u16) -> u8 {
         let page = word_idx / self.user_fau_page_words;
         assert!(page < 4);
@@ -88,6 +92,10 @@ pub trait Model {
     fn op_is_message(&self, op: &Op) -> bool;
 
     fn op_src_is_staging_reg(&self, op: &Op, src: &Src) -> bool;
+
+    fn op_src_is_reg_only(&self, op: &Op, src: &Src) -> bool {
+        self.op_src_is_staging_reg(op, src) || v9_op_src_is_reg_only(op)
+    }
 
     fn op_src_is_64bit(&self, op: &Op, src: &Src) -> bool;
 
@@ -146,7 +154,7 @@ impl ValhallModel {
         use crate::isa::{SmallConstantTable, v9};
         let sc_table = SmallConstantTable(v9::SmallConstantT::collect(arch));
         let fau = FAUModel {
-            user_fau_page_words: 64,
+            user_fau_page_words: if arch >= 15 { 128 } else { 64 },
             small_constants: sc_table,
             special_fn: Box::new(move |special| {
                 ValhallModel::special_fau(special, arch)
@@ -351,6 +359,15 @@ impl Model for ValhallModel {
                     None
                 }
             }
+            Op::PilotJump(op) => {
+                if ptr::eq(&op.fau, src) {
+                    preg(PreloadReg::PilotFau)
+                } else if ptr::eq(&op.srt, src) {
+                    preg(PreloadReg::PilotSrt)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -399,6 +416,8 @@ impl Model for ValhallModel {
                 BlendInputSrc0 => 2,
                 BlendInputSrc1 => 6,
                 BlendReturnAddr => 10,
+                PilotFau => 0,
+                PilotSrt => 2,
             }
         } else {
             match preload {
@@ -425,6 +444,8 @@ impl Model for ValhallModel {
                 BlendInputSrc0 => 0,
                 BlendInputSrc1 => 4,
                 BlendReturnAddr => 48,
+                PilotFau => 0,
+                PilotSrt => 2,
             }
         };
 

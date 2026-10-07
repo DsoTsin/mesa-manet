@@ -251,6 +251,8 @@ index("nir_descriptor_type", "desc_type")
 # The NIR resource type according to VkSpirvResourceTypeFlagsKHR.
 index("nir_resource_type", "resource_type")
 
+index("unsigned", "tensor_rank")
+
 # The nir_alu_type of input data to a store or conversion
 index("nir_alu_type", "src_type")
 
@@ -903,6 +905,12 @@ intrinsic("vulkan_resource_reindex", src_comp=[0, 1], dest_comp=0,
 intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
           indices=[DESC_TYPE], flags=[CAN_ELIMINATE, CAN_REORDER])
 
+intrinsic("tensor_read_arm", src_comp=[-1, -1, 0], dest_comp=0,
+          indices=[ACCESS], flags=[CAN_ELIMINATE])
+intrinsic("tensor_write_arm", src_comp=[-1, -1, 0], indices=[ACCESS])
+intrinsic("tensor_size_arm", src_comp=[-1], dest_comp=1, bit_sizes=[32],
+          indices=[BASE, TENSOR_RANK], flags=[CAN_ELIMINATE, CAN_REORDER])
+
 # atomic intrinsics
 #
 # All of these atomic memory operations read a value from memory, compute a new
@@ -1529,7 +1537,7 @@ intrinsic("cmat_load", src_comp=[-1, -1, 1], indices=[MATRIX_LAYOUT])
 intrinsic("cmat_store", src_comp=[-1, -1, 1], indices=[MATRIX_LAYOUT])
 intrinsic("cmat_length", src_comp=[], dest_comp=1, indices=[CMAT_DESC], bit_sizes=[32])
 intrinsic("cmat_muladd", src_comp=[-1, -1, -1, -1], indices=[SATURATE, CMAT_SIGNED_MASK])
-intrinsic("cmat_convert", src_comp=[-1, -1], indices=[SATURATE, CMAT_SIGNED_MASK, FP_MATH_CTRL])
+intrinsic("cmat_convert", src_comp=[-1, -1], indices=[SATURATE, CMAT_SIGNED_MASK, FP_MATH_CTRL, ROUNDING_MODE])
 intrinsic("cmat_unary_op", src_comp=[-1, -1], indices=[ALU_OP, FP_MATH_CTRL])
 intrinsic("cmat_binary_op", src_comp=[-1, -1, -1], indices=[ALU_OP, FP_MATH_CTRL])
 intrinsic("cmat_scalar_op", src_comp=[-1, -1, -1], indices=[ALU_OP, FP_MATH_CTRL])
@@ -1772,6 +1780,11 @@ intrinsic("load_var_special_pan", src_comp=[1], dest_comp=0, bit_sizes=[32],
 intrinsic("load_shader_output_pan", dest_comp=1, src_comp=[], bit_sizes=[32],
           indices=[], flags=[CAN_REORDER, CAN_ELIMINATE])
 
+intrinsic("load_pilot_arg_pan", dest_comp=1, src_comp=[], bit_sizes=[64],
+          indices=[BASE], flags=[CAN_REORDER, CAN_ELIMINATE])
+
+intrinsic("jump_pilot_pan", src_comp=[1, 1, 1])
+
 # The hardware-native vertex ID and the associated offset such that
 #   vertex_id = raw_vertex_id + raw_vertex_offset
 # For a non-indexed draw the raw vertex ID is the zero-based position of the
@@ -1787,7 +1800,7 @@ system_value("raw_vertex_offset", 1)
 # result = A * B + C. src_type is the multiplicand (A/B) type and selects the
 # MMUL variant: float32 -> f32, float16 -> v2f16, int8 -> v4s8, uint8 -> v4u8.
 intrinsic("cmat_muladd_pan", src_comp=[1, 1, 1], dest_comp=1, bit_sizes=[32],
-          indices=[SRC_TYPE], flags=SUBGROUP_FLAGS)
+          indices=[SRC_TYPE, DEST_TYPE, FLAGS], flags=SUBGROUP_FLAGS)
 
 # Intrinsics used by the Midgard/Bifrost blend pipeline. These are defined
 # within a blend shader to read/write the raw value from the tile buffer,
@@ -1843,6 +1856,9 @@ load("tex_pan", [2, 1], indices=[ACCESS, DEST_TYPE], flags=[CAN_ELIMINATE])
 # src = { coords, desc }
 intrinsic("lea_tex_pan", [2, 1], dest_comp=3, indices=[SRC_TYPE], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
 
+load("tensor_pan", [1, 4, 0], indices=[ACCESS, RANGE], flags=[CAN_ELIMINATE])
+store("tensor_pan", [1, 4], indices=[ACCESS])
+
 # Loads the sampler paramaters <min_lod, max_lod, lod_bias>
 # src[] = { sampler_index }
 load("sampler_lod_parameters", [1], flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -1895,6 +1911,11 @@ intrinsic("lea_attr_pan", [1, 1, 1], dest_comp=3, bit_sizes=[32],
 intrinsic("lea_buf_pan", [1, 1], dest_comp=2, bit_sizes=[32],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
+intrinsic("rt_trace_begin_pan", [1, 1, 3, 3, 1, 1, 1, 1], dest_comp=2,
+          bit_sizes=[32])
+
+intrinsic("rt_trace_resume_pan", [1, 1, 2], dest_comp=2, bit_sizes=[32])
+
 # Load input attachment target
 # src[] = { input_attachment_index }
 # valid targets are:
@@ -1923,6 +1944,8 @@ system_value("multisampled_pan", 1, bit_sizes=[32])
 # noperspective, this is 32 bits and starts from VARYING_SLOT_VAR0.
 system_value("noperspective_varyings_pan", 1, bit_sizes=[32])
 
+system_value("clip_cull_count_pan", 1, bit_sizes=[32])
+
 # Render area of the framebuffer.  Used by framebuffer load shaders.
 # The returned vector is (min_x, min_y, max_x, max_y)
 system_value("fb_render_area_pan", 4, bit_sizes=[16])
@@ -1936,6 +1959,7 @@ system_value("frame_arg_pan", 1, bit_sizes=[64])
 
 # Cumulative coverage mask, the start of the atest/zt/blend chain
 system_value("cumulative_coverage_pan", 1, bit_sizes=[32])
+intrinsic("instrument_block_pan", indices=[BASE])
 system_value("blend_descriptor_pan", 1, bit_sizes=[64], indices=[BASE])
 # Bundle of system values that v9+ architectures always package together
 # in a preloaded register:

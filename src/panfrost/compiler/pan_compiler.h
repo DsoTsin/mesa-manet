@@ -12,12 +12,23 @@
 
 #include "compiler/nir/nir_defines.h"
 #include "compiler/shader_enums.h"
+#include "panfrost/model/pan_model.h"
 #include "util/bitset.h"
 #include "util/u_dynarray.h"
 #include "util/format/u_formats.h"
 #include "util/shader_stats.h"
 
 struct pan_shader_info;
+struct pan_compile_preamble;
+struct pan_fau_virtual;
+
+#define PAN_MAX_PUSH 256
+
+static inline uint32_t
+pan_loop_weight(unsigned depth)
+{
+   return 1u << (4 * MIN2(depth, 6));
+}
 
 uint32_t pan_get_compiler_flags(unsigned arch);
 
@@ -36,6 +47,7 @@ struct pan_compile_inputs {
    uint32_t gpu_variant;
    bool is_blend, is_blit;
    bool no_idvs;
+   bool screen_space_position;
    uint32_t view_mask;
 
    /* Number of colour buffers gl_FragColor broadcasts to.  Only useful for
@@ -47,9 +59,12 @@ struct pan_compile_inputs {
    /* Whether or not descriptor accesses should add additional robustness
     * checks. */
    bool robust_descriptors;
+   bool image_access_in_bounds;
 
    /* Varying layout in memory, if known */
    const struct pan_varying_layout *varying_layout;
+
+   uint8_t fixed_function_blend;
 
    /* Settings to move constants into the FAU. */
    struct {
@@ -57,10 +72,32 @@ struct pan_compile_inputs {
       uint32_t reserved;
       /* Mask of UBOs that may be moved to push constants */
       uint32_t pushable_ubos;
+      /* UBOs are addressed by Valhall resource handles (Vulkan): every UBO
+       * with a constant handle is pushable, and relocations record the
+       * handle's table and index (pan_ubo_reloc_key()) instead of a UBO
+       * number. pushable_ubos only needs to be non-zero. */
+      bool push_ubo_handles;
       /* Whether the backend may promote immediates into the FAU */
       bool promote_immediates;
+      struct pan_fau_virtual *virt;
+      BITSET_DECLARE(pilot_volatile, PAN_MAX_PUSH);
    } fau;
+
+   bool instrument;
+   uint32_t instrument_fau;
+   struct pan_compile_preamble *preamble;
+   bool disable_preamble;
 };
+
+#define PAN_INSTRUMENTATION_METRICS      6
+#define PAN_INSTRUMENTATION_SLOT_SIZE    (PAN_INSTRUMENTATION_METRICS * 8)
+#define PAN_INSTRUMENTATION_TABLE_STRIDE 32
+
+static inline unsigned
+pan_instrumentation_slot(mesa_shader_stage stage)
+{
+   return stage == MESA_SHADER_FRAGMENT ? 1 : 0;
+}
 
 /* Every panfrost compilation pipeline should adhere to:
  * 1. Driver-specific early lowering
@@ -126,18 +163,6 @@ enum pan_special_varying {
 
 enum { PAN_VERTEX_ID = 16, PAN_INSTANCE_ID = 17, PAN_MAX_ATTRIBUTE };
 
-/* Architecturally, Bifrost/Valhall can address 128 FAU slots of 64-bits each.
- * In practice, the maximum number of FAU slots is limited by implementation.
- * All known Bifrost and Valhall devices limit to 64 FAU slots. Therefore the
- * maximum number of 32-bit words is 128, since there are 2 words per FAU slot.
- *
- * Midgard can push at most 92 words, so this bound suffices. The Midgard
- * compiler pushes less than this, as Midgard uses register-mapped uniforms
- * instead of FAU, preventing large numbers of uniforms to be pushed for
- * nontrivial programs.
- */
-#define PAN_MAX_PUSH 128
-
 /* Architectural invariants (Midgard and Bifrost): UBO must be <= 2^16 bytes so
  * an offset to a word must be < 2^16. There are less than 2^8 UBOs */
 
@@ -154,6 +179,7 @@ union pan_fau_entry {
 struct pan_fau_layout {
    union pan_fau_entry words[PAN_MAX_PUSH];
    BITSET_DECLARE(is_const, PAN_MAX_PUSH);
+   BITSET_DECLARE(is_pilot, PAN_MAX_PUSH);
 
    /* FAU space reserved by the driver, in units of 32-bit words.
     * This always goes at the start of the FAU and its contents are
@@ -202,7 +228,68 @@ pan_fau_emit_reloc(struct pan_fau_layout *fau, struct pan_ubo_relocation reloc)
 
 #define pan_fau_foreach_reloc(fau, i)                                          \
    for (unsigned i = (fau)->reserved; i < (fau)->count; ++i)                   \
-      if (!BITSET_TEST((fau)->is_const, i))
+      if (!BITSET_TEST((fau)->is_const, i) && !BITSET_TEST((fau)->is_pilot, i))
+
+#define PAN_FAU_VIRTUAL_WORDS (4 * PAN_MAX_PUSH)
+
+enum pan_fau_value_source {
+   PAN_FAU_VALUE_PILOT,
+   PAN_FAU_VALUE_UBO,
+};
+
+struct pan_fau_value {
+   uint16_t word;
+   uint8_t size;
+   uint8_t align;
+   uint8_t source;
+   int16_t alias;
+   struct pan_ubo_relocation ubo;
+   uint32_t handle;
+   bool loadable;
+};
+
+struct pan_fau_virtual {
+   unsigned word_count;
+   unsigned value_count;
+   struct pan_fau_value values[PAN_MAX_PUSH];
+   uint16_t value_of[PAN_FAU_VIRTUAL_WORDS];
+   int16_t map[PAN_FAU_VIRTUAL_WORDS];
+   bool placed;
+};
+
+static inline unsigned
+pan_fau_virtual_add(struct pan_fau_virtual *virt, unsigned size,
+                    unsigned align, enum pan_fau_value_source source,
+                    struct pan_ubo_relocation ubo)
+{
+   assert(virt->value_count < PAN_MAX_PUSH);
+   unsigned word = ALIGN_POT(virt->word_count, MAX2(align, 2));
+   assert(word + size <= PAN_FAU_VIRTUAL_WORDS);
+   unsigned index = virt->value_count++;
+   virt->values[index] = (struct pan_fau_value){
+      .word = word,
+      .size = size,
+      .align = align,
+      .source = source,
+      .alias = -1,
+      .ubo = ubo,
+   };
+   for (unsigned w = 0; w < size; w++)
+      virt->value_of[word + w] = index;
+   virt->word_count = ALIGN_POT(word + size, 2);
+   return index;
+}
+
+static inline unsigned
+pan_fau_virtual_words(const struct pan_fau_virtual *virt)
+{
+   unsigned words = 0;
+   for (unsigned i = 0; i < virt->value_count; i++) {
+      if (virt->values[i].alias < 0)
+         words += virt->values[i].size;
+   }
+   return words;
+}
 
 #define pan_fau_foreach_imm(fau, i)                                            \
    for (unsigned i = (fau)->reserved; i < (fau)->count; ++i)                   \
@@ -238,14 +325,14 @@ enum pan_varying_section {
 
 struct pan_varying_slot {
    /* GLSL/SPIR-V location of the varying slot */
-   gl_varying_slot location : 7;
+   unsigned location : 7;
 
    /* Format of the varying slot in memory
     * (really nir_alu_type, but the compiler screams at you if you don't lie) */
    unsigned alu_type : 8;
    unsigned ncomps : 3;
 
-   enum pan_varying_section section : 2;
+   unsigned section : 2;
 
    /* Offset of the varying slot in the specified section of the varying
     * buffer.  For special VS outputs (see PAN_ATTRIB_VARYING_BITS), this is
@@ -294,7 +381,7 @@ PRAGMA_DIAGNOSTIC_PUSH
 PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
 struct pan_varying_layout {
    uint8_t count;
-   enum pan_varying_knowledge known;
+   uint8_t known;
    /* Size of the generic section, in bytes */
    uint16_t generic_size_B;
 
@@ -449,6 +536,7 @@ struct pan_shader_info {
          bool early_fragment_tests;
          bool can_early_z, can_fpk;
          bool untyped_color_outputs;
+         uint8_t fixed_function_blend;
          struct {
             bool ld_tile;
             bool wait_or_tile_access_before_atest_zsemit;
@@ -466,6 +554,9 @@ struct pan_shader_info {
           * more than just point size.
           */
          bool needs_extended_fifo;
+
+         uint8_t clip_distance_count;
+         uint8_t cull_distance_count;
 
          /* If the primary shader writes point size, the Valhall
           * driver may need a variant that does not write point
@@ -534,6 +625,8 @@ struct pan_shader_info {
    /* True if the shader contains a shader_clock instruction. */
    bool has_shader_clk_instr;
 
+   bool instrumented;
+
    unsigned sampler_count;
    unsigned texture_count;
    unsigned ubo_count;
@@ -567,6 +660,11 @@ struct pan_shader_info {
 
 void pan_shader_update_info(struct pan_shader_info *info, nir_shader *s,
                             const struct pan_compile_inputs *inputs);
+
+struct pan_compile_preamble {
+   struct pan_shader_info info;
+   struct util_dynarray binary;
+};
 
 uint16_t pan_to_bytemask(unsigned bytes, unsigned mask);
 
@@ -624,6 +722,29 @@ static inline unsigned
 pan_res_handle_get_index(unsigned handle)
 {
    return handle & BITFIELD_MASK(24);
+}
+
+/* UBO relocation keys used with pan_compile_inputs::fau.push_ubo_handles:
+ * the resource table in the top 6 bits and the index in the low 10 bits. */
+#define PAN_UBO_RELOC_INDEX_BITS 10
+
+static inline unsigned
+pan_ubo_reloc_key(unsigned table, unsigned index)
+{
+   assert(table < 64 && index < (1u << PAN_UBO_RELOC_INDEX_BITS));
+   return (table << PAN_UBO_RELOC_INDEX_BITS) | index;
+}
+
+static inline unsigned
+pan_ubo_reloc_table(unsigned key)
+{
+   return key >> PAN_UBO_RELOC_INDEX_BITS;
+}
+
+static inline unsigned
+pan_ubo_reloc_index(unsigned key)
+{
+   return key & BITFIELD_MASK(PAN_UBO_RELOC_INDEX_BITS);
 }
 
 /*

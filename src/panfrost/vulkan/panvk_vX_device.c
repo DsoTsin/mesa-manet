@@ -16,6 +16,9 @@
 #include "vk_common_entrypoints.h"
 #include "vk_drm_syncobj.h"
 
+#if PAN_ARCH >= 15
+#include "panvk_ray_tracing.h"
+#endif
 #include "panvk_buffer.h"
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
@@ -33,6 +36,10 @@
 
 #include "genxml/decode.h"
 #include "genxml/gen_macros.h"
+
+#ifdef HAVE_PAN_KMOD_KBASE
+#include <fcntl.h>
+#endif
 
 #include "kmod/pan_kmod.h"
 #include "util/os_file.h"
@@ -294,12 +301,73 @@ panvk_device_get_timestamp(struct vk_device *vk_dev, uint64_t *timestamp)
    return VK_SUCCESS;
 }
 
+#ifdef HAVE_PAN_KMOD_KBASE
+/* Sparse binding over kbase (which has no DRM syncobjs and no explicit-VA
+ * vm_bind) is not implemented yet: the BIND queue family is created as a
+ * stub that fails at submit time with a clear message.  The GPU queue
+ * family uses the real kbase CSF submission path. */
+static bool
+panvk_kbase_stub_queues(const struct panvk_device *dev)
+{
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+
+   return phys_dev->kbase_node_path[0] != '\0';
+}
+
+static VkResult
+panvk_kbase_stub_queue_submit(struct vk_queue *queue,
+                              struct vk_queue_submit *submit)
+{
+   return vk_queue_set_lost(
+      queue, "kbase: sparse binding queues are not implemented yet");
+}
+
+static VkResult
+panvk_kbase_stub_queue_create(struct panvk_device *dev,
+                              const VkDeviceQueueCreateInfo *create_info,
+                              uint32_t queue_idx,
+                              struct vk_queue **out_queue)
+{
+   struct vk_queue *queue = vk_zalloc(&dev->vk.alloc, sizeof(*queue), 8,
+                                      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+   if (!queue)
+      return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   VkResult result = vk_queue_init(queue, &dev->vk, create_info, queue_idx);
+   if (result != VK_SUCCESS) {
+      vk_free(&dev->vk.alloc, queue);
+      return result;
+   }
+
+   queue->driver_submit = panvk_kbase_stub_queue_submit;
+   *out_queue = queue;
+   return VK_SUCCESS;
+}
+
+static void
+panvk_kbase_stub_queue_destroy(struct vk_queue *queue)
+{
+   struct vk_device *vk_dev = queue->base.device;
+
+   vk_queue_finish(queue);
+   vk_free(&vk_dev->alloc, queue);
+}
+#endif /* HAVE_PAN_KMOD_KBASE */
+
 static VkResult
 panvk_queue_create(struct panvk_device *dev,
                    const VkDeviceQueueCreateInfo *create_info,
                    uint32_t queue_idx,
                    struct vk_queue **out_queue)
 {
+#ifdef HAVE_PAN_KMOD_KBASE
+   if (panvk_kbase_stub_queues(dev) &&
+       create_info->queueFamilyIndex == PANVK_QUEUE_FAMILY_BIND)
+      return panvk_kbase_stub_queue_create(dev, create_info, queue_idx,
+                                           out_queue);
+#endif
+
    switch (create_info->queueFamilyIndex) {
    case PANVK_QUEUE_FAMILY_GPU:
       return panvk_per_arch(create_gpu_queue)(
@@ -314,6 +382,16 @@ panvk_queue_create(struct panvk_device *dev,
 static void
 panvk_queue_destroy(struct vk_queue *queue)
 {
+#ifdef HAVE_PAN_KMOD_KBASE
+   struct panvk_device *dev = to_panvk_device(queue->base.device);
+
+   if (panvk_kbase_stub_queues(dev) &&
+       queue->queue_family_index == PANVK_QUEUE_FAMILY_BIND) {
+      panvk_kbase_stub_queue_destroy(queue);
+      return;
+   }
+#endif
+
    switch (queue->queue_family_index) {
    case PANVK_QUEUE_FAMILY_GPU:
       panvk_per_arch(destroy_gpu_queue)(queue);
@@ -425,16 +503,49 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    device->vk.shader_ops = &panvk_per_arch(device_shader_ops);
    device->vk.check_status = panvk_device_check_status;
    device->vk.get_timestamp = panvk_device_get_timestamp;
-   device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+   if (vk_sync_type_is_drm_syncobj(&physical_device->drm_syncobj_type))
+      device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+
+   const VkDeviceQueueShaderCoreControlCreateInfoARM *core_ctrl =
+      vk_find_struct_const(pCreateInfo->pNext,
+                           DEVICE_QUEUE_SHADER_CORE_CONTROL_CREATE_INFO_ARM);
+   device->shader_core_count = core_ctrl ? core_ctrl->shaderCoreCount : 0;
+   device->dvs_enabled = PAN_ARCH >= 12;
+#if PAN_ARCH >= 15
+   panvk_per_arch(device_init_accel_struct)(device);
+#endif
+   simple_mtx_init(&device->ray_query.lock, mtx_plain);
+   util_dynarray_init(&device->ray_query.retired, NULL);
 
    device->kmod.allocator = (struct pan_kmod_allocator){
       .zalloc = panvk_kmod_zalloc,
       .free = panvk_kmod_free,
       .priv = &device->vk.alloc,
    };
-   device->kmod.dev = pan_kmod_dev_create(
-      os_dupfd_cloexec(physical_device->kmod.dev->fd),
-      physical_device->kmod.dev->flags, &device->kmod.allocator);
+
+#ifdef HAVE_PAN_KMOD_KBASE
+   if (physical_device->kbase_node_path[0]) {
+      /* dup()ing a kbase fd would share the physical device's kbase
+       * context, whose version handshake can only be done once; open a
+       * fresh context instead.  A separate context also means a separate
+       * GPU address space, which matches the per-logical-device VM
+       * semantics of the DRM backends. */
+      int kbase_fd =
+         open(physical_device->kbase_node_path, O_RDWR | O_CLOEXEC);
+      if (kbase_fd >= 0) {
+         device->kmod.dev = pan_kmod_dev_create_with_driver(
+            kbase_fd, physical_device->kmod.dev->flags, "kbase", NULL,
+            &device->kmod.allocator);
+         if (!device->kmod.dev)
+            close(kbase_fd);
+      }
+   } else
+#endif
+   {
+      device->kmod.dev = pan_kmod_dev_create(
+         os_dupfd_cloexec(physical_device->kmod.dev->fd),
+         physical_device->kmod.dev->flags, &device->kmod.allocator);
+   }
 
    if (!device->kmod.dev) {
       result = panvk_errorf(instance, VK_ERROR_OUT_OF_HOST_MEMORY,
@@ -442,7 +553,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       goto err_finish_dev;
    }
 
-   if (PANVK_DEBUG(TRACE) || PANVK_DEBUG(SYNC) || PANVK_DEBUG(DUMP)) {
+   if (PANVK_DEBUG(TRACE) || PANVK_DEBUG(SYNC) || PANVK_DEBUG(DUMP) || PANVK_DEBUG(KBASE_DIAG)) {
       device->debug.decode_ctx = pandecode_create_context(false);
       pandecode_set_disassemble(device->debug.decode_ctx, pan_disassemble);
    }
@@ -453,6 +564,14 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       device->kmod.dev, PANVK_VA_RESERVE_BOTTOM);
    uint64_t user_va_end = physical_device->memory.max_supported_va;
    uint32_t vm_flags = PAN_ARCH < 10 ? PAN_KMOD_VM_FLAG_AUTO_VA : 0;
+
+#ifdef HAVE_PAN_KMOD_KBASE
+   /* kbase assigns all GPU VAs itself (SAME_VA memory model); mapping at a
+    * caller-chosen address is not possible, so use AUTO_VA regardless of
+    * the architecture. */
+   if (physical_device->kbase_node_path[0])
+      vm_flags = PAN_KMOD_VM_FLAG_AUTO_VA;
+#endif
 
    device->kmod.vm =
       pan_kmod_vm_create(device->kmod.dev, vm_flags,
@@ -467,7 +586,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
 
 #if PAN_ARCH >= 10
    const struct drm_panthor_csif_info *csif_info =
-      panthor_kmod_get_csif_props(device->kmod.dev);
+      panvk_get_csif_props(device);
 
    assert(csif_info->scoreboard_slot_count <= 16);
    device->csf.sb.count = csif_info->scoreboard_slot_count;
@@ -612,6 +731,7 @@ err_free_draw_ctx:
 err_free_mem_cache:
 #endif
    vk_pipeline_cache_destroy(device->vk.mem_cache, NULL);
+   panvk_device_finish_bg_compile(device);
 err_free_precomp:
    panvk_precomp_cleanup(device);
 err_free_priv_bos:
@@ -635,6 +755,8 @@ err_destroy_kdev:
    pan_kmod_dev_destroy(device->kmod.dev);
 
 err_finish_dev:
+   util_dynarray_fini(&device->ray_query.retired);
+   simple_mtx_destroy(&device->ray_query.lock);
    vk_device_finish(&device->vk);
 
 err_free_dev:
@@ -660,6 +782,7 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
 #endif
    panvk_meta_cleanup(device);
    vk_pipeline_cache_destroy(device->vk.mem_cache, NULL);
+   panvk_device_finish_bg_compile(device);
    pan_kmod_bo_put(device->sparse_mem.blackhole);
    u_printf_destroy(&device->printf.ctx);
    panvk_priv_bo_unref(device->printf.bo);
@@ -667,6 +790,9 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
    panvk_priv_bo_unref(device->indirect_varying_buffer);
    panvk_priv_bo_unref(device->tiler_heap);
    panvk_priv_bo_unref(device->sample_positions);
+#if PAN_ARCH >= 15
+   panvk_per_arch(device_finish_ray_query)(device);
+#endif
    panvk_device_cleanup_mempools(device);
    vk_free(&device->vk.alloc, device->dump_region_size);
    pan_kmod_vm_destroy(device->kmod.vm);
@@ -677,6 +803,8 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
       pandecode_destroy_context(device->debug.decode_ctx);
 
    pan_kmod_dev_destroy(device->kmod.dev);
+   util_dynarray_fini(&device->ray_query.retired);
+   simple_mtx_destroy(&device->ray_query.lock);
    vk_device_finish(&device->vk);
    vk_free(&device->vk.alloc, device);
 }

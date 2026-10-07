@@ -60,4 +60,19 @@ if with_tests
     suite: ['panfrost'],
     protocol: 'gtest',
   )
+
+  foreach arch : ['10', '14', '15']
+    test('cs_cache_flush_tests_v' + arch,
+      executable(
+        'cs_cache_flush_tests_v' + arch,
+        ['test/cs_cache_flush.cpp'],
+        cpp_args : [cpp_msvc_compat_args, '-DPAN_ARCH=' + arch],
+        gnu_symbol_visibility : 'hidden',
+        include_directories: [inc_include, inc_src, inc_panfrost],
+        dependencies: [idep_gtest, idep_pan_packers, idep_mesautil],
+      ),
+      suite: ['panfrost'],
+      protocol: 'gtest',
+    )
+  endforeach
 endif

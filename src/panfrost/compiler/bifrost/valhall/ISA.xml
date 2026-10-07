@@ -390,6 +390,10 @@
     <value desc="Round to positive infinity">rtp</value>
     <value desc="Round to negative infinity">rtn</value>
     <value desc="Round to zero">rtz</value>
+    <reserved/>
+    <reserved/>
+    <reserved/>
+    <value desc="Round to odd">rto</value>
   </enum>
 
   <enum name="Result type">
@@ -652,6 +656,20 @@
     <value name="Exclusive-or">xor</value>
     <value name="Accumulate">accumulate</value>
     <value name="Shift">shift</value>
+  </enum>
+
+  <enum name="sub_a">
+    <value default="true">a_f0</value>
+    <value>a_f1</value>
+    <value>a_none</value>
+    <reserved/>
+  </enum>
+
+  <enum name="sub_b">
+    <value default="true">b_f0</value>
+    <value>b_f1</value>
+    <value>b_none</value>
+    <reserved/>
   </enum>
 
   <enum name="Inactive result">
@@ -2812,6 +2830,53 @@
     <subgroup/>
   </ins>
 
+  <group name="V2F16_TO_V2F8" title="16-bit float to 8-bit float conversion" dests="1" unit="CVT">
+    <ins name="V2F16_TO_V2F8_E4M3">
+      <opcode_v15>
+        <op val="0x0" start="55" mask="0x7"/>
+        <op val="0x0" start="49" mask="0xf"/>
+        <op val="0x108" start="16" mask="0x1ff"/>
+        <op val="0x0" start="26" mask="0x1"/>
+      </opcode_v15>
+    </ins>
+    <ins name="V2F16_TO_V2F8_E5M2">
+      <opcode_v15>
+        <op val="0x0" start="55" mask="0x7"/>
+        <op val="0x0" start="49" mask="0xf"/>
+        <op val="0x108" start="16" mask="0x1ff"/>
+        <op val="0x1" start="26" mask="0x1"/>
+      </opcode_v15>
+    </ins>
+    <desc>
+      Converts two 16-bit floats to two 8-bit floats written to one half of the
+      destination. Added on v15.
+    </desc>
+    <roundmode/>
+    <saturate/>
+    <src swizzle="true" size="16">Value to convert</src>
+  </group>
+
+  <group name="V2F8_TO_V2F16" title="8-bit float to 16-bit float conversion" dests="1" unit="CVT">
+    <ins name="V2F8_TO_V2F16_E4M3">
+      <opcode_v15>
+        <op val="0x0" start="55" mask="0x7"/>
+        <op val="0x0" start="49" mask="0xf"/>
+        <op val="0x109" start="16" mask="0x1ff"/>
+        <op val="0x0" start="26" mask="0x1"/>
+      </opcode_v15>
+    </ins>
+    <ins name="V2F8_TO_V2F16_E5M2">
+      <opcode_v15>
+        <op val="0x0" start="55" mask="0x7"/>
+        <op val="0x0" start="49" mask="0xf"/>
+        <op val="0x109" start="16" mask="0x1ff"/>
+        <op val="0x1" start="26" mask="0x1"/>
+      </opcode_v15>
+    </ins>
+    <desc>Converts two 8-bit floats to two 16-bit floats. Added on v15.</desc>
+    <src halfswizzle="true" size="8">Value to convert</src>
+  </group>
+
   <group name = "FLUSH" title="Flush floats" dests="1" unit="CVT">
     <ins name="FLUSH.f32">
       <opcode>
@@ -3413,6 +3478,18 @@
         <op val="0x1" start="24" mask="0x1"/>
       </opcode_v15>
     </ins>
+    <desc>
+      4x4 cooperative matrix multiply and accumulate, calculating
+      $A \cdot B + C$. The matrices are spread across the subgroup with one
+      element per lane. The destination register must differ from A and B
+      (it may reuse the accumulator C).
+    </desc>
+    <src>A</src>
+    <src>B</src>
+    <src>C</src>
+  </group>
+
+  <group name="FMMUL" title="Floating-point cooperative matrix multiply" dests="1" unit="FMA">
     <ins name="MMUL.f32">
       <opcode>
         <op val="0x102" start="48" mask="0x1FF"/>
@@ -3430,15 +3507,24 @@
       </opcode>
       <!-- Removed on v15 -->
     </ins>
-    <desc>
-      4x4 cooperative matrix multiply and accumulate, calculating
-      $A \cdot B + C$. The matrices are spread across the subgroup with one
-      element per lane. The destination register must differ from A and B
-      (it may reuse the accumulator C).
-    </desc>
+    <ins name="MMUL.f16">
+      <opcode>
+        <op val="0x104" start="48" mask="0x1FF"/>
+      </opcode>
+      <opcode_v15>
+        <op val="0x2" start="55" mask="0x7"/>
+        <op val="0x3" start="51" mask="0x3"/>
+        <op val="0x5" start="30" mask="0xf"/>
+        <op val="0x2" start="36" mask="0xf"/>
+      </opcode_v15>
+    </ins>
     <src>A</src>
     <src>B</src>
     <src>C</src>
+    <va_mod name="sub_a" start="28" size="2"/>
+    <va_mod_v15 name="sub_a" start="28" size="2"/>
+    <va_mod name="sub_b" start="26" size="2"/>
+    <va_mod_v15 name="sub_b" start="26" size="2"/>
   </group>
 
   <group name="ISUB" title="Integer subtract" dests="1" unused="true" unit="CVT">

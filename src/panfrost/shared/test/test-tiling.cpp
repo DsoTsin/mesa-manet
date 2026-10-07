@@ -165,6 +165,69 @@ test_ldst(unsigned width, unsigned height, unsigned rx, unsigned ry,
    test(width, height, rx, ry, rw, rh, linear_stride, format, false);
 }
 
+static unsigned
+tiled_size(unsigned width, unsigned height, enum pipe_format format,
+           unsigned *stride)
+{
+   const struct util_format_description *desc = util_format_description(format);
+   unsigned tilesize = (desc->block.width > 1) ? 4 : 16;
+   unsigned blocksize = desc->block.bits / 8;
+   unsigned w_block =
+      ALIGN_POT(DIV_ROUND_UP(width, desc->block.width), tilesize);
+   unsigned h_block =
+      ALIGN_POT(DIV_ROUND_UP(height, desc->block.height), tilesize);
+
+   *stride = w_block * tilesize * blocksize;
+   return (h_block / tilesize) * *stride;
+}
+
+static void
+test_copy(unsigned src_width, unsigned src_height, unsigned dst_width,
+          unsigned dst_height, unsigned src_x, unsigned src_y, unsigned dst_x,
+          unsigned dst_y, unsigned w, unsigned h, enum pipe_format format)
+{
+   const struct util_format_description *desc = util_format_description(format);
+   unsigned tilesize = (desc->block.width > 1) ? 4 : 16;
+   unsigned blocksize = desc->block.bits / 8;
+   unsigned src_stride, dst_stride;
+   unsigned src_size = tiled_size(src_width, src_height, format, &src_stride);
+   unsigned dst_size = tiled_size(dst_width, dst_height, format, &dst_stride);
+   unsigned slack = 65536;
+
+   uint8_t *src = (uint8_t *)malloc(src_size);
+   uint8_t *dst = (uint8_t *)malloc(dst_size + slack);
+   uint8_t *ref = (uint8_t *)malloc(dst_size + slack);
+
+   for (unsigned i = 0; i < src_size; ++i)
+      src[i] = (i * 7) & 0xFF;
+   for (unsigned i = 0; i < dst_size + slack; ++i)
+      dst[i] = ref[i] = (i * 13 + 5) & 0xFF;
+
+   pan_copy_tiled_image(dst, src, dst_x, dst_y, src_x, src_y, w, h, dst_stride,
+                        src_stride, format);
+
+   unsigned src_x_block = src_x / desc->block.width;
+   unsigned src_y_block = src_y / desc->block.height;
+   unsigned dst_x_block = dst_x / desc->block.width;
+   unsigned dst_y_block = dst_y / desc->block.height;
+
+   for (unsigned y = 0; y < DIV_ROUND_UP(h, desc->block.height); ++y) {
+      for (unsigned x = 0; x < DIV_ROUND_UP(w, desc->block.width); ++x) {
+         memcpy(ref + tiled_offset(dst_x_block + x, dst_y_block + y,
+                                   dst_stride, tilesize, blocksize),
+                src + tiled_offset(src_x_block + x, src_y_block + y,
+                                   src_stride, tilesize, blocksize),
+                blocksize);
+      }
+   }
+
+   EXPECT_EQ(memcmp(ref, dst, dst_size + slack), 0);
+
+   free(src);
+   free(dst);
+   free(ref);
+}
+
 TEST(UInterleavedTiling, RegulatFormats)
 {
    /* 8-bit */
@@ -262,4 +325,35 @@ TEST(UInterleavedTiling, PartialASTC)
    test_ldst(40, 40, 4, 4, 16, 8, 512, PIPE_FORMAT_ASTC_4x4);
    test_ldst(50, 40, 5, 4, 10, 8, 512, PIPE_FORMAT_ASTC_5x4);
    test_ldst(50, 50, 5, 5, 10, 10, 512, PIPE_FORMAT_ASTC_5x5);
+}
+
+TEST(UInterleavedTiling, MultiTileAccess)
+{
+   test_ldst(67, 53, 3, 5, 61, 41, 61 * 1, PIPE_FORMAT_R8_UINT);
+   test_ldst(67, 53, 3, 5, 61, 41, 61 * 2, PIPE_FORMAT_R8G8_UINT);
+   test_ldst(67, 53, 3, 5, 61, 41, 61 * 4, PIPE_FORMAT_R32_UINT);
+   test_ldst(67, 53, 3, 5, 61, 41, 61 * 8, PIPE_FORMAT_R32G32_UINT);
+   test_ldst(67, 53, 3, 5, 61, 41, 61 * 16, PIPE_FORMAT_R32G32B32A32_UINT);
+}
+
+TEST(UInterleavedTiling, AlignedAccess)
+{
+   test_ldst(64, 48, 16, 16, 48, 32, 50 * 1, PIPE_FORMAT_R8_UINT);
+   test_ldst(64, 48, 16, 16, 48, 32, 50 * 2, PIPE_FORMAT_R8G8_UINT);
+   test_ldst(64, 48, 16, 16, 48, 32, 50 * 4, PIPE_FORMAT_R32_UINT);
+   test_ldst(64, 48, 16, 16, 48, 32, 50 * 8, PIPE_FORMAT_R32G32_UINT);
+   test_ldst(64, 48, 16, 16, 48, 32, 50 * 16, PIPE_FORMAT_R32G32B32A32_UINT);
+}
+
+TEST(UInterleavedTiling, Copy)
+{
+   test_copy(64, 64, 80, 48, 16, 16, 32, 16, 32, 32,
+             PIPE_FORMAT_R8G8B8A8_UINT);
+   test_copy(64, 64, 80, 48, 3, 5, 21, 7, 45, 37, PIPE_FORMAT_R8G8B8A8_UINT);
+   test_copy(64, 64, 80, 48, 16, 16, 32, 0, 32, 32, PIPE_FORMAT_DXT1_RGB);
+   test_copy(64, 64, 80, 48, 4, 8, 12, 4, 40, 36, PIPE_FORMAT_DXT5_RGBA);
+   test_copy(200, 40, 200, 40, 80, 0, 0, 20, 80, 20, PIPE_FORMAT_ASTC_5x5);
+   test_copy(160, 160, 160, 160, 80, 0, 0, 80, 80, 80, PIPE_FORMAT_ASTC_5x5);
+   test_copy(450, 20, 450, 20, 25, 0, 5, 0, 400, 20, PIPE_FORMAT_ASTC_5x5);
+   test_copy(451, 20, 451, 20, 45, 0, 45, 0, 406, 20, PIPE_FORMAT_ASTC_5x5);
 }

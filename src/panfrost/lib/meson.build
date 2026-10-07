@@ -2,6 +2,12 @@
 # Copyright © 2019 Collabora
 # SPDX-License-Identifier: MIT
 
+if panfrost_kmds.contains('kbase')
+  if not with_panfrost_rust
+    error('The kbase panfrost KMD backend requires -Dpanfrost-rust=true')
+  endif
+  subdir('kbase-rs')
+endif
 subdir('kmod')
 
 pixel_format_versions = ['5', '6', '7', '9', '10', '11', '12', '13', '14', '15']

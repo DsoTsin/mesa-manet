@@ -230,6 +230,14 @@ struct cs_builder {
     * CS chunk.
     */
    uint64_t discard_instr_slot;
+
+   struct {
+      struct cs_maybe *maybe;
+      uint8_t sb_slot;
+      bool covered_by_fragment;
+      uint32_t covered;
+      uint32_t restored;
+   } deferred_others_inv;
 };
 
 static inline void
@@ -1465,6 +1473,40 @@ cs_patch_maybe(struct cs_builder *b, struct cs_maybe *maybe)
    }
 }
 
+static inline void
+cs_defer_others_inv(struct cs_builder *b, struct cs_maybe *maybe,
+                    uint8_t sb_slot, bool covered_by_fragment)
+{
+   b->deferred_others_inv.maybe = maybe;
+   b->deferred_others_inv.sb_slot = sb_slot;
+   b->deferred_others_inv.covered_by_fragment = covered_by_fragment;
+}
+
+static inline void
+cs_resolve_others_inv(struct cs_builder *b, bool fragment_run)
+{
+   struct cs_maybe *maybe = b->deferred_others_inv.maybe;
+
+   if (!maybe)
+      return;
+
+   bool unconditional = cs_cur_block(b) == NULL;
+
+   if (fragment_run && b->deferred_others_inv.covered_by_fragment &&
+       unconditional) {
+      b->deferred_others_inv.maybe = NULL;
+      b->deferred_others_inv.covered++;
+      return;
+   }
+
+   b->deferred_others_inv.restored++;
+   cs_patch_maybe(b, maybe);
+   cs_wait_slots(b, BITFIELD_BIT(b->deferred_others_inv.sb_slot));
+
+   if (unconditional)
+      b->deferred_others_inv.maybe = NULL;
+}
+
 struct cs_single_link_list_node {
    uint64_t next;
 };
@@ -1508,12 +1550,22 @@ enum cs_res_id {
    CS_FRAG_RES = BITFIELD_BIT(1),
    CS_TILER_RES = BITFIELD_BIT(2),
    CS_IDVS_RES = BITFIELD_BIT(3),
+   CS_RT_RES = BITFIELD_BIT(4),
 };
 
 static inline void
-cs_run_compute(struct cs_builder *b, unsigned task_increment,
-               enum mali_task_axis task_axis, struct cs_shader_res_sel res_sel)
+cs_run_compute_job(struct cs_builder *b, unsigned task_increment,
+                   enum mali_task_axis task_axis,
+                   struct cs_shader_res_sel res_sel, bool app_dispatch)
 {
+#if PAN_ARCH >= 15
+   assert(task_axis != MALI_TASK_AXIS_INFERRED || task_increment == 1);
+#else
+   assert(task_axis <= MALI_TASK_AXIS_Z);
+#endif
+
+   cs_resolve_others_inv(b, false);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1531,7 +1583,18 @@ cs_run_compute(struct cs_builder *b, unsigned task_increment,
       I.spd_select = res_sel.spd;
       I.tsd_select = res_sel.tsd;
       I.fau_select = res_sel.fau;
+#if PAN_ARCH >= 12
+      I.stage = app_dispatch ? MALI_IDVS_PIPELINE_STAGE_COMPUTE
+                             : MALI_IDVS_PIPELINE_STAGE_INTERNAL;
+#endif
    }
+}
+
+static inline void
+cs_run_compute(struct cs_builder *b, unsigned task_increment,
+               enum mali_task_axis task_axis, struct cs_shader_res_sel res_sel)
+{
+   cs_run_compute_job(b, task_increment, task_axis, res_sel, false);
 }
 
 #if PAN_ARCH == 10
@@ -1539,6 +1602,8 @@ static inline void
 cs_run_tiling(struct cs_builder *b, uint32_t flags_override,
               struct cs_shader_res_sel res_sel)
 {
+   cs_resolve_others_inv(b, false);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1558,8 +1623,11 @@ cs_run_tiling(struct cs_builder *b, uint32_t flags_override,
 static inline void
 cs_run_idvs2(struct cs_builder *b, uint32_t flags_override, bool malloc_enable,
              struct cs_index draw_id,
-             enum mali_idvs_shading_mode vertex_shading_mode)
+             enum mali_idvs_shading_mode vertex_shading_mode,
+             enum mali_idvs_pipeline_stage stage)
 {
+   cs_resolve_others_inv(b, false);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1567,13 +1635,15 @@ cs_run_idvs2(struct cs_builder *b, uint32_t flags_override, bool malloc_enable,
 
    cs_emit(b, RUN_IDVS2, I) {
       I.flags_override = flags_override;
-      I.malloc_enable = malloc_enable;
+      I.malloc_enable = malloc_enable ? MALI_CS_MEMORY_ALLOCATION_ENABLE_MALLOC
+                                      : MALI_CS_MEMORY_ALLOCATION_ENABLE_NO_MALLOC;
       I.vertex_shading_mode = vertex_shading_mode;
+      I.stage = stage;
 
       if (draw_id.type == CS_INDEX_UNDEF) {
-         I.draw_id_register_enable = false;
+         I.draw_id_register_enable = MALI_CS_DRAW_ID_REGISTER_ENABLE_NO_DRAWID;
       } else {
-         I.draw_id_register_enable = true;
+         I.draw_id_register_enable = MALI_CS_DRAW_ID_REGISTER_ENABLE_DRAWID;
          I.draw_id = cs_src32(b, draw_id);
       }
    }
@@ -1584,6 +1654,8 @@ cs_run_idvs(struct cs_builder *b, uint32_t flags_override, bool malloc_enable,
             struct cs_shader_res_sel varying_sel,
             struct cs_shader_res_sel frag_sel, struct cs_index draw_id)
 {
+   cs_resolve_others_inv(b, false);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1623,6 +1695,8 @@ static inline void
 cs_run_fragment2(struct cs_builder *b, bool enable_tem,
                  enum mali_tile_render_order tile_order)
 {
+   cs_resolve_others_inv(b, true);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1638,6 +1712,8 @@ static inline void
 cs_run_fragment(struct cs_builder *b, bool enable_tem,
                 enum mali_tile_render_order tile_order)
 {
+   cs_resolve_others_inv(b, true);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1654,6 +1730,8 @@ static inline void
 cs_run_fullscreen(struct cs_builder *b, uint32_t flags_override,
                   struct cs_index dcd)
 {
+   cs_resolve_others_inv(b, false);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -1673,6 +1751,22 @@ cs_finish_tiling(struct cs_builder *b)
    cs_emit(b, FINISH_TILING, I)
       ;
 }
+
+#if PAN_ARCH >= 15
+static inline void
+cs_perf_counter_enable(struct cs_builder *b)
+{
+   cs_emit(b, PERF_COUNTER_ENABLE, I)
+      ;
+}
+
+static inline void
+cs_perf_counter_disable(struct cs_builder *b)
+{
+   cs_emit(b, PERF_COUNTER_DISABLE, I)
+      ;
+}
+#endif
 
 static inline void
 cs_finish_fragment(struct cs_builder *b, bool increment_frag_completed,
@@ -1838,6 +1932,41 @@ cs_wait_indirect(struct cs_builder *b)
       I.wait_mode = MALI_CS_WAIT_MODE_INDIRECT;
    }
 }
+
+#define CS_MAX_SHARED_SB_COUNT 16
+
+static inline void
+cs_shared_sb_inc(struct cs_builder *b, unsigned entry, uint16_t wait_mask)
+{
+   assert(entry < CS_MAX_SHARED_SB_COUNT);
+
+   cs_emit(b, SHARED_SB_INC, I) {
+      I.sb_mask = wait_mask;
+      I.shared_entry = entry;
+      I.defer_mode = MALI_CS_SHARED_SB_INCREMENT_DEFER_MODE_DEFER_IMMEDIATE;
+   }
+}
+
+static inline void
+cs_shared_sb_inc_indirect(struct cs_builder *b, unsigned entry)
+{
+   assert(entry < CS_MAX_SHARED_SB_COUNT);
+
+   cs_emit(b, SHARED_SB_INC, I) {
+      I.shared_entry = entry;
+      I.defer_mode = MALI_CS_SHARED_SB_INCREMENT_DEFER_MODE_DEFER_INDIRECT;
+   }
+}
+
+static inline void
+cs_shared_sb_dec(struct cs_builder *b, unsigned entry)
+{
+   assert(entry < CS_MAX_SHARED_SB_COUNT);
+
+   cs_emit(b, SHARED_SB_DEC, I) {
+      I.shared_entry = entry;
+   }
+}
 #endif
 
 #if PAN_ARCH >= 13
@@ -1893,6 +2022,19 @@ cs_lshift_imm32(struct cs_builder *b, struct cs_index dest, struct cs_index src,
       I.destination = cs_dst32(b, dest);
       I.source = cs_src32(b, src);
       I.shift_amount = imm;
+   }
+}
+
+static inline void
+cs_bfins_imm32(struct cs_builder *b, struct cs_index dest, struct cs_index src,
+               uint8_t position, uint8_t width, uint16_t imm)
+{
+   cs_emit(b, BFINS_IMM32, I) {
+      I.destination = cs_dst32(b, dest);
+      I.source = cs_src32(b, src);
+      I.position = position;
+      I.width = width;
+      I.imm = imm;
    }
 }
 
@@ -2252,6 +2394,32 @@ cs_req_res(struct cs_builder *b, uint32_t res_mask)
       I.tiler = res_mask & CS_TILER_RES;
       I.idvs = res_mask & CS_IDVS_RES;
       I.fragment = res_mask & CS_FRAG_RES;
+#if PAN_ARCH >= 15
+      I.rt = res_mask & CS_RT_RES;
+#endif
+   }
+}
+
+static inline void
+cs_flush_caches_with_neural(struct cs_builder *b, enum mali_cs_flush_mode l2,
+                           enum mali_cs_flush_mode lsc,
+                           enum mali_cs_other_flush_mode others, bool neural,
+                           struct cs_index flush_id, struct cs_async_op async)
+{
+#if PAN_ARCH < 15
+   assert(!neural);
+#endif
+
+   cs_emit(b, FLUSH_CACHE2, I) {
+      I.l2_flush_mode = l2;
+      I.lsc_flush_mode = lsc;
+      I.other_flush_mode = others;
+#if PAN_ARCH >= 15
+      I.neural_flush_mode = neural ? MALI_CS_NEURAL_FLUSH_MODE_INVALIDATE
+                                   : MALI_CS_NEURAL_FLUSH_MODE_NONE;
+#endif
+      I.latest_flush_id = cs_src32(b, flush_id);
+      cs_apply_async(I, async);
    }
 }
 
@@ -2261,13 +2429,7 @@ cs_flush_caches(struct cs_builder *b, enum mali_cs_flush_mode l2,
                 enum mali_cs_other_flush_mode others, struct cs_index flush_id,
                 struct cs_async_op async)
 {
-   cs_emit(b, FLUSH_CACHE2, I) {
-      I.l2_flush_mode = l2;
-      I.lsc_flush_mode = lsc;
-      I.other_flush_mode = others;
-      I.latest_flush_id = cs_src32(b, flush_id);
-      cs_apply_async(I, async);
-   }
+   cs_flush_caches_with_neural(b, l2, lsc, others, false, flush_id, async);
 }
 
 #define CS_SYNC_OPS(__cnt_width)                                               \
@@ -2340,6 +2502,8 @@ static inline void
 cs_run_compute_indirect(struct cs_builder *b, unsigned wg_per_task,
                         struct cs_shader_res_sel res_sel)
 {
+   cs_resolve_others_inv(b, false);
+
    /* Staging regs */
    cs_flush_loads(b);
 
@@ -2935,11 +3099,12 @@ static inline void
 cs_trace_run_idvs2(struct cs_builder *b, const struct cs_tracing_ctx *ctx,
                    struct cs_index scratch_regs, uint32_t flags_override,
                    bool malloc_enable, struct cs_index draw_id,
-                   enum mali_idvs_shading_mode vertex_shading_mode)
+                   enum mali_idvs_shading_mode vertex_shading_mode,
+                   enum mali_idvs_pipeline_stage stage)
 {
    if (likely(!ctx->enabled)) {
       cs_run_idvs2(b, flags_override, malloc_enable, draw_id,
-                   vertex_shading_mode);
+                   vertex_shading_mode, stage);
       return;
    }
 
@@ -2951,7 +3116,8 @@ cs_trace_run_idvs2(struct cs_builder *b, const struct cs_tracing_ctx *ctx,
    /* cs_run_xx() must immediately follow cs_load_ip_to() otherwise the IP
     * won't point to the right instruction. */
    cs_load_ip_to(b, data);
-   cs_run_idvs2(b, flags_override, malloc_enable, draw_id, vertex_shading_mode);
+   cs_run_idvs2(b, flags_override, malloc_enable, draw_id, vertex_shading_mode,
+                stage);
    cs_store64(b, data, tracebuf_addr, cs_trace_field_offset(run_idvs2, ip));
 
    if (draw_id.type != CS_INDEX_UNDEF)
@@ -3019,10 +3185,10 @@ static inline void
 cs_trace_run_compute(struct cs_builder *b, const struct cs_tracing_ctx *ctx,
                      struct cs_index scratch_regs, unsigned task_increment,
                      enum mali_task_axis task_axis,
-                     struct cs_shader_res_sel res_sel)
+                     struct cs_shader_res_sel res_sel, bool app_dispatch)
 {
    if (likely(!ctx->enabled)) {
-      cs_run_compute(b, task_increment, task_axis, res_sel);
+      cs_run_compute_job(b, task_increment, task_axis, res_sel, app_dispatch);
       return;
    }
 
@@ -3034,7 +3200,7 @@ cs_trace_run_compute(struct cs_builder *b, const struct cs_tracing_ctx *ctx,
    /* cs_run_xx() must immediately follow cs_load_ip_to() otherwise the IP
     * won't point to the right instruction. */
    cs_load_ip_to(b, data);
-   cs_run_compute(b, task_increment, task_axis, res_sel);
+   cs_run_compute_job(b, task_increment, task_axis, res_sel, app_dispatch);
    cs_store64(b, data, tracebuf_addr, cs_trace_field_offset(run_compute, ip));
 
    for (unsigned i = 0; i < 32; i += 16)

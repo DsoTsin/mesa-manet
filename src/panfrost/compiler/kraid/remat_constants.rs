@@ -60,7 +60,7 @@ fn remat_copies(
 ) {
     let mut sr_srcs = 0_u8;
     for (i, src) in op.srcs().iter().enumerate() {
-        if b.model().op_src_is_staging_reg(op, src) {
+        if b.model().op_src_is_reg_only(op, src) {
             sr_srcs |= 1 << i;
         }
     }

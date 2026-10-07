@@ -172,3 +172,24 @@ test('ir3_delay_test',
   ),
   suite: ['freedreno'],
 )
+
+if host_machine.system() == 'windows' and host_machine.cpu_family() == 'x86_64'
+  aoc_tls = shared_library(
+    'ir3-aoc-tls',
+    'aoc-tls.cpp',
+    link_args: ['/INCLUDE:aoc_tls_callback'],
+    build_by_default: with_tools.contains('freedreno'),
+    install: false,
+  )
+  executable(
+    'ir3-aoc-isa',
+    ['ir3-aoc-isa.cpp', 'aoc-inprocess.cpp'],
+    link_depends: aoc_tls,
+    dependencies: [idep_libir3decode, cpp.find_library('bcrypt')],
+    include_directories: [inc_src],
+    cpp_args: ['/U_HAS_EXCEPTIONS', '/D_HAS_EXCEPTIONS=1'],
+    override_options: ['cpp_eh=sc'],
+    build_by_default: with_tools.contains('freedreno'),
+    install: false,
+  )
+endif

@@ -457,6 +457,10 @@ vk_prefix_scan(uvec4 ballot, REF(vk_prefix_scan_partition) partitions, uint32_t 
 #define VK_TEST_BUILD_FLAG_64BIT_KEYS ((BUILD_FLAGS & VK_BUILD_FLAG_64BIT_KEYS) != 0)
 #endif
 
+#if ((VK_USED_BUILD_FLAGS & VK_BUILD_FLAG_EARLY_PAIRS) != 0)
+#define VK_TEST_BUILD_FLAG_EARLY_PAIRS ((BUILD_FLAGS & VK_BUILD_FLAG_EARLY_PAIRS) != 0)
+#endif
+
 REF(vk_ir_triangle_node_quad)
 vk_ir_triangle_node_get_quad_ref(REF(vk_ir_triangle_node) node)
 {
@@ -491,5 +495,27 @@ vk_ir_node_size(uint32_t geometry_type)
    return size;
 }
 #endif
+
+mat3 mat_abs(mat3 in_mat) {
+    return mat3(abs(in_mat[0]), abs(in_mat[1]), abs(in_mat[2]));
+}
+
+vk_aabb
+calculate_instance_node_bounds(vk_aabb blas_aabb, mat3x4 otw_matrix)
+{
+   vk_aabb aabb;
+
+   /* https://zeux.io/2010/10/17/aabb-from-obb-with-component-wise-abs */
+   vec3 blas_aabb_center = (blas_aabb.min + blas_aabb.max) * 0.5;
+   vec3 blas_aabb_extent = (blas_aabb.max - blas_aabb.min) * 0.5;
+
+   vec3 new_center = vec4(blas_aabb_center, 1.0) * otw_matrix;
+   vec3 new_extent = blas_aabb_extent * mat_abs(mat3(otw_matrix));
+
+   aabb.min = new_center - new_extent;
+   aabb.max = new_center + new_extent;
+
+   return aabb;
+}
 
 #endif

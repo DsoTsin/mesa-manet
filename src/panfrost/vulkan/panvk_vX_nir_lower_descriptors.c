@@ -8,8 +8,13 @@
  * SPDX-License-Identifier: MIT
  */
 
+#ifdef PANVK_OFFLINE_ONLY
+#include "tools/kraidoc_context.h"
+#include "panvk_image_formats.h"
+#else
 #include "panvk_device.h"
 #include "panvk_image.h"
+#endif
 #include "panvk_sampler.h"
 #include "panvk_shader.h"
 
@@ -72,6 +77,9 @@ addr_format_for_desc_type(nir_descriptor_type desc_type,
 
    case nir_descriptor_type_storage_buffer:
       return ctx->ssbo_addr_format;
+
+   case nir_descriptor_type_tensor_arm:
+      return nir_address_format_vec2_index_32bit_offset;
 
    default:
       UNREACHABLE("Unsupported descriptor type");
@@ -235,6 +243,9 @@ addr_format_for_type(VkDescriptorType type, const struct lower_desc_ctx *ctx)
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
       return ctx->ssbo_addr_format;
+
+   case VK_DESCRIPTOR_TYPE_TENSOR_ARM:
+      return nir_address_format_vec2_index_32bit_offset;
 
    default:
       UNREACHABLE("Unsupported descriptor type");
@@ -444,6 +455,41 @@ build_buffer_addr_for_res_index(nir_builder *b, nir_def *res_index,
    }
 }
 
+#if PAN_ARCH >= 15
+static nir_def *
+lower_accel_struct_res_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin,
+                                 const struct lower_desc_ctx *ctx)
+{
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_vulkan_resource_index: {
+      uint32_t set = nir_intrinsic_desc_set(intrin);
+      uint32_t binding = nir_intrinsic_binding(intrin);
+      const struct panvk_descriptor_set_binding_layout *bind_layout =
+         get_binding_layout(set, binding, ctx);
+      nir_def *index = intrin->src[0].ssa;
+
+      if (ctx->add_bounds_checks)
+         index = nir_umin(b, index, nir_imm_int(b, bind_layout->desc_count - 1));
+
+      return nir_u2u64(b, nir_iadd_imm(b, index,
+                                       shader_desc_idx(set, binding,
+                                                       NO_SUBDESC, ctx)));
+   }
+
+   case nir_intrinsic_vulkan_resource_reindex:
+      return nir_iadd(b, intrin->src[0].ssa,
+                      nir_u2u64(b, intrin->src[1].ssa));
+
+   case nir_intrinsic_load_vulkan_descriptor:
+      return pan_nir_load_va_desc(b, 1, 64, nir_u2u32(b, intrin->src[0].ssa),
+                                  8);
+
+   default:
+      UNREACHABLE("Unhandled resource intrinsic");
+   }
+}
+#endif
+
 static bool
 lower_res_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin,
                     const struct lower_desc_ctx *ctx)
@@ -451,6 +497,15 @@ lower_res_intrinsic(nir_builder *b, nir_intrinsic_instr *intrin,
    b->cursor = nir_before_instr(&intrin->instr);
 
    const nir_descriptor_type desc_type = nir_intrinsic_desc_type(intrin);
+
+#if PAN_ARCH >= 15
+   if (desc_type == nir_descriptor_type_acceleration_structure) {
+      nir_def_replace(&intrin->def,
+                      lower_accel_struct_res_intrinsic(b, intrin, ctx));
+      return true;
+   }
+#endif
+
    nir_address_format addr_format = addr_format_for_desc_type(desc_type, ctx);
 
    nir_def *res;
@@ -1023,6 +1078,23 @@ lower_load_constant(nir_builder *b, nir_intrinsic_instr *intr,
    return true;
 }
 
+#if PAN_ARCH >= 9
+static bool
+lower_tensor_intrinsic(nir_builder *b, nir_intrinsic_instr *intr)
+{
+   b->cursor = nir_before_instr(&intr->instr);
+
+   nir_def *desc = intr->src[0].ssa;
+   nir_def *handle = nir_iadd(
+      b, nir_channel(b, desc, 0),
+      nir_imul_imm(b, nir_channel(b, desc, 1),
+                   PANVK_TENSOR_DESCRIPTOR_SIZE / PANVK_DESCRIPTOR_SIZE));
+
+   nir_src_rewrite(&intr->src[0], handle);
+   return true;
+}
+#endif
+
 static bool
 lower_intrinsic(nir_builder *b, nir_intrinsic_instr *intr,
                 struct lower_desc_ctx *ctx)
@@ -1032,6 +1104,12 @@ lower_intrinsic(nir_builder *b, nir_intrinsic_instr *intr,
    case nir_intrinsic_vulkan_resource_reindex:
    case nir_intrinsic_load_vulkan_descriptor:
       return lower_res_intrinsic(b, intr, ctx);
+#if PAN_ARCH >= 9
+   case nir_intrinsic_tensor_read_arm:
+   case nir_intrinsic_tensor_write_arm:
+   case nir_intrinsic_tensor_size_arm:
+      return lower_tensor_intrinsic(b, intr);
+#endif
    case nir_intrinsic_image_deref_store:
    case nir_intrinsic_image_deref_load:
    case nir_intrinsic_image_deref_atomic:
@@ -1068,8 +1146,11 @@ record_binding(struct lower_desc_ctx *ctx, unsigned set, unsigned binding,
       &set_layout->bindings[binding];
    ASSERTED uint32_t subdesc_idx = get_subdesc_idx(binding_layout, subdesc);
    ASSERTED uint32_t desc_stride = panvk_get_desc_stride(binding_layout);
-   ASSERTED uint32_t max_desc_stride = MAX2(
-      binding_layout->samplers_per_desc + binding_layout->textures_per_desc, 1);
+   ASSERTED uint32_t max_desc_stride =
+      binding_layout->type == VK_DESCRIPTOR_TYPE_TENSOR_ARM
+         ? PANVK_TENSOR_DESCRIPTOR_SIZE / PANVK_DESCRIPTOR_SIZE
+         : MAX2(binding_layout->samplers_per_desc +
+                   binding_layout->textures_per_desc, 1);
 
    assert(desc_stride >= 1 && desc_stride <= max_desc_stride);
    ctx->desc_info.used_set_mask |= BITFIELD_BIT(set);

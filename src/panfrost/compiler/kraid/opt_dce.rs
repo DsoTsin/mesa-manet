@@ -5,9 +5,40 @@ use compiler::bitset::BitSet;
 use rustc_hash::FxHashMap;
 
 use crate::ir::*;
+use crate::ops::MemAccess;
 
 fn can_eliminate_instr(instr: &Instr) -> bool {
     instr.flow == FlowCtrl::NONE && instr.op.can_eliminate()
+}
+
+impl Op {
+    fn trim_load_dst(&mut self, live: &BitSet<SSAValue>) {
+        let (dst, ty, access) = match self {
+            Op::LdCvt(op) => (&mut op.dst, &mut op.dst_type, op.access),
+            Op::Load(op) if !op.is_tls => {
+                (&mut op.dst, &mut op.dst_type, op.access)
+            }
+            _ => return,
+        };
+        if access == MemAccess::Force || dst.lanes != DstLanes::All {
+            return;
+        }
+        let DstRef::SSA(vec) = &dst.dst_ref else { return };
+        let Some(last) = vec.iter().rposition(|ssa| live.contains(*ssa)) else {
+            return;
+        };
+        let words = last + 1;
+        if words == vec.len() || vec[0].bits() != 32 {
+            return;
+        }
+        let bits = (words * 32) as u8;
+        *ty = if ty.comps() == 1 {
+            DataType::i(bits)
+        } else {
+            DataType::v(bits / ty.bits(), ty.scalar_type())
+        };
+        dst.dst_ref = DstRef::SSA(vec[..words].try_into().unwrap());
+    }
 }
 
 impl Shader<'_> {
@@ -70,7 +101,7 @@ impl Shader<'_> {
         drop(work_queue);
 
         // Sweep
-        self.map_instrs(|instr, _| {
+        self.map_instrs(|mut instr, _| {
             if !can_eliminate_instr(&instr) {
                 return [instr].into();
             }
@@ -86,7 +117,61 @@ impl Shader<'_> {
                 })
             };
 
-            if live { [instr].into() } else { [].into() }
+            if live {
+                instr.op.trim_load_dst(&live_ssa_set);
+                [instr].into()
+            } else {
+                [].into()
+            }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::{OpLdCvt, OpLoad};
+    use crate::ssa_value::{AllocSSA, SSAValueAllocator};
+
+    #[test]
+    fn load_demand_preserves_live_components() {
+        for ty in [DataType::V4F32, DataType::V3U32, DataType::V4F16, DataType::V3S16] {
+            let mut alloc = SSAValueAllocator::default();
+            let dst = alloc.alloc_ref(ty.total_bits().into());
+            for mask in 1..(1 << dst.len()) {
+                let mut live = BitSet::new();
+                for (i, ssa) in dst.iter().enumerate() {
+                    if mask & (1 << i) != 0 { live.insert(*ssa); }
+                }
+                let mut op: Op = OpLdCvt {
+                    dst: dst.clone().into(), dst_type: ty, access: MemAccess::Const,
+                    addr: 0_u64.into(), cvt: 0_u32.into(), offset: 0,
+                }.into();
+                op.trim_load_dst(&live);
+                let Op::LdCvt(op) = op else { panic!() };
+                let words = dst.iter().rposition(|ssa| live.contains(*ssa)).unwrap() + 1;
+                let DstRef::SSA(trimmed) = op.dst.dst_ref else { panic!() };
+                assert!(trimmed.as_slice() == &dst[..words]);
+                assert_eq!(op.dst_type.total_bits().div_ceil(32) as usize, words);
+                assert!(op.dst_type.scalar_type() == ty.scalar_type());
+            }
+        }
+    }
+
+    #[test]
+    fn load_demand_respects_forced_access_and_tls() {
+        let mut alloc = SSAValueAllocator::default();
+        let dst = alloc.alloc_ref(128);
+        let mut live = BitSet::new();
+        live.insert(dst[0]);
+        for (access, tls, expected) in [(MemAccess::Const, false, 32), (MemAccess::Force, false, 128), (MemAccess::Const, true, 128)] {
+            let mut op: Op = OpLoad {
+                dst: dst.clone().into(), dst_type: DataType::I128,
+                access, is_tls: tls, addr: 0_u64.into(), offset: 0,
+            }.into();
+            op.trim_load_dst(&live);
+            let Op::Load(op) = op else { panic!() };
+            assert_eq!(op.dst_type.total_bits(), expected);
+        }
     }
 }

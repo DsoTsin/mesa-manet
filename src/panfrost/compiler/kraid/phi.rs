@@ -52,7 +52,7 @@ impl IntoBitIndex for Phi {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PhiAllocator {
     count: u32,
 }

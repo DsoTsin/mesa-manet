@@ -214,6 +214,15 @@ vk_common_GetAccelerationStructureDeviceAddressKHR(
    return vk_acceleration_structure_get_va(accel_struct);
 }
 
+static bool
+vk_acceleration_structure_can_update(const VkAccelerationStructureBuildGeometryInfoKHR *build_info,
+                                     const struct vk_acceleration_structure_build_args *args)
+{
+   if (build_info->type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
+      return args->has_tlas_update;
+   return args->has_update;
+}
+
 static void
 vk_acceleration_structure_build_state_init(struct vk_acceleration_structure_build_state *state,
                                            struct vk_device *device, uint32_t leaf_count,
@@ -223,6 +232,8 @@ vk_acceleration_structure_build_state_init(struct vk_acceleration_structure_buil
    state->build_info = build_info;
    state->leaf_node_count = leaf_count;
    state->internal_node_count = MAX2(leaf_count, 2) - 1;
+   state->config.leaf_count_multiplier = 1;
+   state->config.leaf_count_limit = UINT32_MAX;
 
    if (leaf_count <= 4)
       state->config.internal_type = VK_INTERNAL_BUILD_TYPE_LBVH;
@@ -234,16 +245,21 @@ vk_acceleration_structure_build_state_init(struct vk_acceleration_structure_buil
    else
       state->config.internal_type = VK_INTERNAL_BUILD_TYPE_LBVH;
 
-   if (build_info->mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR &&
-       build_info->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR && args->has_update)
+   bool can_update = vk_acceleration_structure_can_update(build_info, args);
+
+   if (build_info->mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR && can_update)
       state->config.internal_type = VK_INTERNAL_BUILD_TYPE_UPDATE;
 
-   if ((build_info->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) &&
-       build_info->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR && args->has_update)
+   if ((build_info->flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) && can_update)
       state->config.updateable = true;
 
    if (device->as_build_ops->get_build_config)
       device->as_build_ops->get_build_config(vk_device_to_handle(device), state);
+
+   leaf_count = MIN2((uint64_t)leaf_count * state->config.leaf_count_multiplier,
+                    state->config.leaf_count_limit);
+   state->leaf_node_count = leaf_count;
+   state->internal_node_count = MAX2(leaf_count, 2) - 1;
 
    if (state->config.updateable)
       state->config.build_flags |= VK_BUILD_FLAG_ALWAYS_ACTIVE;
@@ -253,6 +269,8 @@ vk_acceleration_structure_build_state_init(struct vk_acceleration_structure_buil
       state->config.build_flags |= VK_BUILD_FLAG_64BIT_KEYS;
    if (state->config.late_pair_compression)
       state->config.build_flags |= VK_BUILD_FLAG_HAS_QUADS;
+   if (state->config.early_pair_compression)
+      state->config.build_flags |= VK_BUILD_FLAG_HAS_QUADS | VK_BUILD_FLAG_EARLY_PAIRS;
 
    uint32_t keyval_size = state->config.u64_keys ? sizeof(struct key64_id_pair) : sizeof(struct key32_id_pair);
    uint32_t morton_keyvals_per_workgroup = args->morton_sort_workgroup_size * args->morton_sort_kvs_per_thread;
@@ -318,7 +336,7 @@ vk_acceleration_structure_build_state_init(struct vk_acceleration_structure_buil
 
    state->scratch.size = offset;
 
-   if (build_info->type == VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR && args->has_update) {
+   if (can_update) {
       state->scratch.update_size = device->as_build_ops->get_update_scratch_size(vk_device_to_handle(device), state);
    } else {
       state->scratch.update_size = offset;
@@ -688,12 +706,16 @@ build_leaves(VkCommandBuffer commandBuffer, struct vk_device *device,
             continue;
 
          leaf_consts.geom_data = vk_fill_geometry_data(build_info->type, states[i].leaf_node_count, j, geom, build_range_info);
+         leaf_consts.primitive_count = build_range_info->primitiveCount;
+         uint32_t leaf_count = MIN2((uint64_t)build_range_info->primitiveCount *
+                                      states[i].config.leaf_count_multiplier,
+                                   states[i].config.leaf_count_limit - states[i].leaf_node_count);
 
          disp->CmdPushConstants(commandBuffer, layout,
                                 VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(leaf_consts), &leaf_consts);
-         device->cmd_dispatch_unaligned(commandBuffer, build_range_info->primitiveCount, 1, 1);
+         device->cmd_dispatch_unaligned(commandBuffer, leaf_count, 1, 1);
 
-         states[i].leaf_node_count += build_range_info->primitiveCount;
+         states[i].leaf_node_count += leaf_count;
       }
    }
 

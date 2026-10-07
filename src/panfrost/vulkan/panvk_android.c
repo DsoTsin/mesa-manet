@@ -248,6 +248,28 @@ panvk_android_ahb_image_init(struct AHardwareBuffer *ahb,
    return VK_SUCCESS;
 }
 
+static int
+get_valid_dma_buf_fd(VkDevice device, const native_handle_t *handle)
+{
+   for (int i = 0; i < handle->numFds; i++) {
+      int fd = handle->data[i];
+      if (fd < 0) continue;
+
+      // Ensure the fd is seekable (data handle instead of a fence fd)
+      if (lseek(fd, 0, SEEK_END) < 0) continue;
+
+      VkMemoryFdPropertiesKHR fd_props = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+      };
+      VK_FROM_HANDLE(vk_device, dev, device);
+      if (dev->dispatch_table.GetMemoryFdPropertiesKHR(
+            device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fd_props) == VK_SUCCESS) {
+         return fd;
+      }
+   }
+   return handle->data[0];
+}
+
 static VkResult
 panvk_android_import_ahb_memory(VkDevice device,
                                 const VkMemoryAllocateInfo *pAllocateInfo,
@@ -258,7 +280,9 @@ panvk_android_import_ahb_memory(VkDevice device,
    VK_FROM_HANDLE(vk_device, dev, device);
    const native_handle_t *handle = AHardwareBuffer_getNativeHandle(ahb);
    assert(handle && handle->numFds > 0);
-   int dma_buf_fd = handle->data[0];
+   // int dma_buf_fd = handle->data[0];
+   int dma_buf_fd = get_valid_dma_buf_fd(device, handle);
+   mesa_logi("panvk_android_import_ahb_memory: dma_buf_fd=%d", dma_buf_fd);
    VkResult result;
 
    VkImage img_handle = VK_NULL_HANDLE;
@@ -332,6 +356,7 @@ panvk_android_import_ahb_memory(VkDevice device,
       .allocationSize = mem_reqs.size,
       .memoryTypeIndex = mem_type_index,
    };
+   mesa_logi("%s @ %d: fd_info.fd=%d, calling AllocateMemory", __func__, __LINE__, dup_fd);
    result = dev->dispatch_table.AllocateMemory(device, &alloc_info, pAllocator,
                                                pMemory);
    if (result != VK_SUCCESS)

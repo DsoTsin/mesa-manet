@@ -1,0 +1,195 @@
+/*
+ * Copyright © 2026 Pix Philosophy (HK) Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "panvk_bvh.h"
+#define VK_USED_BUILD_FLAGS 0
+#include "vk_bvh_helpers.h"
+#include "panvk_bvh_box.h"
+#include "panvk_bvh_leaf.h"
+
+layout(push_constant) uniform CONSTS {
+   panvk_update_args args;
+};
+
+REF(panvk_bvh_header)
+header()
+{
+   return REF(panvk_bvh_header)(args.bvh);
+}
+
+VOID_REF
+node_addr(uint32_t index)
+{
+   return OFFSET(args.bvh, PANVK_BVH_HEADER_SIZE + index * PANVK_BVH_NODE_SIZE);
+}
+
+uint32_t
+parent_of(uint32_t index)
+{
+   return DEREF(INDEX(uint32_t, OFFSET(args.bvh, DEREF(header()).parents_offset), index));
+}
+
+REF(vk_aabb)
+bounds_ref(uint32_t index)
+{
+   return INDEX(vk_aabb, args.bounds, index);
+}
+
+uint32_t
+child_count(REF(panvk_bvh_box_node) node)
+{
+   uint32_t count = 0;
+   while (count < PANVK_BVH_MAX_CHILDREN && panvk_box_desc(node, count) != PANVK_BVH_CHILD_EMPTY)
+      count++;
+   return count;
+}
+
+vk_aabb
+update_triangle(uint32_t index)
+{
+   REF(panvk_bvh_triangle_leaf) leaf = REF(panvk_bvh_triangle_leaf)(node_addr(index));
+   uint32_t geometry = DEREF(leaf).geometry_id_a_flags & 0xffffff;
+   uint32_t primitive = DEREF(leaf).primitive_id_a;
+   vk_bvh_geometry_data geom = DEREF(INDEX(vk_bvh_geometry_data, args.geometries, geometry));
+
+   triangle_indices indices = load_indices(geom.indices, geom.index_format, primitive);
+   triangle_vertices vertices = load_vertices(geom.data, indices, geom.vertex_format, geom.stride);
+
+   if (geom.transform != 0) {
+      mat4 transform = mat4(1.0);
+      for (uint32_t col = 0; col < 4; col++)
+         for (uint32_t row = 0; row < 3; row++)
+            transform[col][row] = DEREF(INDEX(float, geom.transform, col + row * 4));
+      for (uint32_t i = 0; i < 3; i++)
+         vertices.vertex[i] = transform * vertices.vertex[i];
+   }
+
+   if (any(isnan(vertices.vertex[0])) || any(isnan(vertices.vertex[1])) ||
+       any(isnan(vertices.vertex[2]))) {
+      for (uint32_t i = 0; i < 3; i++)
+         vertices.vertex[i] = vec4(0.0);
+   }
+
+   vk_aabb bounds = vk_aabb(vec3(INFINITY), vec3(-INFINITY));
+   for (uint32_t v = 0; v < 3; v++) {
+      for (uint32_t c = 0; c < 3; c++)
+         DEREF(leaf).coords[v][c] = vertices.vertex[v][c];
+      bounds.min = min(bounds.min, vertices.vertex[v].xyz);
+      bounds.max = max(bounds.max, vertices.vertex[v].xyz);
+   }
+   return bounds;
+}
+
+vk_aabb
+update_aabb(uint32_t index)
+{
+   REF(panvk_bvh_aabb_leaf) leaf = REF(panvk_bvh_aabb_leaf)(node_addr(index));
+   uint32_t geometry = DEREF(leaf).geometry_id_flags & 0xffffff;
+   uint32_t primitive = DEREF(leaf).primitive_id;
+   vk_bvh_geometry_data geom = DEREF(INDEX(vk_bvh_geometry_data, args.geometries, geometry));
+   VOID_REF src = OFFSET(geom.data, uint64_t(primitive) * geom.stride);
+
+   vk_aabb bounds;
+   for (uint32_t c = 0; c < 3; c++) {
+      bounds.min[c] = DEREF(INDEX(float, src, c));
+      bounds.max[c] = DEREF(INDEX(float, src, c + 3));
+   }
+   if (any(isnan(bounds.min)) || any(isnan(bounds.max))) {
+      bounds.min = vec3(0.0);
+      bounds.max = vec3(0.0);
+   }
+   return bounds;
+}
+
+vk_aabb
+update_instance(uint32_t index, uint32_t slot)
+{
+   uint32_t leaf_count = DEREF(header()).primitive_count;
+   REF(panvk_bvh_instance_extra) extra = REF(panvk_bvh_instance_extra)(
+      OFFSET(node_addr(DEREF(header()).node_count + leaf_count), slot * SIZEOF(panvk_bvh_instance_extra)));
+   uint32_t instance_id = DEREF(extra).instance_id;
+
+   vk_bvh_geometry_data geom = DEREF(INDEX(vk_bvh_geometry_data, args.geometries, 0));
+   VOID_REF src = OFFSET(geom.data, uint64_t(instance_id) * geom.stride);
+   if (geom.stride == 8)
+      src = DEREF(REF(VOID_REF)(src));
+   AccelerationStructureInstance instance = DEREF(REF(AccelerationStructureInstance)(src));
+
+   uint64_t base_ptr = instance.accelerationStructureReference;
+   mat3x4 otw_matrix = mat3x4(1.0);
+   vk_aabb bounds = vk_aabb(vec3(0.0), vec3(0.0));
+   if (base_ptr != 0) {
+      otw_matrix = instance.transform;
+      bounds = calculate_instance_node_bounds(DEREF(REF(panvk_bvh_header)(base_ptr)).bounds, otw_matrix);
+      if (any(isnan(bounds.min)) || any(isnan(bounds.max)))
+         bounds = vk_aabb(vec3(0.0), vec3(0.0));
+   }
+
+   panvk_write_instance_leaf(REF(panvk_bvh_instance_leaf)(node_addr(index)), extra, base_ptr, otw_matrix,
+                             instance.custom_instance_and_mask, instance.sbt_offset_and_flags, instance_id,
+                             slot);
+   return bounds;
+}
+
+void
+main()
+{
+   uint32_t leaf_count = DEREF(header()).primitive_count;
+   if (gl_GlobalInvocationID.x >= leaf_count)
+      return;
+
+   uint32_t index = DEREF(header()).node_count + gl_GlobalInvocationID.x;
+   vk_aabb bounds;
+   if (args.geometry_type == VK_GEOMETRY_TYPE_INSTANCES_KHR)
+      bounds = update_instance(index, gl_GlobalInvocationID.x);
+   else if (args.geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR)
+      bounds = update_aabb(index);
+   else
+      bounds = update_triangle(index);
+   DEREF(bounds_ref(index)) = bounds;
+
+   for (;;) {
+      uint32_t parent = parent_of(index);
+      if (parent == PANVK_BVH_NO_PARENT) {
+         DEREF(header()).bounds = bounds;
+         break;
+      }
+
+      REF(panvk_bvh_box_node) node = REF(panvk_bvh_box_node)(node_addr(parent));
+      uint32_t count = child_count(node);
+
+      memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
+                    gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+      uint32_t arrived = atomicAdd(DEREF(INDEX(uint32_t, args.ready, parent)), 1, gl_ScopeDevice,
+                                   gl_StorageSemanticsBuffer,
+                                   gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable |
+                                      gl_SemanticsMakeVisible);
+      if (arrived != count - 1)
+         break;
+
+      vk_aabb child_bounds[PANVK_BVH_MAX_CHILDREN];
+      uint32_t child_desc[PANVK_BVH_MAX_CHILDREN];
+      bounds = vk_aabb(vec3(INFINITY), vec3(-INFINITY));
+      for (uint32_t i = 0; i < PANVK_BVH_MAX_CHILDREN; i++) {
+         child_desc[i] = panvk_box_desc(node, i);
+         if (i < count) {
+            child_bounds[i] = DEREF(bounds_ref(panvk_box_child(node, child_desc[i])));
+            bounds.min = min(bounds.min, child_bounds[i].min);
+            bounds.max = max(bounds.max, child_bounds[i].max);
+         }
+      }
+
+      panvk_write_box(node, DEREF(node).origin_x_type & 0xff, child_bounds, child_desc, count,
+                      DEREF(node).internal_base, DEREF(node).leaf_base,
+                      (DEREF(node).exp_z_leaf_count_child01 >> 8) & 0xff);
+      DEREF(bounds_ref(parent)) = bounds;
+      index = parent;
+   }
+}

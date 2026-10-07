@@ -286,8 +286,7 @@ get_afbc_att_mem_props(struct pan_image_plane_ref pref, unsigned mip_level,
                                 : plane->layout.array_stride_B;
 
    *row_stride = slayout->afbc.header.row_stride_B;
-   *body_offset = pan_afbc_body_offset(PAN_ARCH, image->props.modifier,
-                                       slayout->afbc.header.surface_size_B);
+   *body_offset = slayout->afbc.body_offset_B;
    *header = plane->base + slayout->offset_B + (stride_B * layer_or_z_slice);
 }
 
@@ -870,8 +869,7 @@ GENX(pan_emit_afbc_color_attachment)(const struct pan_attachment_info *att,
          &plane->layout.slices[iview->first_level];
 
       cfg.body_size = slayout->afbc.surface_stride_B -
-                      pan_afbc_body_offset(PAN_ARCH, image->props.modifier,
-                                           slayout->afbc.header.surface_size_B);
+                      slayout->afbc.body_offset_B;
       cfg.chunk_size = 9;
       cfg.sparse = true;
 #endif
@@ -1854,6 +1852,15 @@ GENX(pan_select_tiler_hierarchy_mask)(unsigned width, unsigned height,
    if (PAN_ARCH >= 12 &&
        pan_calc_bins_pointer_size(width, height, tile_size, 0) <= mem_budget)
       return 0;
+
+   if (PAN_ARCH >= 12) {
+      uint32_t mask = tile_size > 32 * 32 ? 0xAC : 0xAA;
+      while (util_last_bit(mask) < PAN_BIN_LEVEL_COUNT &&
+             pan_calc_bins_pointer_size(width, height, tile_size, mask) >
+                mem_budget)
+         mask <<= 1;
+      return mask;
+   }
 
    uint32_t max_fb_wh = MAX2(width, height);
    uint32_t last_hierarchy_bit = util_last_bit(DIV_ROUND_UP(max_fb_wh, 16));

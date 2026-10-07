@@ -66,6 +66,11 @@ copy_fbd(struct cs_builder *b, bool has_zs_ext, uint32_t rt_count,
    cs_store(b, cs_scratch_reg_tuple(b, 0, 2), dst, BITFIELD_MASK(2),
             8 * sizeof(uint32_t));
 
+   cs_load_to(b, cs_scratch_reg_tuple(b, 0, 2), src_other, BITFIELD_MASK(2),
+              offsetof(struct panvk_fb_layer_state, vrs_image));
+   cs_store(b, cs_scratch_reg_tuple(b, 0, 2), dst, BITFIELD_MASK(2),
+            offsetof(struct panvk_fb_layer_state, vrs_image));
+
    if (has_zs_ext)
       cs_add_imm64(b, cs_scratch_reg64(b, 0), dst, dbd_offset);
    else
@@ -183,7 +188,7 @@ generate_tiler_oom_handler(struct panvk_device *dev,
    const uint32_t fbd_size = get_fbd_size(has_zs_ext, rt_count);
 
    const struct drm_panthor_csif_info *csif_info =
-      panthor_kmod_get_csif_props(dev->kmod.dev);
+      panvk_get_csif_props(dev);
 
    struct cs_builder b;
    struct cs_builder_conf conf = {

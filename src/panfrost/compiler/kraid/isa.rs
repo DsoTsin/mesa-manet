@@ -485,6 +485,12 @@ pub mod v9 {
     type SourceEncoding64<T, R> = SourceEncodingX<T, R, true>;
 
     use kraid_proc_macros::*;
-    gen_isa_encode!(["isa-v9-v14.xml", "isa-v15.xml"], 9..=15);
-    gen_isa_decode!(["isa-v9-v14.xml", "isa-v15.xml"], 9..=15);
+    gen_isa_encode!(
+        ["isa-v9-v14.xml", "isa-v15.xml", "isa-v15-tensor.xml"],
+        9..=15
+    );
+    gen_isa_decode!(
+        ["isa-v9-v14.xml", "isa-v15.xml", "isa-v15-tensor.xml"],
+        9..=15
+    );
 }

@@ -4,14 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <err.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 
 #include "compiler/glsl/glsl_to_nir.h"
 #include "compiler/glsl_types.h"
@@ -3007,7 +3002,7 @@ midgard_compile_shader_nir(nir_shader *nir,
       nir_log_shaderi(nir);
 
    info->tls_size = nir->scratch_size;
-   info->fau.max = PAN_MAX_PUSH;
+   info->fau.max = pan_max_push(inputs->gpu_id, inputs->gpu_variant);
 
    nir_foreach_function_with_impl(func, impl, nir) {
       list_inithead(&ctx->blocks);

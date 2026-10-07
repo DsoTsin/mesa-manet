@@ -1,0 +1,105 @@
+#version 460
+
+#include "panvk_bvh.h"
+#define VK_USED_BUILD_FLAGS VK_LEAF_BUILD_FLAGS
+#define main vk_leaf_main
+#include "leaf.h"
+#undef main
+#include "panvk_bvh_box.h"
+
+vk_aabb
+child_bounds(REF(panvk_bvh_box_node) root, uint32_t child)
+{
+   vec3 origin = uintBitsToFloat(uvec3(DEREF(root).origin_x_type,
+                                      DEREF(root).origin_y_exp_x,
+                                      DEREF(root).origin_z_exp_y) & ~0xffu);
+   uvec3 exponent = uvec3(DEREF(root).origin_y_exp_x,
+                         DEREF(root).origin_z_exp_y,
+                         DEREF(root).exp_z_leaf_count_child01) & 0xffu;
+   vk_aabb bounds;
+   for (uint32_t a = 0; a < 3; a++) {
+      uint32_t byte = a * 12 + child * 2;
+      uint32_t pair = DEREF(root).bounds[byte / 4] >> ((byte % 4) * 8);
+      float scale = uintBitsToFloat(exponent[a] << 23);
+      bounds.min[a] = origin[a] + float(pair & 0xffu) * scale;
+      bounds.max[a] = origin[a] + float((pair >> 8) & 0xffu) * scale;
+   }
+   return bounds;
+}
+
+bool
+build_split_instance(out vk_aabb bounds, VOID_REF dst, uint32_t instance_id,
+                     uint32_t child, bool split)
+{
+   VOID_REF src = OFFSET(args.geom_data.data, instance_id * args.geom_data.stride);
+   if (args.geom_data.stride == 8)
+      src = DEREF(REF(VOID_REF)(src));
+   if (!build_instance(bounds, src, dst, instance_id))
+      return false;
+   if (!split)
+      return true;
+
+   REF(vk_ir_instance_node) node = REF(vk_ir_instance_node)(dst);
+   uint64_t base = DEREF(node).base_ptr;
+   REF(panvk_bvh_header) header = REF(panvk_bvh_header)(base);
+   REF(panvk_bvh_box_node) root = REF(panvk_bvh_box_node)(base + PANVK_BVH_HEADER_SIZE);
+   uint32_t count = 0;
+   bool valid = true;
+   for (uint32_t i = 0; i < PANVK_BVH_MAX_CHILDREN; i++) {
+      uint32_t desc = panvk_box_desc(root, i);
+      if (desc == PANVK_BVH_CHILD_EMPTY)
+         continue;
+      uint32_t index = panvk_box_child(root, desc);
+      valid = valid && (desc & 0xc0u) == PANVK_BVH_CHILD_INTERNAL &&
+              index > 0 && index <= 0x3fu && index < DEREF(header).node_count;
+      count++;
+   }
+   if (!valid || count < 2)
+      return child == 0;
+
+   uint32_t desc = panvk_box_desc(root, child);
+   if (desc == PANVK_BVH_CHILD_EMPTY)
+      return false;
+
+   bounds = calculate_instance_node_bounds(child_bounds(root, child), DEREF(node).otw_matrix);
+   DEREF(node).base.aabb = bounds;
+   DEREF(node).base_ptr = base | uint64_t(panvk_box_child(root, desc));
+   return true;
+}
+
+void
+main()
+{
+   if ((BUILD_FLAGS & VK_BUILD_FLAG_SPLIT_INSTANCES) == 0 ||
+       args.geom_data.geometry_type != VK_GEOMETRY_TYPE_INSTANCES_KHR) {
+      vk_leaf_main();
+      return;
+   }
+
+   uint32_t global_id = gl_GlobalInvocationID.x;
+   uint32_t split_count = min(args.primitive_count,
+                             (0xffffffu - args.primitive_count) / (PANVK_BVH_MAX_CHILDREN - 1));
+   uint32_t split_slots = split_count * PANVK_BVH_MAX_CHILDREN;
+   bool split = global_id < split_slots;
+   uint32_t instance_id = split ? global_id / PANVK_BVH_MAX_CHILDREN : global_id - split_slots + split_count;
+   uint32_t child = split ? global_id % PANVK_BVH_MAX_CHILDREN : 0;
+   uint32_t primitive_id = args.geom_data.first_id + global_id;
+   uint32_t offset = primitive_id * SIZEOF(vk_ir_instance_node);
+   vk_aabb bounds;
+   bool is_active = false;
+   if (instance_id < args.primitive_count)
+      is_active = build_split_instance(bounds, OFFSET(args.bvh, offset), instance_id, child, split);
+
+   DEREF(INDEX(uint32_t, args.ids, primitive_id)) = is_active ? pack_ir_node_id(offset, vk_ir_node_instance) : VK_BVH_INVALID_NODE;
+   uvec4 ballot = subgroupBallot(is_active);
+   if (subgroupElect())
+      atomicAdd(DEREF(args.header).active_leaf_count, subgroupBallotBitCount(ballot));
+   if (is_active) {
+      atomicMin(DEREF(args.header).min_bounds[0], to_emulated_float(bounds.min.x));
+      atomicMin(DEREF(args.header).min_bounds[1], to_emulated_float(bounds.min.y));
+      atomicMin(DEREF(args.header).min_bounds[2], to_emulated_float(bounds.min.z));
+      atomicMax(DEREF(args.header).max_bounds[0], to_emulated_float(bounds.max.x));
+      atomicMax(DEREF(args.header).max_bounds[1], to_emulated_float(bounds.max.y));
+      atomicMax(DEREF(args.header).max_bounds[2], to_emulated_float(bounds.max.z));
+   }
+}

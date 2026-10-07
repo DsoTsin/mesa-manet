@@ -123,6 +123,8 @@ pub enum FAUPage {
 
     /// The small constant table
     SmallConst,
+
+    Virtual,
 }
 
 impl FAUPage {
@@ -191,6 +193,31 @@ impl FAURef {
             imm32: None,
         }
     }
+
+    pub fn user_i64_zext(idx: u16) -> Self {
+        assert!((idx % 2) == 0);
+        FAURef {
+            page: FAUPage::User,
+            idx: idx | 1,
+            special: None,
+            load64: true,
+            imm32: None,
+        }
+    }
+
+    pub fn is_zext(&self) -> bool {
+        self.load64 && (self.idx & 1) == 1
+    }
+
+    pub fn virtual_i32(idx: u16) -> Self {
+        FAURef {
+            page: FAUPage::Virtual,
+            idx,
+            special: None,
+            load64: false,
+            imm32: None,
+        }
+    }
 }
 
 impl fmt::Display for FAURef {
@@ -211,12 +238,15 @@ impl fmt::Display for FAURef {
                 FAUPage::Special0 => write!(f, "s0:{idx}")?,
                 FAUPage::Special1 => write!(f, "s1:{idx}")?,
                 FAUPage::Special3 => write!(f, "s3:{idx}")?,
+                FAUPage::Virtual => write!(f, "v{idx}")?,
                 FAUPage::SmallConst => panic!("Already handled"),
             }
         }
 
         if self.load64 {
-            debug_assert_eq!(w, 0);
+            if w == 1 {
+                write!(f, ".zext")?;
+            }
         } else {
             write!(f, ".w{w}")?;
         }
@@ -296,12 +326,15 @@ pub enum PreloadReg {
     BlendInputSrc1,
     /// Return address (where to jump when the blend shader finishes)
     BlendReturnAddr,
+
+    PilotFau,
+    PilotSrt,
 }
 
 impl PreloadReg {
     pub fn reg_size(&self) -> u8 {
         match self {
-            Self::FrameArg => 2,
+            Self::FrameArg | Self::PilotFau | Self::PilotSrt => 2,
             Self::BlendInputSrc0 | Self::BlendInputSrc1 => 4,
             _ => 1,
         }
@@ -335,6 +368,8 @@ impl fmt::Display for PreloadReg {
             BlendInputSrc0 => "BLEND_IN_SRC0",
             BlendInputSrc1 => "BLEND_IN_SRC1",
             BlendReturnAddr => "BLEND_RETURN_ADDR",
+            PilotFau => "PILOT_FAU",
+            PilotSrt => "PILOT_SRT",
         };
         write!(f, "{name}")
     }
@@ -636,6 +671,13 @@ impl fmt::Debug for SrcRef {
 }
 
 impl SrcRef {
+    pub fn as_mem(&self) -> Option<&MemRef> {
+        match self {
+            SrcRef::Mem(mem) => Some(mem),
+            _ => None,
+        }
+    }
+
     pub fn as_ssa(&self) -> Option<&SSARef> {
         match self {
             SrcRef::SSA(ssa) => Some(ssa),
@@ -2013,6 +2055,7 @@ impl LabelAllocator {
     }
 }
 
+#[derive(Clone)]
 pub struct BasicBlock {
     pub label: Label,
     pub instrs: Vec<Instr>,
@@ -2179,6 +2222,14 @@ impl fmt::Display for BasicBlock {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HsrInfo {
+    pub ld_tile: bool,
+    pub wait_or_tile_access_before_atest_zsemit: bool,
+    pub varying_before_atest_zsemit: bool,
+    pub centroid_interpolation: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ShaderInfo {
     /// Number of registers used
@@ -2197,6 +2248,9 @@ pub struct ShaderInfo {
     pub blend1_type: Option<DataType>,
     /// Is this a blend shader?
     pub is_blend: bool,
+    pub is_fragment: bool,
+    pub fixed_function_blend: u8,
+    pub hsr: HsrInfo,
 }
 
 impl ShaderInfo {
@@ -2210,11 +2264,14 @@ impl ShaderInfo {
 
 /// Constant data from nir_opt_large_constants, appended to the shader
 /// binary at encode time and addressed PC-relative through its label.
+#[derive(Clone)]
 pub struct ConstantPool {
     pub label: Label,
     pub data: Vec<u8>,
+    pub instrumented_blocks: Vec<(Label, usize)>,
 }
 
+#[derive(Clone)]
 pub struct Shader<'a> {
     pub model: &'a dyn Model,
     pub ssa_alloc: SSAValueAllocator,

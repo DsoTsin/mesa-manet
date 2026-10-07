@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -38,6 +39,7 @@
 #endif
 
 #define MAX_FRAMEBUFFER_LAYERS 256
+#define PANVK_MAX_XFB_BUFFERS 4
 
 struct panvk_cmd_buffer;
 
@@ -54,6 +56,7 @@ struct panvk_resolve_attachment {
 
 struct panvk_rendering_state {
    VkRenderingFlags flags;
+   bool vt_frag_shared_sb;
    uint32_t layer_count;
    uint32_t view_mask;
    enum u_tristate first_provoking_vertex;
@@ -130,19 +133,59 @@ struct panvk_rendering_state {
 
    struct {
       uint64_t fbds[3];
+      void *fbds_cpu[3];
    } ir;
+#endif
+
+#if PAN_ARCH >= 14
+   struct {
+      uint64_t planes;
+      uint32_t layers;
+      uint8_t granule;
+      bool present;
+   } fsr;
+#endif
+
+#if PAN_ARCH >= 13
+   struct panvk_hsr_pass_stats {
+      uint64_t vertex_sum;
+      uint32_t draw_count;
+      uint32_t heavy_varying_draws;
+      bool has_indirect;
+      bool has_occluder;
+      bool has_cullable;
+      bool incomplete;
+      bool draw_can_cull;
+      bool draw_can_be_culled;
+      bool draw_varying_in_prepass;
+      uint32_t fbd_count;
+      uint32_t fbd_stride;
+   } hsr;
+#endif
+
+#if PAN_ARCH >= 15
+   struct {
+      struct pan_ptr planes;
+      uint32_t select;
+      bool serialize;
+   } perf_counters;
 #endif
 };
 
 enum panvk_cmd_graphics_dirty_state {
    PANVK_CMD_GRAPHICS_DIRTY_BASE_INSTANCE,
    PANVK_CMD_GRAPHICS_DIRTY_VS,
+   PANVK_CMD_GRAPHICS_DIRTY_TCS,
+   PANVK_CMD_GRAPHICS_DIRTY_TES,
+   PANVK_CMD_GRAPHICS_DIRTY_GS,
    PANVK_CMD_GRAPHICS_DIRTY_FS,
    PANVK_CMD_GRAPHICS_DIRTY_VB,
    PANVK_CMD_GRAPHICS_DIRTY_OQ,
    PANVK_CMD_GRAPHICS_DIRTY_DESC_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_RENDER_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_VS_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_TCS_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_TES_PUSH_UNIFORMS,
    PANVK_CMD_GRAPHICS_DIRTY_FS_PUSH_UNIFORMS,
    PANVK_CMD_GRAPHICS_DIRTY_IDVS,
    PANVK_CMD_GRAPHICS_DIRTY_STATE_COUNT,
@@ -162,6 +205,17 @@ struct panvk_cmd_graphics_state {
 #endif
    struct panvk_graphics_sysvals sysvals;
 
+   struct {
+      struct {
+         uint64_t address;
+         uint64_t size;
+      } buffers[PANVK_MAX_XFB_BUFFERS];
+      struct pan_ptr offsets;
+      struct panvk_shader_desc_state desc;
+      uint64_t push_uniforms;
+      bool enabled;
+   } xfb;
+
 #if PAN_ARCH < 9
    struct panvk_shader_link link;
 #endif
@@ -172,6 +226,7 @@ struct panvk_cmd_graphics_state {
       uint64_t blend_descs[MAX_RTS];
       uint64_t push_uniforms;
       bool required;
+      bool dgc_execution_set;
 #if PAN_ARCH < 9
       uint64_t rsd;
 #endif
@@ -184,6 +239,7 @@ struct panvk_cmd_graphics_state {
 
    struct {
       const struct panvk_shader *shader;
+      const struct panvk_shader *bound;
       struct panvk_shader_desc_state desc;
       uint64_t push_uniforms;
 #if PAN_ARCH < 9
@@ -200,6 +256,32 @@ struct panvk_cmd_graphics_state {
       uint32_t desc_repeat_count;
 #endif
    } vs;
+
+   struct {
+      struct {
+         const struct panvk_shader *shader;
+         struct panvk_shader_desc_state desc;
+         uint64_t push_uniforms;
+      } tcs;
+
+      struct {
+         const struct panvk_shader *shader;
+         struct panvk_shader_desc_state desc;
+         uint64_t push_uniforms;
+      } tes;
+
+      /* VkDrawIndexedIndirectCommand emitted by the tessellator. */
+      uint64_t out_draws;
+   } tess;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
+      struct panvk_shader_desc_state count_desc;
+      uint64_t rast_push_uniforms;
+      uint64_t params;
+      uint64_t count_buffer;
+   } gs;
 
    struct {
       struct panvk_attrib_buf bufs[MAX_VBS];
@@ -322,6 +404,13 @@ fs_required(const struct panvk_cmd_graphics_state *state,
    if (rs->rasterizer_discard_enable || !fs_info)
       return false;
 
+   /* Execution-set updates may replace a shader without side effects with
+    * one that has them after command recording. Keep FS enabled whenever
+    * the set contains the stage; the selected shader decides its work.
+    */
+   if (state->fs.dgc_execution_set)
+      return true;
+
    /* If we generally have side effects */
    if (fs_info->fs.sidefx)
       return true;
@@ -441,6 +530,8 @@ struct panvk_draw_info {
       uint64_t count_buffer_dev_addr;
       uint32_t draw_count;
       uint32_t stride;
+      /* CPU-unrolled tess indirect record; count activation remains GPU-side. */
+      uint32_t record_index;
    } indirect;
 
    enum mesa_prim prim;

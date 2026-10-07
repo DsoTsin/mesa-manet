@@ -1,6 +1,7 @@
 /*
  * Copyright © 2021 Collabora Ltd.
  * Copyright © 2026 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Derived from tu_cmd_buffer.c which is:
  * Copyright © 2016 Red Hat.
@@ -14,9 +15,12 @@
 
 #include "genxml/gen_macros.h"
 
+#include "cs_builder.h"
+#include "util/u_debug.h"
 #include "panvk_buffer.h"
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
+#include "panvk_dgc_submit.h"
 #include "panvk_cmd_desc_state.h"
 #include "panvk_cmd_pool.h"
 #include "panvk_cmd_push_constant.h"
@@ -40,6 +44,76 @@
 #include "vk_descriptor_update_template.h"
 #include "vk_format.h"
 #include "vk_synchronization.h"
+
+DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_frag_others_inv,
+                           "PANVK_CSF_OPT_FRAG_OTHERS_INV", false)
+DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_batch_others_inv,
+                           "PANVK_CSF_OPT_BATCH_OTHERS_INV", false)
+DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_cb_tail, "PANVK_CSF_OPT_CB_TAIL",
+                           false)
+
+static bool
+cb_tail_merged_into_ring(const struct panvk_cmd_buffer *cmdbuf)
+{
+   const struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+
+   return PAN_ARCH >= 15 &&
+          cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY &&
+          phys_dev->kbase_node_path[0] != 0 &&
+          debug_get_option_panvk_csf_opt_cb_tail();
+}
+
+static void
+resolve_deferred_others_inv(struct panvk_cmd_buffer *cmdbuf)
+{
+   for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++) {
+      struct cs_builder *b = &cmdbuf->state.cs[i].builder;
+
+      if (b->deferred_others_inv.maybe)
+         cs_resolve_others_inv(b, false);
+   }
+}
+
+void
+panvk_per_arch(kbase_mark_progress)(
+   struct panvk_cmd_buffer *cmdbuf, enum panvk_subqueue_id subqueue,
+   enum panvk_kbase_progress_marker marker)
+{
+   /* These stores are breadcrumbs for queue-hang diagnosis, not part of the
+    * queue ABI.  Keeping them in every draw/dispatch stream adds several LS
+    * instructions and a store flush at each marker, which is particularly
+    * costly for draw-heavy applications.  Keep the instrumentation opt-in. */
+   if (!PANVK_DEBUG(KBASE_DIAG))
+      return;
+
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+
+   if (!phys_dev->kbase_node_path[0])
+      return;
+
+   enum {
+      KBASE_MARK_ADDR_REG = 14,
+      KBASE_MARK_VALUE_REG = 16,
+   };
+   STATIC_ASSERT(KBASE_MARK_ADDR_REG + 2 <= CS_REG_SCRATCH_COUNT);
+   STATIC_ASSERT(KBASE_MARK_VALUE_REG + 1 <= CS_REG_SCRATCH_COUNT);
+
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf, subqueue);
+   struct cs_index addr = cs_scratch_reg64(b, KBASE_MARK_ADDR_REG);
+   struct cs_index value = cs_scratch_reg32(b, KBASE_MARK_VALUE_REG);
+
+   cs_load64_to(b, addr, cs_subqueue_ctx_reg(b),
+                offsetof(struct panvk_cs_subqueue_context,
+                         debug.kbase_progress_addr));
+   cs_move32_to(b, value, marker);
+   // cs_store32(b, value, addr, 0);
+   cs_sync32_add(b, true, MALI_CS_SYNC_SCOPE_CSG, value, addr, cs_now());
+   cs_flush_stores(b);
+}
 
 static void
 emit_tls(struct panvk_cmd_buffer *cmdbuf)
@@ -105,10 +179,29 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, subqueue);
 
-   cs_wait_slots(b, dev->csf.sb.all_mask);
+   if (b->deferred_others_inv.maybe)
+      cs_resolve_others_inv(b, false);
+
+   const bool merged_tail = cb_tail_merged_into_ring(cmdbuf);
+
+   panvk_csstat_add(dev, others_covered, b->deferred_others_inv.covered);
+   panvk_csstat_add(dev, others_restored, b->deferred_others_inv.restored);
+   b->deferred_others_inv.covered = 0;
+   b->deferred_others_inv.restored = 0;
+   if (merged_tail)
+      panvk_csstat_inc(dev, cb_tails_merged);
+   else
+      panvk_csstat_inc(dev, cb_tails_drained);
+
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, subqueue, PANVK_KBASE_PROGRESS_FINISH_BEFORE_WAIT);
+   if (!merged_tail)
+      cs_wait_slots(b, dev->csf.sb.all_mask);
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, subqueue, PANVK_KBASE_PROGRESS_FINISH_AFTER_WAIT);
 
    /* save CS error if non-zero */
-   if (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY) {
+   if (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY && !merged_tail) {
       struct cs_index sync_addr = cs_scratch_reg64(b, 0);
       struct cs_index error = cs_scratch_reg32(b, 2);
 
@@ -130,23 +223,26 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
     * command pool where they get recycled. If we don't clean dirty cache lines,
     * those cache lines might get evicted asynchronously and their content
     * pushed back to main memory after the CPU has written new stuff there. */
-   struct cs_index flush_id = cs_scratch_reg32(b, 0);
+   if (!merged_tail) {
+      struct cs_index flush_id = cs_scratch_reg32(b, 0);
 
-   panvk_per_arch(panvk_instr_begin_work)(subqueue, cmdbuf,
-                                          PANVK_INSTR_WORK_TYPE_FLUSH_CACHE);
-   cs_move32_to(b, flush_id, 0);
-   cs_flush_caches(b, MALI_CS_FLUSH_MODE_CLEAN, MALI_CS_FLUSH_MODE_CLEAN,
-                   MALI_CS_OTHER_FLUSH_MODE_NONE, flush_id,
-                   cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
-   cs_wait_slot(b, SB_ID(IMM_FLUSH));
-   struct panvk_instr_end_args instr_info_flush = {
-      .flush_cache = {
-         .l2 = MALI_CS_FLUSH_MODE_CLEAN,
-         .lsc = MALI_CS_FLUSH_MODE_CLEAN,
-         .other = MALI_CS_OTHER_FLUSH_MODE_NONE,
-      }};
-   panvk_per_arch(panvk_instr_end_work)(
-      subqueue, cmdbuf, PANVK_INSTR_WORK_TYPE_FLUSH_CACHE, &instr_info_flush);
+      panvk_per_arch(panvk_instr_begin_work)(subqueue, cmdbuf,
+                                             PANVK_INSTR_WORK_TYPE_FLUSH_CACHE);
+      cs_move32_to(b, flush_id, 0);
+      cs_flush_caches(b, MALI_CS_FLUSH_MODE_CLEAN, MALI_CS_FLUSH_MODE_CLEAN,
+                      MALI_CS_OTHER_FLUSH_MODE_NONE, flush_id,
+                      cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+      cs_wait_slot(b, SB_ID(IMM_FLUSH));
+      struct panvk_instr_end_args instr_info_flush = {
+         .flush_cache = {
+            .l2 = MALI_CS_FLUSH_MODE_CLEAN,
+            .lsc = MALI_CS_FLUSH_MODE_CLEAN,
+            .other = MALI_CS_OTHER_FLUSH_MODE_NONE,
+         }};
+      panvk_per_arch(panvk_instr_end_work)(
+         subqueue, cmdbuf, PANVK_INSTR_WORK_TYPE_FLUSH_CACHE,
+         &instr_info_flush);
+   }
 
    /* If this is a secondary command buffer, we don't poison the reg file to
     * preserve the render pass context. We also don't poison the reg file if the
@@ -188,6 +284,8 @@ finish_cs(struct panvk_cmd_buffer *cmdbuf, uint32_t subqueue)
    panvk_per_arch(panvk_instr_end_work)(
       subqueue, cmdbuf, PANVK_INSTR_WORK_TYPE_CMDBUF, &instr_info_cmdbuf);
 
+   panvk_per_arch(kbase_mark_progress)(
+      cmdbuf, subqueue, PANVK_KBASE_PROGRESS_CMDBUF_DONE);
    cs_end(&cmdbuf->state.cs[subqueue].builder);
 }
 
@@ -225,7 +323,7 @@ finish_queries(struct panvk_cmd_buffer *cmdbuf)
                    offsetof(struct panvk_cs_timestamp_query, avail));
 
       cs_move32_to(b, signal_val, 1);
-      cs_sync32_set(b, true, MALI_CS_SYNC_SCOPE_CSG, signal_val, syncobj,
+      cs_sync32_set(b, true, cmdbuf->sync_scope, signal_val, syncobj,
                     cs_defer(SB_IMM_MASK, SB_ID(DEFERRED_SYNC)));
    }
 
@@ -240,6 +338,9 @@ VKAPI_ATTR VkResult VKAPI_CALL
 panvk_per_arch(EndCommandBuffer)(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+
+   panvk_per_arch(cmd_pilot_close_all)(cmdbuf);
+   panvk_per_arch(cmd_flush_fs_pilots)(cmdbuf);
 
    /* Finishing queries requires a barrier. We don't want to do that more
     * often than necessary. At the end of a primary is usually enough.
@@ -259,6 +360,14 @@ panvk_per_arch(EndCommandBuffer)(VkCommandBuffer commandBuffer)
 
    for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++) {
       struct cs_builder *b = &cmdbuf->state.cs[i].builder;
+
+      /* Builders are allocated lazily.  Don't turn an otherwise unused
+       * subqueue into a real submission just to append end-of-stream waits,
+       * cache maintenance and diagnostic breadcrumbs.  Besides the ring
+       * ioctl overhead, an unused stream used to execute a full L2/LSC clean
+       * on every command buffer. */
+      if (cs_is_empty(b))
+         continue;
 
       if (!cs_is_valid(b)) {
          vk_command_buffer_set_error(&cmdbuf->vk,
@@ -367,7 +476,9 @@ add_memory_dependency(struct panvk_cache_flush_info *cache_flush,
       VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
       VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-      VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+      VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT |
+      VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR |
+      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 
    /* visibility op */
    if (dst_access & ro_l1_access)
@@ -395,10 +506,36 @@ collect_cache_flush_info(enum panvk_subqueue_id subqueue,
    /* limit access to the subqueue and host */
    const VkPipelineStageFlags2 subqueue_stages =
       panvk_get_subqueue_stages(subqueue) | VK_PIPELINE_STAGE_2_HOST_BIT;
+   const VkAccessFlags2 raw_dst_access = dst_access;
    src_access = vk_filter_src_access_flags2(subqueue_stages, src_access);
    dst_access = vk_filter_dst_access_flags2(subqueue_stages, dst_access);
 
    add_memory_dependency(cache_flush, src_access, dst_access);
+
+   /* A/B experiment (vendor-like memory model): with non-shareable buffer
+    * objects (PANVK_KBASE_COHERENT_LOCAL=0) the LS caches are not coherent
+    * with each other, so a device write needs an availability op (LSC clean)
+    * and a device read a visibility op (LSC invalidate).
+    * PANVK_KBASE_LSC_BARRIER=1 enables it. */
+   static int lsc_barrier = -1;
+   if (lsc_barrier < 0)
+      lsc_barrier = debug_get_bool_option("PANVK_KBASE_LSC_BARRIER", false);
+   const VkAccessFlags2 host_access =
+      VK_ACCESS_2_HOST_READ_BIT | VK_ACCESS_2_HOST_WRITE_BIT;
+   const VkAccessFlags2 device_write_access =
+      VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+      VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT |
+      VK_ACCESS_2_TRANSFORM_FEEDBACK_WRITE_BIT_EXT |
+      VK_ACCESS_2_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT |
+      VK_ACCESS_2_COMMAND_PREPROCESS_WRITE_BIT_EXT;
+   /* The flush runs on the producing subqueue before it signals the
+    * consumers (emit_barrier), so test this subqueue's writes against the
+    * unfiltered destination access. */
+   if (lsc_barrier && (src_access & device_write_access) &&
+       (raw_dst_access & ~host_access))
+      cache_flush->lsc |= MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE;
 }
 
 static void
@@ -507,6 +644,12 @@ panvk_per_arch(add_cs_deps)(struct panvk_cmd_buffer *cmdbuf,
                             struct panvk_cs_deps *out,
                             bool is_set_event)
 {
+   panvk_per_arch(cmd_pilot_close_all)(cmdbuf);
+
+   if (util_dynarray_num_elements(&cmdbuf->pilots.fs,
+                                  struct panvk_pilot_entry))
+      cmdbuf->pilots.fs_after_tiling = true;
+
    bool is_asymmetric_event =
       is_set_event &&
       in->dependencyFlags & VK_DEPENDENCY_ASYMMETRIC_EVENT_BIT_KHR;
@@ -551,6 +694,24 @@ panvk_per_arch(add_cs_deps)(struct panvk_cmd_buffer *cmdbuf,
 
       collect_cs_deps(cmdbuf, in, src, dst, out);
    }
+
+   const VkTensorDependencyInfoARM *tensor_deps =
+      vk_find_struct_const(in->pNext, TENSOR_DEPENDENCY_INFO_ARM);
+   const VkTensorMemoryBarrierARM *tensor_barriers =
+      tensor_deps ? tensor_deps->pTensorMemoryBarriers
+                  : vk_find_struct_const(in->pNext, TENSOR_MEMORY_BARRIER_ARM);
+   const uint32_t tensor_barrier_count =
+      tensor_deps ? tensor_deps->tensorMemoryBarrierCount : !!tensor_barriers;
+
+   for (uint32_t i = 0; i < tensor_barrier_count; i++) {
+      const VkTensorMemoryBarrierARM *barrier = &tensor_barriers[i];
+      struct panvk_sync_scope src = {barrier->srcStageMask, barrier->srcAccessMask};
+      struct panvk_sync_scope dst = {barrier->dstStageMask, barrier->dstAccessMask};
+      normalize_dependency(&src, &dst, barrier->srcQueueFamilyIndex,
+                           barrier->dstQueueFamilyIndex);
+
+      collect_cs_deps(cmdbuf, in, src, dst, out);
+   }
 }
 
 static void
@@ -579,7 +740,10 @@ emit_barrier_insert_waits(struct cs_builder *b, struct panvk_cmd_buffer *cmdbuf,
 static void
 emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
 {
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    uint32_t wait_subqueue_mask = 0;
+
+   panvk_csstat_inc(dev, barriers);
    uint32_t utrace_subqueue_mask = 0;
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       /* no need to perform both types of waits on the same subqueue */
@@ -602,18 +766,47 @@ emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);
       struct panvk_cs_state *cs_state = &cmdbuf->state.cs[i];
 
-      if (deps.src[i].wait_sb_mask)
+      if (deps.src[i].wait_sb_mask) {
          cs_wait_slots(b, deps.src[i].wait_sb_mask);
+         panvk_csstat_inc(dev, self_waits[i]);
+      }
 
       struct panvk_cache_flush_info cache_flush = deps.src[i].cache_flush;
-      if (!panvk_cache_flush_is_nop(&cache_flush)) {
+      const bool others_only =
+         cache_flush.l2 == MALI_CS_FLUSH_MODE_NONE &&
+         cache_flush.lsc == MALI_CS_FLUSH_MODE_NONE && !cache_flush.neural &&
+         cache_flush.others == MALI_CS_OTHER_FLUSH_MODE_INVALIDATE;
+      const bool frag_covered = PAN_ARCH >= 13 &&
+                                i == PANVK_SUBQUEUE_FRAGMENT &&
+                                debug_get_option_panvk_csf_opt_frag_others_inv();
+      if (others_only &&
+          (frag_covered || debug_get_option_panvk_csf_opt_batch_others_inv())) {
          struct cs_index flush_id = cs_scratch_reg32(b, 0);
+         struct cs_maybe *maybe;
+
+         cs_maybe(b, &maybe) {
+            cs_move32_to(b, flush_id, 0);
+            cs_flush_caches(b, MALI_CS_FLUSH_MODE_NONE, MALI_CS_FLUSH_MODE_NONE,
+                            MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, flush_id,
+                            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+         }
+         cs_defer_others_inv(b, maybe, SB_ID(IMM_FLUSH), frag_covered);
+         panvk_csstat_inc(dev, flush_deferred[i]);
+      } else if (!panvk_cache_flush_is_nop(&cache_flush)) {
+         struct cs_index flush_id = cs_scratch_reg32(b, 0);
+
+         if (others_only)
+            panvk_csstat_inc(dev, flush_others_only[i]);
+         else
+            panvk_csstat_inc(dev, flush_other[i]);
 
          panvk_per_arch(panvk_instr_begin_work)(
             i, cmdbuf, PANVK_INSTR_WORK_TYPE_FLUSH_CACHE);
          cs_move32_to(b, flush_id, 0);
-         cs_flush_caches(b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
-                         flush_id, cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+         cs_flush_caches_with_neural(
+            b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
+            cache_flush.neural, flush_id,
+            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
          cs_wait_slot(b, SB_ID(IMM_FLUSH));
          struct panvk_instr_end_args instr_info_flush = {
             .flush_cache = {
@@ -637,15 +830,19 @@ emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
          cs_add_imm64(b, sync_addr, sync_addr,
                       sizeof(struct panvk_cs_sync64) * i);
          cs_move64_to(b, add_val, 1);
-         panvk_instr_sync64_add(cmdbuf, i, true, MALI_CS_SYNC_SCOPE_CSG,
+         panvk_instr_sync64_add(cmdbuf, i, true, cmdbuf->sync_scope,
                                 add_val, sync_addr, cs_now());
          ++cs_state->relative_sync_point;
+         panvk_csstat_inc(dev, sync_signals[i]);
       }
    }
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);
       struct cs_index tmp_regs = cs_scratch_reg_tuple(b, 0, 4);
+
+      panvk_csstat_add(dev, sync_waits[i],
+                       util_bitcount(deps.dst[i].wait_subqueue_mask));
 
       if (deps.dst[i].conditional) {
          assert(deps.dst[i].cond_value.reg >= tmp_regs.reg + tmp_regs.size ||
@@ -673,6 +870,8 @@ void
 panvk_per_arch(emit_barrier)(struct panvk_cmd_buffer *cmdbuf,
                              struct panvk_cs_deps deps)
 {
+   panvk_per_arch(cmd_pilot_close_all)(cmdbuf);
+
    /* Execute CRC invalidation after all source work and before releasing any
     * destination subqueue. One subqueue performs the state writes.
     */
@@ -788,7 +987,7 @@ init_cs_builders(struct panvk_cmd_buffer *cmdbuf)
    };
 
    const struct drm_panthor_csif_info *csif_info =
-      panthor_kmod_get_csif_props(dev->kmod.dev);
+      panvk_get_csif_props(dev);
 
    for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++) {
       struct cs_builder *b = &cmdbuf->state.cs[i].builder;
@@ -835,6 +1034,10 @@ panvk_reset_cmdbuf(struct vk_command_buffer *vk_cmdbuf,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
 
    vk_command_buffer_reset(&cmdbuf->vk);
+   panvk_per_arch(dgc_records_reset)(cmdbuf);
+
+   panvk_priv_bo_unref(cmdbuf->poly_heap.bo);
+   memset(&cmdbuf->poly_heap, 0, sizeof(cmdbuf->poly_heap));
 
    panvk_pool_reset(&cmdbuf->cs_pool);
    panvk_pool_reset(&cmdbuf->desc_pool);
@@ -850,6 +1053,8 @@ panvk_reset_cmdbuf(struct vk_command_buffer *vk_cmdbuf,
 
    for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++)
       cs_builder_fini(&cmdbuf->state.cs[i].builder);
+
+   panvk_per_arch(cmd_pilots_reset)(cmdbuf);
 
    memset(&cmdbuf->state, 0, sizeof(cmdbuf->state));
    init_cs_builders(cmdbuf);
@@ -870,7 +1075,12 @@ panvk_destroy_cmdbuf(struct vk_command_buffer *vk_cmdbuf)
    for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++)
       cs_builder_fini(&cmdbuf->state.cs[i].builder);
 
+   panvk_priv_bo_unref(cmdbuf->poly_heap.bo);
+
+   panvk_per_arch(cmd_pilots_fini)(cmdbuf);
+
    panvk_pool_cleanup(&cmdbuf->cs_pool);
+   panvk_per_arch(dgc_records_reset)(cmdbuf);
    panvk_pool_cleanup(&cmdbuf->desc_pool);
    panvk_pool_cleanup(&cmdbuf->tls_pool);
    list_splicetail(&cmdbuf->push_sets, &pool->push_sets);
@@ -900,8 +1110,23 @@ panvk_create_cmdbuf(struct vk_command_pool *vk_pool, VkCommandBufferLevel level,
       return result;
    }
 
+   /* The subqueues' sync objects are only waited on by the other subqueues
+    * of the queue's CSG; the host waits for the system-scope signal at the
+    * end of each submission. A system-scope update makes the firmware notify
+    * the host (CSG_SYNC_UPDATE interrupt), so it is only used when each
+    * subqueue has its own CSG (PANVK_KBASE_CSG_PER_SUBQUEUE=1). */
+   cmdbuf->sync_scope = MALI_CS_SYNC_SCOPE_CSG;
+#ifdef HAVE_PAN_KMOD_KBASE
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(device->vk.physical);
+   if (phys_dev->kbase_node_path[0] && !phys_dev->kbase.single_csg)
+      cmdbuf->sync_scope = MALI_CS_SYNC_SCOPE_SYSTEM;
+#endif
+
    list_inithead(&cmdbuf->push_sets);
+   panvk_per_arch(cmd_pilots_init)(cmdbuf);
    cmdbuf->vk.dynamic_graphics_state.vi = &cmdbuf->state.gfx.dynamic.vi;
+   list_inithead(&cmdbuf->dgc_records);
    cmdbuf->vk.dynamic_graphics_state.ms.sample_locations =
       &cmdbuf->state.gfx.dynamic.sl;
 
@@ -929,8 +1154,8 @@ panvk_create_cmdbuf(struct vk_command_pool *vk_pool, VkCommandBufferLevel level,
                    &desc_pool_props);
 
    struct panvk_pool_properties tls_pool_props = {
-      .create_flags =
-         panvk_device_adjust_bo_flags(device, PAN_KMOD_BO_FLAG_NO_MMAP),
+      .create_flags = panvk_device_adjust_bo_flags(
+         device, PAN_KMOD_BO_FLAG_NO_MMAP | PAN_KMOD_BO_FLAG_GPU_PRIVATE),
       .slab_size = 64 * 1024,
       .label = "TLS pool",
       .prealloc = false,
@@ -980,9 +1205,10 @@ panvk_per_arch(BeginCommandBuffer)(VkCommandBuffer commandBuffer,
          cmdbuf->state.cond_render.inherited = true;
    }
 
-   for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++)
+   for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       panvk_per_arch(panvk_instr_begin_work)(i, cmdbuf,
                                              PANVK_INSTR_WORK_TYPE_CMDBUF);
+   }
 
    return VK_SUCCESS;
 }
@@ -1017,12 +1243,27 @@ panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
    if (commandBufferCount == 0)
       return;
 
+   panvk_per_arch(cmd_pilot_close_all)(primary);
+   resolve_deferred_others_inv(primary);
+
    /* Write out any pending seqno changes to registers before calling
     * secondary command buffers. */
    flush_sync_points(primary);
 
    for (uint32_t i = 0; i < commandBufferCount; i++) {
       VK_FROM_HANDLE(panvk_cmd_buffer, secondary, pCommandBuffers[i]);
+      VkResult dgc_result = panvk_per_arch(dgc_record_secondary)(primary, secondary);
+      if (dgc_result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&primary->vk, dgc_result);
+         return;
+      }
+
+      if (UINT64_MAX - primary->state.tiler_work_estimate <
+          secondary->state.tiler_work_estimate)
+         primary->state.tiler_work_estimate = UINT64_MAX;
+      else
+         primary->state.tiler_work_estimate +=
+            secondary->state.tiler_work_estimate;
 
       /* make sure the CS context is setup properly
        * to inherit the primary command buffer state

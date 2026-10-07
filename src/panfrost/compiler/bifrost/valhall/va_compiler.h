@@ -19,6 +19,7 @@ void va_repair_fau(bi_builder *b, bi_instr *I, unsigned arch);
 void va_fuse_add_imm(bi_instr *I);
 void va_lower_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts, uint32_t min_fau_count);
 void va_count_constants(bi_context *ctx, bi_instr *I, struct hash_table_u64 *counts);
+uint32_t va_min_fau_count(struct hash_table_u64 *counts, unsigned capacity);
 void va_lower_isel(bi_context *ctx);
 void va_assign_slots(bi_context *ctx);
 void va_insert_flow_control_nops(bi_context *ctx);
@@ -61,7 +62,11 @@ static inline unsigned
 va_select_fau_page(const bi_instr *I, unsigned arch)
 {
    bi_foreach_src(I, s) {
-      if (I->src[s].type == BI_INDEX_FAU)
+      /* LUT immediates are available on every page. Only uniforms and
+       * special FAU values constrain the instruction's page selection.
+       */
+      if (I->src[s].type == BI_INDEX_FAU &&
+          !(I->src[s].value & BIR_FAU_IMMEDIATE))
          return va_fau_page((enum bir_fau)I->src[s].value, arch);
    }
 

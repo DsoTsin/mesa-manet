@@ -8,6 +8,10 @@ use crate::ssa_value::AllocSSA;
 use compiler::bitset::BitSet;
 use std::ops::Range;
 
+#[cfg(test)]
+#[path = "parallel_copy_tests.rs"]
+mod tests;
+
 const MAX_COPY_SIZE_LOG2: u32 = 3; // COPY.i64 is the maximum
 const MAX_COPY_SIZE: u8 = 1 << MAX_COPY_SIZE_LOG2;
 
@@ -256,6 +260,7 @@ pub struct ParallelCopy<'a> {
     max_b: u16,
     copies: Vec<ByteCopy>,
     const_copies: Vec<Instr>,
+    scratch: Option<Range<u16>>,
 }
 
 impl ParallelCopy<'_> {
@@ -268,6 +273,49 @@ impl ParallelCopy<'_> {
             max_b: 0,
             copies: Default::default(),
             const_copies: Default::default(),
+            scratch: None,
+        }
+    }
+
+    pub fn set_scratch_from_instr(&mut self, instr: &Instr) {
+        if self.is_mem
+            || self.model.arch() != 15
+            || !matches!(instr.op, Op::RtTrace(_))
+        {
+            return;
+        }
+        for dst in instr.dsts() {
+            let DstRef::Reg(reg) = dst.dst_ref else {
+                continue;
+            };
+            if dst.lanes != DstLanes::All {
+                continue;
+            }
+            let range = reg.byte_range();
+            for start in (range.start..range.end).step_by(4) {
+                let scratch = start..start + 4;
+                if scratch.end > range.end {
+                    continue;
+                }
+                let overlaps = |r: Range<u16>| {
+                    r.start < scratch.end && scratch.start < r.end
+                };
+                if instr.srcs().iter().any(|src| match src.src_ref {
+                    SrcRef::Reg(reg) => overlaps(reg.byte_range()),
+                    _ => false,
+                }) || self.copies.iter().any(|copy| {
+                    overlaps(copy.src_b.clone()) || overlaps(copy.dst_b.clone())
+                }) || self.const_copies.iter().any(|copy| {
+                    copy.dsts().iter().any(|dst| match dst.dst_ref {
+                        DstRef::Reg(reg) => overlaps(reg.byte_range()),
+                        _ => false,
+                    })
+                }) {
+                    continue;
+                }
+                self.scratch = Some(scratch);
+                return;
+            }
         }
     }
 
@@ -500,6 +548,31 @@ impl ParallelCopy<'_> {
                 copy_size = copy_size.min(MAX_MEM_SWAP_SIZE);
             }
             let copy_size = u16::from(copy_size);
+
+            if let Some(scratch) = self.scratch.as_ref().filter(|scratch| {
+                copy_size >= 2 && copy_size <= scratch.end - scratch.start
+            }) {
+                let scratch = scratch.start..scratch.start + copy_size;
+                copy_regs(
+                    &mut b,
+                    scratch.clone(),
+                    start_b..start_b + copy_size,
+                );
+                dst_b = start_b;
+                loop {
+                    let src_b = bytes[dst_b].src_byte;
+                    let dst = dst_b..dst_b + copy_size;
+                    needed.unset_range(dst.start.into()..dst.end.into());
+                    if src_b == start_b {
+                        copy_regs(&mut b, dst, scratch);
+                        break;
+                    }
+                    copy_regs(&mut b, dst, src_b..src_b + copy_size);
+                    dst_b = src_b;
+                }
+                start = start_b + copy_size;
+                continue;
+            }
 
             // Now emit N - 1 swaps
             dst_b = bytes[start_b].src_byte;

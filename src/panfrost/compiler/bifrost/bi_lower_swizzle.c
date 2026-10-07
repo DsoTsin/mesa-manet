@@ -256,7 +256,8 @@ bi_lower_swizzle(bi_context *ctx)
 
       /* On Valhall, if the instruction does some conversion depending on
        * swizzle, we should not touch it. */
-      if (ctx->arch >= 9 && va_op_dest_modifier_does_convert(ins->op))
+      if (ctx->arch >= 9 && (va_op_dest_modifier_does_convert(ins->op) ||
+                             va_op_dest_selects_half(ins->op)))
          continue;
 
       /* The above passes rely on replicating destinations.  For

@@ -400,9 +400,14 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_read_handle_intel:
    case nir_intrinsic_load_ttmp_register_amd:
    case nir_intrinsic_load_scalar_arg_amd:
+   case nir_intrinsic_load_vertex_param_buffer_poly:
+   case nir_intrinsic_load_tess_param_buffer_poly:
+   case nir_intrinsic_load_geometry_param_buffer_poly:
    case nir_intrinsic_load_ro_sink_address_poly:
+   case nir_intrinsic_load_provoking_last:
    case nir_intrinsic_load_frame_arg_pan:
    case nir_intrinsic_load_noperspective_varyings_pan:
+   case nir_intrinsic_load_clip_cull_count_pan:
    case nir_intrinsic_load_multisampled_pan:
    case nir_intrinsic_load_rt_conversion_pan:
    case nir_intrinsic_subgroup_barrier_index_intel:
@@ -748,6 +753,15 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
                      load_may_tear(state, instr);
       break;
 
+   case nir_intrinsic_tensor_read_arm:
+   case nir_intrinsic_load_tensor_pan:
+      is_divergent = (src_divergent(instr->src[0], state) &&
+                      (nir_intrinsic_access(instr) & ACCESS_NON_UNIFORM)) ||
+                     src_divergent(instr->src[1], state) ||
+                     src_divergent(instr->src[2], state) ||
+                     load_may_tear(state, instr);
+      break;
+
    case nir_intrinsic_optimization_barrier_vgpr_amd:
       is_divergent = src_divergent(instr->src[0], state);
       break;
@@ -809,6 +823,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_image_deref_size:
    case nir_intrinsic_bindless_image_size:
    case nir_intrinsic_image_heap_size:
+   case nir_intrinsic_tensor_size_arm:
    case nir_intrinsic_image_descriptor_amd:
    case nir_intrinsic_image_deref_descriptor_amd:
    case nir_intrinsic_image_heap_descriptor_amd:
@@ -826,6 +841,8 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_attr_pan:
    case nir_intrinsic_lea_attr_pan:
    case nir_intrinsic_lea_buf_pan:
+   case nir_intrinsic_rt_trace_begin_pan:
+   case nir_intrinsic_rt_trace_resume_pan:
    case nir_intrinsic_cubeface_pan:
    case nir_intrinsic_cube_ssel_pan:
    case nir_intrinsic_cube_tsel_pan:
@@ -1134,6 +1151,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_tile_res_pan:
    case nir_intrinsic_load_cumulative_coverage_pan:
    case nir_intrinsic_load_blend_input_pan:
+   case nir_intrinsic_load_pilot_arg_pan:
    case nir_intrinsic_load_idvs_output_buf_index_pan:
    case nir_intrinsic_load_sample_centroid_pan:
    case nir_intrinsic_atest_pan:

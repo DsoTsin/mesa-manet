@@ -1,6 +1,7 @@
 /*
  * Copyright © 2024 Collabora Ltd.
  * Copyright © 2024 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -600,6 +601,7 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
    uint32_t att_width = UINT32_MAX, att_height = UINT32_MAX;
 
    render->flags = pRenderingInfo->flags;
+   render->vt_frag_shared_sb = false;
 
    BITSET_SET(cmdbuf->state.gfx.dirty, PANVK_CMD_GRAPHICS_DIRTY_RENDER_STATE);
 
@@ -626,6 +628,21 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
                          ? util_last_bit(pRenderingInfo->viewMask)
                          : pRenderingInfo->layerCount;
    render->view_mask = pRenderingInfo->viewMask;
+#if PAN_ARCH >= 14
+   memset(&render->fsr, 0, sizeof(render->fsr));
+   const VkRenderingFragmentShadingRateAttachmentInfoKHR *fsr_att =
+      vk_find_struct_const(pRenderingInfo->pNext,
+                           RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR);
+   if (fsr_att && fsr_att->imageView != VK_NULL_HANDLE) {
+      VK_FROM_HANDLE(panvk_image_view, fsr_view, fsr_att->imageView);
+      pan_unpack(&fsr_view->descs.tex[0], TEXTURE, fsr_tex);
+      render->fsr.present = true;
+      render->fsr.planes = fsr_tex.surfaces;
+      render->fsr.layers = MAX2(fsr_view->vk.layer_count, 1);
+      render->fsr.granule =
+         util_logbase2(fsr_att->shadingRateAttachmentTexelSize.width) - 3;
+   }
+#endif
    render->fb.layout = (struct pan_fb_layout) {
       /* In case ms2ss is enabled, use the provided sample count.
        *
@@ -865,6 +882,14 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
 
    set_gfx_sysval(cmdbuf, dirty_sysvals, vs.noperspective_varyings,
                   noperspective_varyings);
+
+   const struct panvk_shader_variant *clip_vs = panvk_shader_hw_variant(
+      cmdbuf->state.gfx.tess.tes.shader ? cmdbuf->state.gfx.tess.tes.shader
+                                        : cmdbuf->state.gfx.vs.shader);
+   set_gfx_sysval(cmdbuf, dirty_sysvals, fs.clip_cull,
+                  clip_vs ? clip_vs->info.vs.clip_distance_count |
+                               (clip_vs->info.vs.cull_distance_count << 4)
+                          : 0);
    set_gfx_sysval(cmdbuf, dirty_sysvals, vs.first_vertex, info->vertex.base);
    set_gfx_sysval(cmdbuf, dirty_sysvals, vs.base_instance, info->instance.base);
 
@@ -958,7 +983,12 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
 
    }
 
-   if (dyn_gfx_state_dirty(cmdbuf, INPUT_ATTACHMENT_MAP))
+   /* The map may stay unchanged across rendering instances, while the bound
+    * attachments, their formats, or legacy dithering change. All of those
+    * contribute to the tile-load conversion parameters.
+    */
+   if (dyn_gfx_state_dirty(cmdbuf, INPUT_ATTACHMENT_MAP) ||
+       gfx_state_dirty(cmdbuf, RENDER_STATE))
       prepare_iam_sysvals(cmdbuf, dirty_sysvals);
 
    const struct panvk_shader_variant *vs =

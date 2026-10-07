@@ -17,6 +17,8 @@
 
 #include "util/mesa-blake3.h"
 
+#include "panvk_tensor.h"
+
 #include "genxml/gen_macros.h"
 
 #define PANVK_DESCRIPTOR_SIZE         32
@@ -104,6 +106,8 @@ struct panvk_descriptor_set_layout {
    /* Bitmask of which dynamic buffers are SSBOs */
    uint32_t dyn_ssbos;
 
+   bool has_tensors;
+
    /* Number of bindings in this descriptor set */
    uint32_t binding_count;
 
@@ -125,8 +129,11 @@ static inline uint32_t
 panvk_get_desc_stride(const struct panvk_descriptor_set_binding_layout *layout)
 {
    /* One descriptor for each sampler plane, and one for each texture. */
-   return layout->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-      ? layout->textures_per_desc + layout->samplers_per_desc : 1;
+   if (layout->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+      return layout->textures_per_desc + layout->samplers_per_desc;
+
+   return layout->type == VK_DESCRIPTOR_TYPE_TENSOR_ARM
+      ? PANVK_TENSOR_DESCRIPTOR_SIZE / PANVK_DESCRIPTOR_SIZE : 1;
 }
 
 static inline uint32_t

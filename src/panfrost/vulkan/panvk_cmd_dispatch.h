@@ -82,13 +82,25 @@ struct panvk_dispatch_info {
       uint64_t buffer_dev_addr;
    } indirect;
 
+   uint32_t wg_size_x;
+
 #if PAN_ARCH >= 10
    enum panvk_csf_barrier barrier;
+   bool pilot_queued;
+#endif
+
+#if PAN_ARCH >= 15
+   bool infer_task_axis;
 #endif
 };
 
 void panvk_per_arch(cmd_prepare_dispatch_sysvals)(
    struct panvk_cmd_buffer *cmdbuf, const struct panvk_dispatch_info *info);
+
+void panvk_per_arch(cmd_dispatch_unaligned)(VkCommandBuffer commandBuffer,
+                                            uint32_t invocations_x,
+                                            uint32_t invocations_y,
+                                            uint32_t invocations_z);
 
 uint64_t panvk_per_arch(cmd_dispatch_prepare_tls)(
    struct panvk_cmd_buffer *cmdbuf, const struct panvk_shader_variant *shader,

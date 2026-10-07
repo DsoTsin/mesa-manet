@@ -75,8 +75,9 @@ void bifrost_compile_shader_nir(nir_shader *nir,
 
 bool valhall_can_merge_workgroups(nir_shader *nir);
 
-#define VALHAL_EX_FIFO_VARYING_BITS \
-   (VARYING_BIT_PSIZ | VARYING_BIT_LAYER | VARYING_BIT_PRIMITIVE_ID)
+#define VALHAL_EX_FIFO_VARYING_BITS                                      \
+   (VARYING_BIT_PSIZ | VARYING_BIT_LAYER | VARYING_BIT_PRIMITIVE_ID |    \
+    VARYING_BIT_PRIMITIVE_SHADING_RATE)
 
 #define DEFINE_OPTIONS(name, arch, merge_workgroups)                           \
    static const nir_shader_compiler_options name = {                           \
@@ -145,6 +146,7 @@ bool valhall_can_merge_workgroups(nir_shader *nir);
       .lower_cs_local_index_to_id = true,                                      \
       .lower_device_index_to_zero = true,                                      \
       .max_unroll_iterations = 32,                                             \
+      .skip_partial_unroll = (arch >= 9),                                      \
       .max_samples = 16,                                                       \
       .force_indirect_unrolling =                                              \
          (nir_var_shader_in | nir_var_shader_out | nir_var_function_temp),     \

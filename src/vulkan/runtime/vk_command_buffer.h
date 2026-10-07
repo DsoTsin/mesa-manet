@@ -182,6 +182,8 @@ struct vk_command_buffer {
 
    VkRenderPassSampleLocationsBeginInfoEXT *pass_sample_locations;
 
+   VkRenderPassPerformanceCountersByRegionBeginInfoARM *pass_perf_counters;
+
    /**
     * Bitmask of shader stages bound via a vk_pipeline since the last call to
     * vkBindShadersEXT().

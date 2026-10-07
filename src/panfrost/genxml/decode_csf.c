@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2022-2023 Collabora, Ltd.
  * Copyright (C) 2026 Arm Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -8,6 +9,7 @@
 #include "util/hash_table.h"
 #include "util/list.h"
 #include "util/ralloc.h"
+#include "util/u_debug.h"
 
 #include "genxml/gen_macros.h"
 #include "decode.h"
@@ -15,6 +17,11 @@
 #if PAN_ARCH >= 10
 
 #include "genxml/cs_builder.h"
+
+DEBUG_GET_ONCE_BOOL_OPTION(pandecode_brief, "PANDECODE_BRIEF", false)
+DEBUG_GET_ONCE_OPTION(pandecode_brief_shader, "PANDECODE_BRIEF_SHADER", NULL)
+DEBUG_GET_ONCE_OPTION(pandecode_brief_dump, "PANDECODE_BRIEF_DUMP",
+                     "/tmp/pandecode-brief-shader")
 
 /* Limit for Mali-G610. -1 because we're not including the active frame */
 #define MAX_CALL_STACK_DEPTH (8 - 1)
@@ -172,7 +179,16 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
    }
 
    case MALI_CS_OPCODE_RUN_COMPUTE: {
-      const char *axes[4] = {"x_axis", "y_axis", "z_axis"};
+      static const char *axes[4] = {
+         [MALI_TASK_AXIS_X] = "x_axis",
+         [MALI_TASK_AXIS_Y] = "y_axis",
+         [MALI_TASK_AXIS_Z] = "z_axis",
+#if PAN_ARCH >= 15
+         [MALI_TASK_AXIS_INFERRED] = "inferred_axis",
+#else
+         [MALI_TASK_AXIS_Z + 1] = "invalid_axis",
+#endif
+      };
       cs_unpack(instr, CS_RUN_COMPUTE, I);
       assert_no_progress_inc(I);
 
@@ -538,9 +554,15 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
          "INVALID",
       };
 
-      fprintf(fp, "FLUSH_CACHE2.%s_l2.%s_lsc.%s%s r%u, #%x, #%u",
+      fprintf(fp, "FLUSH_CACHE2.%s_l2.%s_lsc.%s",
               mode[I.l2_flush_mode], mode[I.lsc_flush_mode],
-              other_mode[I.other_flush_mode], defer_mode_str(I),
+              other_mode[I.other_flush_mode]);
+#if PAN_ARCH >= 15
+      fprintf(fp, "%s", I.neural_flush_mode == MALI_CS_NEURAL_FLUSH_MODE_INVALIDATE
+                          ? ".invalidate_neural"
+                          : ".nop_neural");
+#endif
+      fprintf(fp, "%s r%u, #%x, #%u", defer_mode_str(I),
               I.latest_flush_id, I.wait_mask, I.signal_slot);
       break;
    }
@@ -664,6 +686,20 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
       break;
    }
 
+#if PAN_ARCH >= 15
+   case MALI_CS_OPCODE_PERF_COUNTER_ENABLE: {
+      cs_unpack(instr, CS_PERF_COUNTER_ENABLE, I);
+      fprintf(fp, "PERF_COUNTER_ENABLE");
+      break;
+   }
+
+   case MALI_CS_OPCODE_PERF_COUNTER_DISABLE: {
+      cs_unpack(instr, CS_PERF_COUNTER_DISABLE, I);
+      fprintf(fp, "PERF_COUNTER_DISABLE");
+      break;
+   }
+#endif
+
    default: {
       fprintf(fp, "UNKNOWN_%u 0x%" PRIX64 "\n", base.opcode, base.data);
       break;
@@ -682,6 +718,264 @@ static uint64_t
 cs_get_u64(struct queue_ctx *qctx, uint8_t reg)
 {
    return (((uint64_t)cs_get_u32(qctx, reg + 1)) << 32) | cs_get_u32(qctx, reg);
+}
+
+/* Fault traces can contain bad descriptor addresses. Keep the compact dump
+ * usable in that case, without following resources or disassembling shaders.
+ */
+static const void *
+pandecode_brief_fetch(struct pandecode_context *ctx, uint64_t addr, size_t size)
+{
+   const struct pandecode_mapped_memory *mem =
+      pandecode_find_mapped_gpu_mem_containing(ctx, addr);
+
+   if (!mem || !mem->addr || addr - mem->gpu_va > mem->length ||
+       size > mem->length - (addr - mem->gpu_va))
+      return NULL;
+
+   return (const uint8_t *)mem->addr + (addr - mem->gpu_va);
+}
+
+static void
+pandecode_brief_shader(struct pandecode_context *ctx, const char *label,
+                       uint64_t spd, uint64_t tsd, uint64_t srt)
+{
+   const struct mali_shader_program_packed *shader =
+      pandecode_brief_fetch(ctx, spd, MALI_SHADER_PROGRAM_LENGTH);
+   pandecode_log(ctx, "BRIEF %s spd=0x%" PRIx64, label, spd);
+   if (shader) {
+      pan_unpack(shader, SHADER_PROGRAM, desc);
+#if PAN_ARCH >= 15
+      fprintf(ctx->dump_stream, " code=0x%" PRIx64 " register_count=%u",
+              desc.binary, desc.register_count);
+#else
+      fprintf(ctx->dump_stream, " code=0x%" PRIx64 " register_alloc=%u",
+              desc.binary, desc.register_allocation);
+#endif
+   } else {
+      fprintf(ctx->dump_stream, " code=%s", spd ? "unmapped" : "none");
+   }
+   fprintf(ctx->dump_stream, " tsd=0x%" PRIx64 "\n", tsd);
+
+   const struct mali_local_storage_packed *storage =
+      pandecode_brief_fetch(ctx, tsd, MALI_LOCAL_STORAGE_LENGTH);
+   if (storage) {
+      pan_unpack(storage, LOCAL_STORAGE, desc);
+      pandecode_log(ctx, "BRIEF TLS shift=%u bytes_per_thread=%" PRIu64
+                    " mode=%u base=0x%" PRIx64 " words=",
+                    desc.tls_size,
+                    desc.tls_base_pointer ? (UINT64_C(16) << desc.tls_size) : 0,
+                    desc.tls_address_mode, desc.tls_base_pointer << 8);
+      for (unsigned i = 0; i < ARRAY_SIZE(storage->opaque); i++)
+         fprintf(ctx->dump_stream, "%s%08x", i ? "," : "", storage->opaque[i]);
+      fprintf(ctx->dump_stream, "\n");
+   } else {
+      pandecode_log(ctx, "BRIEF TLS %s\n", tsd ? "unmapped" : "none");
+   }
+
+   unsigned count = srt & 0x3f;
+   uint64_t address = srt & ~UINT64_C(0x3f);
+   const struct mali_resource_packed *resources =
+      pandecode_brief_fetch(ctx, address, MALI_RESOURCE_LENGTH * count);
+   pandecode_log(ctx, "BRIEF SRT address=0x%" PRIx64 " count=%u", address, count);
+   if (resources) {
+      for (unsigned i = 0; i < count; i++) {
+         pan_unpack(&resources[i], RESOURCE, entry);
+         fprintf(ctx->dump_stream, " [%u]=0x%" PRIx64 "+0x%" PRIx64,
+                 i, entry.address, entry.size);
+      }
+   } else if (count) {
+      fprintf(ctx->dump_stream, " unmapped");
+   }
+   fprintf(ctx->dump_stream, "\n");
+}
+
+static void
+pandecode_brief_snapshot(struct pandecode_context *ctx, const char *label,
+                         uint64_t addr, size_t size, bool print_words)
+{
+   const void *data = pandecode_brief_fetch(ctx, addr, size);
+   pandecode_log(ctx, "SNAPSHOT %s gpu=0x%" PRIx64 " size=0x%zx", label,
+                 addr, size);
+   if (!data || !size) {
+      fprintf(ctx->dump_stream, " unmapped or empty\n");
+      return;
+   }
+
+   const struct pandecode_mapped_memory *mem =
+      pandecode_find_mapped_gpu_mem_containing(ctx, addr);
+   fprintf(ctx->dump_stream, " bo=0x%" PRIx64 "+0x%zx offset=0x%" PRIx64,
+           mem->gpu_va, mem->length, addr - mem->gpu_va);
+
+   char filename[4096];
+   int len = snprintf(filename, sizeof(filename), "%s.%s.bin",
+                      debug_get_option_pandecode_brief_dump(), label);
+   if (len > 0 && len < sizeof(filename)) {
+      FILE *file = fopen(filename, "wb");
+      if (file) {
+         size_t written = fwrite(data, 1, size, file);
+         int close_result = fclose(file);
+         fprintf(ctx->dump_stream, " file=%s%s", filename,
+                 written != size || close_result ? " (write failed)" : "");
+      } else {
+         fprintf(ctx->dump_stream, " file=%s (open failed)", filename);
+      }
+   }
+   fprintf(ctx->dump_stream, "\n");
+
+   if (print_words) {
+      const uint32_t *words = data;
+      unsigned count = MIN2(size / sizeof(*words), 128);
+      for (unsigned i = 0; i < count; i++) {
+         if (!(i % 8))
+            pandecode_log(ctx, "SNAPSHOT %s +0x%03x:", label, i * 4);
+         fprintf(ctx->dump_stream, " %08x", words[i]);
+         if (i % 8 == 7 || i == count - 1)
+            fprintf(ctx->dump_stream, "\n");
+      }
+   }
+}
+
+static void
+pandecode_brief_selected_shader(struct pandecode_context *ctx,
+                                struct queue_ctx *qctx, uint64_t spd,
+                                uint64_t tsd, uint64_t srt, uint64_t fau)
+{
+   const char *selected = debug_get_option_pandecode_brief_shader();
+   static int captured;
+   if (!selected || p_atomic_read(&captured))
+      return;
+
+   const struct mali_shader_program_packed *shader =
+      pandecode_brief_fetch(ctx, spd, MALI_SHADER_PROGRAM_LENGTH);
+   if (!shader)
+      return;
+
+   pan_unpack(shader, SHADER_PROGRAM, desc);
+   char *end;
+   uint64_t selected_addr = strtoull(selected, &end, 0);
+   if (!selected_addr || *end || selected_addr != desc.binary ||
+       p_atomic_cmpxchg(&captured, 0, 1))
+      return;
+
+   pandecode_log(ctx, "SNAPSHOT BEGIN selected FS code=0x%" PRIx64 "\n",
+                 desc.binary);
+   pandecode_brief_snapshot(ctx, "spd", spd, MALI_SHADER_PROGRAM_LENGTH, true);
+   pandecode_brief_snapshot(ctx, "tsd", tsd, MALI_LOCAL_STORAGE_LENGTH, true);
+
+   const struct pandecode_mapped_memory *code_mem =
+      pandecode_find_mapped_gpu_mem_containing(ctx, desc.binary);
+   if (code_mem && code_mem->addr) {
+      size_t max_size = code_mem->length - (desc.binary - code_mem->gpu_va);
+      const uint64_t *code = pandecode_brief_fetch(ctx, desc.binary, max_size);
+      size_t code_size = 0;
+      /* The Valhall disassembler uses the first zero instruction as the end
+       * marker too. Preserve exactly that byte stream for offline analysis.
+       */
+      while (code_size + 8 <= max_size && code[code_size / 8])
+         code_size += 8;
+      pandecode_brief_snapshot(ctx, "shader", desc.binary, code_size, false);
+      GENX(pandecode_shader)(ctx, spd, "Selected fragment", qctx->gpu_id);
+   }
+
+   uint64_t fau_addr = fau & BITFIELD64_MASK(48);
+   unsigned fau_count = fau >> 56;
+   pandecode_log(ctx, "SNAPSHOT FS FAU raw=0x%" PRIx64
+                 " address=0x%" PRIx64 " count=%u\n", fau, fau_addr, fau_count);
+   pandecode_brief_snapshot(ctx, "fau", fau_addr, fau_count * 8, true);
+   const uint64_t *fau_words =
+      pandecode_brief_fetch(ctx, fau_addr, fau_count * 8);
+   uint64_t child_addresses[16];
+   unsigned child_count = 0;
+   if (fau_words) {
+      for (unsigned i = 0; i < fau_count; i++) {
+         uint64_t addr = fau_words[i];
+         const struct pandecode_mapped_memory *mem =
+            pandecode_find_mapped_gpu_mem_containing(ctx, addr);
+         if (!addr || !mem || !mem->addr)
+            continue;
+
+         char label[32];
+         snprintf(label, sizeof(label), "fau_u%u_pointer_candidate", i);
+         size_t size = MIN2(mem->length - (addr - mem->gpu_va), 4096);
+         pandecode_brief_snapshot(ctx, label, addr, size, true);
+
+         /* IrisRT's first indirect record contains the fragment argument
+          * pointers. Follow one bounded level so the snapshot includes the
+          * actual frame, texture-handle and material data, not just pointers.
+          * These remain candidates; the decoder does not assume their ABI.
+          */
+         const uint8_t *parent = pandecode_brief_fetch(ctx, addr, size);
+         for (unsigned q = 0; q < MIN2(size / 8, 0xa8 / 8); q++) {
+            uint64_t child;
+            memcpy(&child, parent + q * 8, sizeof(child));
+            const struct pandecode_mapped_memory *child_mem =
+               pandecode_find_mapped_gpu_mem_containing(ctx, child);
+            if (!child || !child_mem || !child_mem->addr)
+               continue;
+
+            pandecode_log(ctx, "SNAPSHOT POINTER fau_u%u +0x%x =0x%" PRIx64
+                          "\n", i, q * 8, child);
+            bool seen = false;
+            for (unsigned j = 0; j < child_count; j++)
+               seen |= child_addresses[j] == child;
+            if (seen || child_count == ARRAY_SIZE(child_addresses))
+               continue;
+            child_addresses[child_count++] = child;
+
+            char child_label[48];
+            snprintf(child_label, sizeof(child_label),
+                     "fau_u%u_q%u_pointer_candidate", i, q);
+            size_t child_size =
+               MIN2(child_mem->length - (child - child_mem->gpu_va), 4096);
+            pandecode_brief_snapshot(ctx, child_label, child, child_size, true);
+         }
+      }
+   }
+
+   unsigned count = srt & 0x3f;
+   uint64_t address = srt & ~UINT64_C(0x3f);
+   pandecode_brief_snapshot(ctx, "srt", address, MALI_RESOURCE_LENGTH * count,
+                            true);
+   const struct mali_resource_packed *resources =
+      pandecode_brief_fetch(ctx, address, MALI_RESOURCE_LENGTH * count);
+   if (resources) {
+      for (unsigned i = 0; i < count; i++) {
+         pan_unpack(&resources[i], RESOURCE, entry);
+         if (!entry.address || !entry.size)
+            continue;
+
+         char label[48];
+         snprintf(label, sizeof(label), "srt%u", i);
+         /* Keep corrupt sizes from causing unbounded diagnostic I/O. */
+         size_t size = MIN2(entry.size, 64 * 1024 * 1024);
+         pandecode_brief_snapshot(ctx, label, entry.address, size,
+                                  size <= 512);
+
+         /* Small descriptor tables contain the application's parameter
+          * buffers. Save their bytes without interpreting application ABI.
+          * Large bindless texture tables stay binary snapshots only.
+          */
+         if (!entry.contains_descriptors || entry.size > 4096)
+            continue;
+         const struct mali_buffer_packed *buffers =
+            pandecode_brief_fetch(ctx, entry.address, entry.size);
+         if (!buffers)
+            continue;
+         for (unsigned j = 0; j < entry.size / MALI_BUFFER_LENGTH; j++) {
+            if ((buffers[j].opaque[0] & 0xf) != MALI_DESCRIPTOR_TYPE_BUFFER)
+               continue;
+            pan_unpack(&buffers[j], BUFFER, buffer);
+            snprintf(label, sizeof(label), "srt%u_buffer%u", i, j);
+            pandecode_log(ctx, "SNAPSHOT BUFFER %s address=0x%" PRIx64
+                          " declared_size=0x%" PRIx64 "\n", label,
+                          buffer.address, (uint64_t)buffer.size);
+            pandecode_brief_snapshot(ctx, label, buffer.address,
+                                     MIN2(buffer.size, 65536), true);
+         }
+      }
+   }
+   pandecode_log(ctx, "SNAPSHOT END selected FS\n");
 }
 
 static void
@@ -1225,6 +1519,16 @@ pandecode_run_fragment2(struct pandecode_context *ctx, FILE *fp,
 
    DUMP_CL(ctx, VRS_IMAGE, &qctx->regs[MALI_FRAGMENT_SR_VRS_IMAGE],
            "VRS image:\n");
+
+#if PAN_ARCH >= 15
+   if (flags1_unpacked.perf_counters_enable) {
+      pandecode_log(ctx, "Perf counter select: 0x%08" PRIx32 "\n",
+                    cs_get_u32(qctx, MALI_FRAGMENT_SR_PERF_COUNTER_SELECT));
+      DUMP_ADDR(ctx, GENERIC_PLANE,
+                cs_get_u64(qctx, MALI_FRAGMENT_SR_PERF_COUNTER_PLANE_POINTER),
+                "Perf counter plane:\n");
+   }
+#endif
 
    GENX(pandecode_sample_locations)(ctx, sample_locations);
 
@@ -2535,6 +2839,7 @@ print_cs_binary(struct pandecode_context *ctx, uint64_t bin,
       }
 
       pandecode_make_indent(ctx);
+      fprintf(ctx->dump_stream, "[%lx] ", bin + i * sizeof(uint64_t));
       print_cs_instr(ctx->dump_stream, &cfg->instrs[i]);
       cs_unpack(&cfg->instrs[i], CS_BASE, base);
       switch (base.opcode) {
@@ -2607,7 +2912,7 @@ void
 GENX(pandecode_cs_binary)(struct pandecode_context *ctx, uint64_t bin,
                           uint32_t bin_size)
 {
-   if (!bin_size)
+   if (!bin_size || debug_get_option_pandecode_brief())
       return;
 
    pandecode_dump_file_open(ctx);
@@ -2635,6 +2940,7 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
                          uint32_t trace_size, uint64_t gpu_id)
 {
    pandecode_dump_file_open(ctx);
+   bool brief = debug_get_option_pandecode_brief();
 
    void *trace_data = pandecode_fetch_gpu_mem(ctx, trace, trace_size);
 
@@ -2642,6 +2948,12 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
       uint32_t regs[256] = {};
       uint64_t *ip = trace_data;
 
+      if (brief && (trace_size < sizeof(*ip) ||
+                    !pandecode_brief_fetch(ctx, *ip, sizeof(uint64_t)))) {
+         pandecode_log(ctx, "BRIEF incomplete trace: %u bytes remaining\n",
+                       trace_size);
+         break;
+      }
       uint64_t *instr = pandecode_fetch_gpu_mem(ctx, *ip, sizeof(*instr));
 
       /* v10 and v11 has 96 registers. v12+ have 128. */
@@ -2671,7 +2983,24 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          if (I.draw_id_register_enable)
             regs[I.draw_id] = idvs_trace->draw_id;
 
-         pandecode_run_idvs2(ctx, ctx->dump_stream, &qctx, &I);
+         if (brief) {
+            pandecode_log(ctx, "BRIEF IDVS r24=0x%08x r25=0x%08x count=%u"
+                          " instances=%u draw_id=%u tsd_register=r%u\n",
+                          regs[24], regs[25], regs[MALI_IDVS_SR_INDEX_COUNT],
+                          regs[MALI_IDVS_SR_INSTANCE_COUNT], idvs_trace->draw_id,
+                          MALI_IDVS_SR_FRAGMENT_TSD);
+            pandecode_brief_shader(
+               ctx, "FS", cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_SPD),
+               cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_TSD),
+               cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_SRT));
+            pandecode_brief_selected_shader(
+               ctx, &qctx, cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_SPD),
+               cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_TSD),
+               cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_SRT),
+               cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_FAU));
+         } else {
+            pandecode_run_idvs2(ctx, ctx->dump_stream, &qctx, &I);
+         }
          trace_data = idvs_trace + 1;
          trace_size -= sizeof(*idvs_trace);
          break;
@@ -2687,7 +3016,25 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          if (I.draw_id_register_enable)
             regs[I.draw_id] = idvs_trace->draw_id;
 
-         pandecode_run_idvs(ctx, ctx->dump_stream, &qctx, &I);
+         if (brief) {
+            unsigned tsd_reg = I.fragment_tsd_select ? 28 : 24;
+            pandecode_log(ctx, "BRIEF IDVS r24=0x%08x r25=0x%08x count=%u"
+                          " instances=%u draw_id=%u tsd_register=r%u\n",
+                          regs[24], regs[25], regs[MALI_IDVS_SR_INDEX_COUNT],
+                          regs[MALI_IDVS_SR_INSTANCE_COUNT], idvs_trace->draw_id,
+                          tsd_reg);
+            pandecode_brief_shader(
+               ctx, "FS", cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_SPD),
+               cs_get_u64(&qctx, tsd_reg),
+               cs_get_u64(&qctx, I.fragment_srt_select ? 4 : 0));
+            pandecode_brief_selected_shader(
+               ctx, &qctx, cs_get_u64(&qctx, MALI_IDVS_SR_FRAGMENT_SPD),
+               cs_get_u64(&qctx, tsd_reg),
+               cs_get_u64(&qctx, I.fragment_srt_select ? 4 : 0),
+               cs_get_u64(&qctx, 12));
+         } else {
+            pandecode_run_idvs(ctx, ctx->dump_stream, &qctx, &I);
+         }
          trace_data = idvs_trace + 1;
          trace_size -= sizeof(*idvs_trace);
          break;
@@ -2701,7 +3048,8 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          assert(trace_size >= sizeof(*frag_trace));
          cs_unpack(instr, CS_RUN_FRAGMENT2, I);
          memcpy(&regs[0], frag_trace->sr, sizeof(frag_trace->sr));
-         pandecode_run_fragment2(ctx, ctx->dump_stream, &qctx, &I);
+         if (!brief)
+            pandecode_run_fragment2(ctx, ctx->dump_stream, &qctx, &I);
          trace_data = frag_trace + 1;
          trace_size -= sizeof(*frag_trace);
          break;
@@ -2713,7 +3061,8 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          assert(trace_size >= sizeof(*frag_trace));
          cs_unpack(instr, CS_RUN_FRAGMENT, I);
          memcpy(&regs[40], frag_trace->sr, sizeof(frag_trace->sr));
-         pandecode_run_fragment(ctx, ctx->dump_stream, &qctx, &I);
+         if (!brief)
+            pandecode_run_fragment(ctx, ctx->dump_stream, &qctx, &I);
          trace_data = frag_trace + 1;
          trace_size -= sizeof(*frag_trace);
          break;
@@ -2730,7 +3079,8 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          uint32_t sr_idx = 0;
          u_foreach_bit64(b, CS_RUN_FULLSCREEN_SR_MASK)
             regs[b] = fs_trace->sr[sr_idx++];
-         pandecode_run_fullscreen(ctx, ctx->dump_stream, &qctx, &I);
+         if (!brief)
+            pandecode_run_fullscreen(ctx, ctx->dump_stream, &qctx, &I);
          trace_data = fs_trace + 1;
          trace_size -= sizeof(*fs_trace);
          break;
@@ -2742,7 +3092,8 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          assert(trace_size >= sizeof(*comp_trace));
          cs_unpack(instr, CS_RUN_COMPUTE, I);
          memcpy(regs, comp_trace->sr, sizeof(comp_trace->sr));
-         pandecode_run_compute(ctx, ctx->dump_stream, &qctx, &I);
+         if (!brief)
+            pandecode_run_compute(ctx, ctx->dump_stream, &qctx, &I);
          trace_data = comp_trace + 1;
          trace_size -= sizeof(*comp_trace);
          break;
@@ -2754,7 +3105,8 @@ GENX(pandecode_cs_trace)(struct pandecode_context *ctx, uint64_t trace,
          assert(trace_size >= sizeof(*comp_trace));
          cs_unpack(instr, CS_RUN_COMPUTE_INDIRECT, I);
          memcpy(regs, comp_trace->sr, sizeof(comp_trace->sr));
-         pandecode_run_compute_indirect(ctx, ctx->dump_stream, &qctx, &I);
+         if (!brief)
+            pandecode_run_compute_indirect(ctx, ctx->dump_stream, &qctx, &I);
          trace_data = comp_trace + 1;
          trace_size -= sizeof(*comp_trace);
          break;

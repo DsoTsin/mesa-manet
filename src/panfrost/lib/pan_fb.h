@@ -675,7 +675,7 @@ pan_fb_can_pipeline_zs(const struct pan_fb_layout *fb)
    const uint32_t z_B_per_tile = z_B_per_px * fb->tile_size_px;
 
    /* The budget is already half the available Z space */
-   return z_B_per_tile < fb->tile_z_budget_B;
+   return z_B_per_tile <= fb->tile_z_budget_B;
 }
 #endif
 #endif /* PAN_ARCH */

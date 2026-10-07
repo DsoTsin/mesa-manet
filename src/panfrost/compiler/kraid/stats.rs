@@ -11,6 +11,64 @@ use crate::ops::*;
 use compiler::bitset::BitSet;
 use kraid_bindings::*;
 
+#[derive(Clone, Copy)]
+pub enum ExecClass {
+    Fma,
+    Cvt,
+    Sfu,
+    LoadStore,
+    Texture,
+    Varying,
+}
+
+pub fn exec_class(model: &dyn Model, op: &Op) -> Option<ExecClass> {
+    Some(match model.op_exec_unit(op).unwrap() {
+        ExecUnit::Cvt => ExecClass::Cvt,
+        ExecUnit::Fma => ExecClass::Fma,
+        ExecUnit::Sfu => ExecClass::Sfu,
+        ExecUnit::Msg => match op {
+            Op::ACmpXchg(_)
+            | Op::Atom(_)
+            | Op::Atom1(_)
+            | Op::LeaBuf(_)
+            | Op::LeaPka(_)
+            | Op::LeaTex(_)
+            | Op::LdAttr(_)
+            | Op::LdCvt(_)
+            | Op::LdGClk(_)
+            | Op::LdPka(_)
+            | Op::LdTensor(_)
+            | Op::LdTex(_)
+            | Op::LeaTensor(_)
+            | Op::Load(_)
+            | Op::StChecked(_)
+            | Op::StCvt(_)
+            | Op::Store(_) => ExecClass::LoadStore,
+            Op::LdVarSpecial(op) if op.name == VarSpecialName::FragZ => {
+                return None;
+            }
+            Op::LdVar(_)
+            | Op::LdVarBuf(_)
+            | Op::LdVarBufFlat(_)
+            | Op::LdVarFlat(_)
+            | Op::LdVarSpecial(_) => ExecClass::Varying,
+            Op::TexDual(_)
+            | Op::TexFetch(_)
+            | Op::TexGather(_)
+            | Op::TexGradient(_)
+            | Op::TexSingle(_) => ExecClass::Texture,
+            Op::ATest(_)
+            | Op::Barrier(_)
+            | Op::Blend(_)
+            | Op::LdTile(_)
+            | Op::RtTrace(_)
+            | Op::StTile(_)
+            | Op::ZSEmit(_) => return None,
+            _ => panic!("Unknown message instruction"),
+        },
+    })
+}
+
 #[derive(Default)]
 struct VaStatCount {
     fma: f32,
@@ -64,7 +122,7 @@ impl VaStatCount {
             }
         }
 
-        if matches!(&instr.op, Op::BlendCall(_)) {
+        if matches!(&instr.op, Op::BlendCall(_) | Op::PilotJump(_)) {
             // This will get lowered later into a BLEND + prologue, both
             // should not be counted in the stats metrics
             return;
@@ -81,56 +139,27 @@ impl VaStatCount {
             }
         };
 
-        match model.op_exec_unit(&instr.op).unwrap() {
-            ExecUnit::Cvt => self.cvt += f32::from(cycles),
-            ExecUnit::Fma => self.fma += f32::from(cycles),
-            ExecUnit::Sfu => self.sfu += f32::from(cycles),
-            ExecUnit::Msg => match &instr.op {
-                Op::ACmpXchg(_)
-                | Op::Atom(_)
-                | Op::Atom1(_)
-                | Op::LeaBuf(_)
-                | Op::LeaPka(_)
-                | Op::LeaTex(_)
-                | Op::LdAttr(_)
-                | Op::LdCvt(_)
-                | Op::LdGClk(_)
-                | Op::LdPka(_)
-                | Op::LdTex(_)
-                | Op::Load(_)
-                | Op::StCvt(_)
-                | Op::Store(_) => {
-                    self.ls += 1.0;
-                }
-                Op::LdVarSpecial(op) if op.name == VarSpecialName::FragZ => {}
-                Op::LdVar(_)
-                | Op::LdVarBuf(_)
-                | Op::LdVarBufFlat(_)
-                | Op::LdVarFlat(_)
-                | Op::LdVarSpecial(_) => {
-                    let total_bytes = if let Op::LdVarBuf(op) = &instr.op {
-                        (op.mem_type.bits() / 8) * op.dst_type.comps()
-                    } else {
-                        dst_bytes
-                    };
-                    self.v += f32::from(total_bytes.div_ceil(4));
-                }
-                Op::TexFetch(_)
-                | Op::TexGather(_)
-                | Op::TexGradient(_)
-                | Op::TexSingle(_) => {
-                    self.t += 1.0;
-                }
-                Op::ATest(_)
-                | Op::Barrier(_)
-                | Op::Blend(_)
-                | Op::LdTile(_)
-                | Op::StTile(_)
-                | Op::ZSEmit(_) => {
-                    // These aren't counted
-                }
-                _ => panic!("Unknown message instruction"),
-            },
+        match exec_class(model, &instr.op) {
+            Some(ExecClass::Cvt) => self.cvt += f32::from(cycles),
+            Some(ExecClass::Fma) => self.fma += f32::from(cycles),
+            Some(ExecClass::Sfu) => self.sfu += f32::from(cycles),
+            Some(ExecClass::LoadStore) => self.ls += 1.0,
+            Some(ExecClass::Varying) => {
+                let total_bytes = if let Op::LdVarBuf(op) = &instr.op {
+                    (op.mem_type.bits() / 8) * op.dst_type.comps()
+                } else {
+                    dst_bytes
+                };
+                self.v += f32::from(total_bytes.div_ceil(4));
+            }
+            Some(ExecClass::Texture) => {
+                self.t += if matches!(&instr.op, Op::TexDual(_)) {
+                    2.0
+                } else {
+                    1.0
+                };
+            }
+            None => (),
         }
 
         match &instr.op {
@@ -198,6 +227,7 @@ impl VaStatCount {
         s: &Shader,
         instrs: usize,
         loops: usize,
+        alloca_bytes: u32,
     ) -> valhall_stats {
         let Self { fma, cvt, sfu, .. } = self;
 
@@ -228,6 +258,8 @@ impl VaStatCount {
             spill_cost: self.spill_cost,
             registers_used: self.regs.len().try_into().unwrap(),
             uniforms_used: self.fau_used.into(),
+            stack_alloca_bytes: alloca_bytes,
+            stack_spill_bytes: s.info.tls_size.saturating_sub(alloca_bytes),
         }
     }
 }
@@ -254,7 +286,7 @@ fn report_stats_per_instr(s: &Shader) {
     )
 }
 
-fn get_va_stats(s: &Shader) -> valhall_stats {
+fn get_va_stats(s: &Shader, alloca_bytes: u32) -> valhall_stats {
     let mut stats = VaStatCount::default();
     let mut instrs = 0usize;
     let mut loops = 0usize;
@@ -272,11 +304,27 @@ fn get_va_stats(s: &Shader) -> valhall_stats {
     }
 
     stats.normalize(s.model);
-    stats.into_c_stats(s, instrs, loops)
+    stats.into_c_stats(s, instrs, loops, alloca_bytes)
 }
 
 impl Shader<'_> {
-    pub fn get_stats(&self) -> pan_stats {
+    pub fn spill_aware_cost(&self) -> u64 {
+        let mut cost = 0u64;
+        for (bi, block) in self.blocks.iter().enumerate() {
+            let per_spill_cost = u64::from(per_spill_cost(self, bi));
+            for instr in &block.instrs {
+                cost += 1;
+                match &instr.op {
+                    Op::Load(op) if op.is_tls => cost += per_spill_cost,
+                    Op::Store(op) if op.is_tls => cost += per_spill_cost,
+                    _ => (),
+                }
+            }
+        }
+        cost
+    }
+
+    pub fn get_stats(&self, alloca_bytes: u32) -> pan_stats {
         if DEBUG.contains(DebugFlags::PRINT) {
             report_stats_per_instr(self);
         }
@@ -285,7 +333,7 @@ impl Shader<'_> {
             pan_stats {
                 isa: PAN_STAT_VALHALL,
                 __bindgen_anon_1: pan_stats__bindgen_ty_1 {
-                    valhall: get_va_stats(self),
+                    valhall: get_va_stats(self, alloca_bytes),
                 },
             }
         } else {

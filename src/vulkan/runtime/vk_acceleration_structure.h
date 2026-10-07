@@ -102,6 +102,9 @@ struct vk_build_config {
    bool updateable;
    bool u64_keys;
    bool late_pair_compression;
+   bool early_pair_compression;
+   uint32_t leaf_count_multiplier;
+   uint32_t leaf_count_limit;
    uint32_t build_flags;
 };
 
@@ -151,6 +154,7 @@ struct vk_acceleration_structure_build_args {
    bool propagate_cull_flags;
    bool emit_markers;
    bool has_update;
+   bool has_tlas_update;
 };
 
 struct vk_acceleration_structure_build_ops {

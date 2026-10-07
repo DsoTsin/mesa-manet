@@ -46,6 +46,9 @@ panvk_GetDeviceBufferMemoryRequirements(VkDevice _device,
    const uint64_t align =
       pInfo->pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT
          ? panvk_get_gpu_page_size(device)
+      : vk_buffer_usage_flags(pInfo->pCreateInfo) &
+            VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
+         ? 256
          : 64;
    const uint64_t size = align64(pInfo->pCreateInfo->size, align);
 

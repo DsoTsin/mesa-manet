@@ -15,6 +15,7 @@
 #include "vk_log.h"
 #include "vk_ycbcr_conversion.h"
 
+#include "panvk_bc_emu.h"
 #include "panvk_device.h"
 #include "panvk_entrypoints.h"
 #include "panvk_image.h"
@@ -420,6 +421,19 @@ panvk_per_arch(CreateImageView)(VkDevice _device,
       };
    }
 
+   if (image->bc_emu_format != VK_FORMAT_UNDEFINED &&
+       (vk_format_is_compressed(view->vk.view_format) ||
+        vk_format_get_blocksize(view->vk.view_format) !=
+           vk_format_get_blocksize(image->vk.format))) {
+      view->pview.planes[0] = (struct pan_image_plane_ref){
+         .image = &image->planes[1].image,
+         .plane_idx = 0,
+      };
+      if (vk_format_is_compressed(view->vk.view_format))
+         view->pview.format =
+            vk_format_to_pipe_format(panvk_bc_emu_format(view->vk.view_format));
+   }
+
    /* We need to patch the view format when the image contains both
     * depth and stencil but the view only contains one of these components, so
     * we can ignore the component we don't use.
@@ -434,6 +448,9 @@ panvk_per_arch(CreateImageView)(VkDevice _device,
 #if PAN_ARCH >= 9
    /* Valhall passes a texture descriptor to LEA_TEX. */
    tex_usage_mask |= VK_IMAGE_USAGE_STORAGE_BIT;
+#endif
+#if PAN_ARCH >= 14
+   tex_usage_mask |= VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
 #endif
 
    if (view->vk.usage & tex_usage_mask) {

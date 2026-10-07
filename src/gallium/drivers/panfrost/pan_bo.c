@@ -330,7 +330,8 @@ panfrost_bo_munmap(struct panfrost_bo *bo)
    if (!bo->ptr.cpu)
       return;
 
-   if (os_munmap((void *)(uintptr_t)bo->ptr.cpu, panfrost_bo_size(bo))) {
+   if (pan_kmod_bo_munmap(bo->kmod_bo, (void *)(uintptr_t)bo->ptr.cpu,
+                          panfrost_bo_size(bo))) {
       mesa_loge("munmap failed: %s", strerror(errno));
       abort();
    }

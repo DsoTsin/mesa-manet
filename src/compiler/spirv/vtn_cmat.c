@@ -468,13 +468,18 @@ vtn_handle_cooperative_alu(struct vtn_builder *b, struct vtn_value *dest_val,
 
          const bool saturate = vtn_has_decoration(b, dest_val, SpvDecorationSaturatedToLargestFloat8NormalConversionEXT);
          const bool transpose = vtn_has_decoration(b, dest_val, SpvDecorationCooperativeMatrixTransposeEXT);
+         const struct glsl_type *dst_elem = glsl_get_cmat_element(dst_type->type);
+         const nir_rounding_mode rounding =
+            glsl_type_is_e4m3fn(dst_elem) || glsl_type_is_e5m2(dst_elem) ?
+            vtn_float8_rounding_mode(b, dest_val) : nir_rounding_mode_undef;
 
          nir_deref_instr *dst = vtn_create_cmat_temporary(b, dst_type->type, "cmat_convert");
 
          if (transpose)
             nir_cmat_transpose(&b->nb, &dst->def, &src->def, .saturate = saturate, .cmat_signed_mask = signed_mask);
          else
-            nir_cmat_convert(&b->nb, &dst->def, &src->def, .saturate = saturate, .cmat_signed_mask = signed_mask);
+            nir_cmat_convert(&b->nb, &dst->def, &src->def, .saturate = saturate, .cmat_signed_mask = signed_mask,
+                             .rounding_mode = rounding);
          vtn_push_var_ssa(b, w[2], dst->var);
 
          break;

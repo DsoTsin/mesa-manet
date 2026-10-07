@@ -35,10 +35,9 @@ layout(push_constant) uniform CONSTS {
    leaf_args args;
 };
 
-bool
-build_triangle(inout vk_aabb bounds, VOID_REF dst_ptr, vk_bvh_geometry_data geom_data, uint32_t global_id)
+triangle_vertices
+load_triangle(vk_bvh_geometry_data geom_data, uint32_t global_id)
 {
-   bool is_valid = true;
    triangle_indices indices = load_indices(geom_data.indices, geom_data.index_format, global_id);
 
    triangle_vertices vertices = load_vertices(geom_data.data, indices, geom_data.vertex_format, geom_data.stride);
@@ -53,6 +52,33 @@ build_triangle(inout vk_aabb bounds, VOID_REF dst_ptr, vk_bvh_geometry_data geom
       for (uint32_t i = 0; i < 3; i++)
       vertices.vertex[i] = transform * vertices.vertex[i];
    }
+
+   return vertices;
+}
+
+bool
+triangle_has_nan(triangle_vertices vertices)
+{
+   return any(isnan(vertices.vertex[0])) || any(isnan(vertices.vertex[1])) || any(isnan(vertices.vertex[2]));
+}
+
+uint32_t
+early_pair_edges(triangle_vertices a, triangle_vertices b)
+{
+   for (uint32_t e0 = 0; e0 < 3; e0++) {
+      for (uint32_t e1 = 0; e1 < 3; e1++) {
+         if (a.vertex[e0].xyz == b.vertex[(e1 + 1) % 3].xyz && a.vertex[(e0 + 1) % 3].xyz == b.vertex[e1].xyz)
+            return e0 | (e1 << 2);
+      }
+   }
+   return VK_BVH_INVALID_NODE;
+}
+
+bool
+build_triangle(inout vk_aabb bounds, VOID_REF dst_ptr, vk_bvh_geometry_data geom_data, uint32_t global_id)
+{
+   bool is_valid = true;
+   triangle_vertices vertices = load_triangle(geom_data, global_id);
 
    /* An inactive triangle is one for which the first (X) component of any vertex is NaN. If any
     * other vertex component is NaN, and the first is not, the behavior is undefined. We treat those
@@ -129,28 +155,6 @@ build_aabb(inout vk_aabb bounds, VOID_REF src_ptr, VOID_REF dst_ptr, uint32_t ge
    return is_valid;
 }
 
-mat3 mat_abs(mat3 in_mat) {
-    return mat3(abs(in_mat[0]), abs(in_mat[1]), abs(in_mat[2]));
-}
-
-vk_aabb
-calculate_instance_node_bounds(vk_aabb blas_aabb, mat3x4 otw_matrix)
-{
-   vk_aabb aabb;
-
-   /* https://zeux.io/2010/10/17/aabb-from-obb-with-component-wise-abs */
-   vec3 blas_aabb_center = (blas_aabb.min + blas_aabb.max) * 0.5;
-   vec3 blas_aabb_extent = (blas_aabb.max - blas_aabb.min) * 0.5;
-
-   vec3 new_center = vec4(blas_aabb_center, 1.0) * otw_matrix;
-   vec3 new_extent = blas_aabb_extent * mat_abs(mat3(otw_matrix));
-
-   aabb.min = new_center - new_extent;
-   aabb.max = new_center + new_extent;
-
-   return aabb;
-}
-
 bool
 build_instance(inout vk_aabb bounds, VOID_REF src_ptr, VOID_REF dst_ptr, uint32_t global_id)
 {
@@ -158,13 +162,23 @@ build_instance(inout vk_aabb bounds, VOID_REF src_ptr, VOID_REF dst_ptr, uint32_
 
    AccelerationStructureInstance instance = DEREF(REF(AccelerationStructureInstance)(src_ptr));
 
-   /* An inactive instance is one whose acceleration structure handle is VK_NULL_HANDLE. Since the active terminology is
-    * only relevant for BVH updates, which we do not implement, we can also skip instances with mask == 0.
-    */
-   if (instance.accelerationStructureReference == 0 || instance.custom_instance_and_mask < (1u << 24u))
+   /* An inactive instance is one whose acceleration structure handle is VK_NULL_HANDLE. */
+   bool is_valid = instance.accelerationStructureReference != 0 && instance.custom_instance_and_mask >= (1u << 24u);
+   if (!is_valid && !VK_TEST_BUILD_FLAG_ALWAYS_ACTIVE)
       return false;
 
    DEREF(node).base_ptr = instance.accelerationStructureReference;
+   DEREF(node).custom_instance_and_mask = instance.custom_instance_and_mask;
+   DEREF(node).sbt_offset_and_flags = instance.sbt_offset_and_flags;
+   DEREF(node).instance_id = global_id;
+
+   if (instance.accelerationStructureReference == 0) {
+      bounds = vk_aabb(vec3(0.0), vec3(0.0));
+      DEREF(node).otw_matrix = mat3x4(1.0);
+      DEREF(node).base.aabb = bounds;
+      DEREF(node).root_flags = 0;
+      return false;
+   }
 
    mat4 transform = mat4(instance.transform);
    DEREF(node).otw_matrix = mat3x4(transform);
@@ -190,16 +204,17 @@ build_instance(inout vk_aabb bounds, VOID_REF src_ptr, VOID_REF dst_ptr, uint32_
       bounds = CALCULATE_FINE_INSTANCE_NODE_BOUNDS(instance.accelerationStructureReference, mat3x4(transform));
 #endif
 
-   if (any(isnan(bounds.min)) || any(isnan(bounds.max)))
-      return false;
+   if (any(isnan(bounds.min)) || any(isnan(bounds.max))) {
+      if (!VK_TEST_BUILD_FLAG_ALWAYS_ACTIVE)
+         return false;
+      is_valid = false;
+      bounds = vk_aabb(vec3(0.0), vec3(0.0));
+   }
 
    DEREF(node).base.aabb = bounds;
-   DEREF(node).custom_instance_and_mask = instance.custom_instance_and_mask;
-   DEREF(node).sbt_offset_and_flags = instance.sbt_offset_and_flags;
-   DEREF(node).instance_id = global_id;
 
    if (!VK_TEST_BUILD_FLAG_PROPAGATE_CULL_FLAGS)
-      return true;
+      return is_valid;
 
    uint32_t root_flags = 0;
    if ((instance.sbt_offset_and_flags & (VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR << 24)) != 0)
@@ -210,7 +225,7 @@ build_instance(inout vk_aabb bounds, VOID_REF src_ptr, VOID_REF dst_ptr, uint32_
       root_flags = DEREF(REF(uint32_t)(instance.accelerationStructureReference + ROOT_FLAGS_OFFSET));
    DEREF(node).root_flags = root_flags | ((~(instance.custom_instance_and_mask >> 24)) << VK_BVH_BOX_FLAGS_INV_CULL_MASK_SHIFT);
 
-   return true;
+   return is_valid;
 }
 
 void
@@ -237,6 +252,29 @@ main(void)
    bool is_active;
    if (args.geom_data.geometry_type == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
       is_active = build_triangle(bounds, dst_ptr, args.geom_data, global_id);
+
+      if (VK_TEST_BUILD_FLAG_EARLY_PAIRS && is_active && (global_id | 1u) < args.primitive_count) {
+         triangle_vertices a = load_triangle(args.geom_data, global_id & ~1u);
+         triangle_vertices b = load_triangle(args.geom_data, global_id | 1u);
+         uint32_t edges = (triangle_has_nan(a) || triangle_has_nan(b)) ? VK_BVH_INVALID_NODE : early_pair_edges(a, b);
+
+         if (edges != VK_BVH_INVALID_NODE) {
+            if ((global_id & 1u) != 0u) {
+               is_active = false;
+            } else {
+               vec3 v3 = b.vertex[((edges >> 2) + 2) % 3].xyz;
+               REF(vk_ir_triangle_node) node = REF(vk_ir_triangle_node)(dst_ptr);
+               REF(vk_ir_triangle_node_quad) quad = vk_ir_triangle_node_get_quad_ref(node);
+               DEREF(quad).coords[0] = v3.x;
+               DEREF(quad).coords[1] = v3.y;
+               DEREF(quad).coords[2] = v3.z;
+               DEREF(quad).triangle_id = (global_id + 1u) | (edges << 28);
+               bounds.min = min(bounds.min, v3);
+               bounds.max = max(bounds.max, v3);
+               DEREF(node).base.aabb = bounds;
+            }
+         }
+      }
    } else if (args.geom_data.geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR) {
       VOID_REF src_ptr = OFFSET(args.geom_data.data, src_offset);
       is_active = build_aabb(bounds, src_ptr, dst_ptr, args.geom_data.geometry_id, global_id);

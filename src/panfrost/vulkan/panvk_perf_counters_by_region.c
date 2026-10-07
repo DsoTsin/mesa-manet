@@ -1,0 +1,158 @@
+/*
+ * Copyright © 2026 Pix Philosophy (HK) Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "panvk_perf_counters_by_region.h"
+
+#include "util/macros.h"
+
+const struct panvk_perf_counter_by_region
+   panvk_perf_counters_by_region[PANVK_PERF_COUNTERS_BY_REGION_COUNT] = {
+   {0x80000000, "RESERVED"},
+   {0x80000001, "RESERVED"},
+   {0x80000002, "RESERVED"},
+   {0x80000003, "RESERVED"},
+   {0x1d5, "Main phase active cycles"},
+   {0x12e, "Narrow arithmetic instructions"},
+   {0xd3, "Rasterized primitives"},
+   {0xd4, "Forward pixel kill buffer active cycles"},
+   {0x1d7, "Main phase front-end starvation cycles"},
+   {0xd6, "Fragment warps"},
+   {0xd9, "Partial rasterized fine quads"},
+   {0xd8, "Rasterized fine quads"},
+   {0xda, "Early ZS tested quads"},
+   {0xdb, "Early ZS updated quads"},
+   {0xdc, "Early ZS killed quads"},
+   {0xdd, "Late ZS tested quads"},
+   {0xde, "Late ZS killed quads"},
+   {0x80000011, "RESERVED"},
+   {0xdf, "Tiles"},
+   {0xe0, "Killed unchanged tiles"},
+   {0xe1, "Occluding quads"},
+   {0xe8, "Full warps"},
+   {0x1d8, "Compute or binning phase active cycles"},
+   {0xe3, "Non-main phase core tasks"},
+   {0xe4, "Non-fragment warps"},
+   {0x1da, "Compute or binning phase starvation cycles"},
+   {0xe6, "Execution core active cycles"},
+   {0xf1, "Arithmetic FMA pipe instructions"},
+   {0xf2, "Arithmetic CVT pipe instructions"},
+   {0xf3, "Arithmetic SFU pipe instructions"},
+   {0xf4, "Message instructions"},
+   {0xeb, "Diverged instructions"},
+   {0x1a3, "Processing unit I-cache starvation cycles"},
+   {0xec, "Processing unit starvation cycles"},
+   {0xf7, "Blend shader instructions"},
+   {0x10b, "Texture message read beats"},
+   {0x10e, "Texture descriptor stall cycles"},
+   {0x10f, "Texture fetch stall cycles"},
+   {0x110, "Texture filtering stall cycles"},
+   {0xfd, "Texture filtering cycles"},
+   {0x38, "Ray tracing unit read beats from L2 cache"},
+   {0x39, "Ray tracing unit read beats from external memory"},
+   {0x13b, "Texture messages"},
+   {0x10c, "Texture message write beats"},
+   {0x113, "Load/store unit full read issues"},
+   {0x114, "Load/store unit partial read issues"},
+   {0x115, "Load/store unit full write issues"},
+   {0x116, "Load/store unit partial write issues"},
+   {0x117, "Load/store unit atomic issues"},
+   {0x80000031, "RESERVED"},
+   {0x143, "32-bit interpolation slots"},
+   {0x144, "16-bit interpolation slots"},
+   {0x80000034, "RESERVED"},
+   {0xcf, "Any workload active cycles"},
+   {0x11d, "Fragment front-end read beats from L2 cache"},
+   {0x11e, "Fragment front-end read beats from external memory"},
+   {0x11f, "Load/store unit read beats from L2 cache"},
+   {0x120, "Load/store unit read beats from external memory"},
+   {0x121, "Texture unit read beats from L2 cache"},
+   {0x122, "Texture unit read beats from external memory"},
+   {0x123, "Miscellaneous read beats from L2 cache"},
+   {0x124, "Load/store unit write beats to L2 memory system"},
+   {0x127, "Tile unit write beats to L2 memory system"},
+   {0x128, "Miscellaneous write beats to L2 memory system"},
+   {0x222, "Core cycles with 0-25% thread occupancy"},
+   {0x223, "Core cycles with 25-50% thread occupancy"},
+   {0x224, "Core cycles with 50-75% thread occupancy"},
+   {0x80000043, "RESERVED"},
+   {0x3b, "Rasterized coarse quads"},
+   {0x10024, "All fragment threads"},
+   {0x1ab, "Neural unit active shader clock cycles"},
+   {0x177, "Any slot arithmetic issue cycles"},
+   {0x187, "Slot 0 arithmetic issue cycles"},
+   {0x176, "Slot 1 arithmetic issue cycles"},
+   {0x215, "Ray tracing non-opaque opacity micromap hits"},
+   {0x214, "Ray tracing opaque opacity micromap hits"},
+   {0x216, "Ray tracing micromap misses"},
+   {0x1b9, "Ray tracing deep traversals"},
+   {0x139, "Ray tracing box tester issue cycles"},
+   {0x13a, "Ray tracing triangle tester issue cycles"},
+   {0x134, "Ray tracing opaque triangle hits"},
+   {0x135, "Ray tracing non-opaque triangle hits"},
+   {0x136, "Ray tracing first hit terminations"},
+   {0x137, "Ray tracing ray misses"},
+   {0x138, "Ray tracing started rays"},
+   {0x1ae, "Ray tracing box tests"},
+   {0x1b1, "Ray tracing triangle primitive tests"},
+   {0x156, "L1 texture cache load cycles"},
+   {0x152, "Simple texture load cycles"},
+   {0x155, "L1 texture cache output cycles"},
+   {0x154, "L1 texture cache lookup cycles"},
+   {0x151, "Texture messages with single quad"},
+   {0x159, "Texture cache lookup cycles"},
+   {0x153, "Complex texture load cycles"},
+   {0x158, "Texture index calculation cycles"},
+   {0x226, "Warps using 0-32 registers"},
+   {0x227, "Warps using 33-80 registers"},
+   {0x180, "Loaded fragment primitives"},
+   {0x182, "Fragment prepass culled primitives"},
+   {0x181, "Loaded fragment prepass primitives"},
+   {0x183, "Fragment prepass uncullable primitives"},
+   {0x184, "Fragment prepass early ZS updated quads"},
+   {0x185, "Fragment prepass tested quads"},
+   {0x186, "Fragment prepass killed quads"},
+   {0x17d, "Fragment prepass warps"},
+   {0x17f, "Fragment main pass stall cycles"},
+   {0x16e, "Deferred vertex warps"},
+   {0x1a1, "Blend unit issue cycles"},
+   {0x19f, "Attribute unit issue cycles"},
+   {0x19d, "Ray tracing unit backpressure cycles"},
+   {0x1af, "Ray tracing unit cache hit"},
+   {0x1b0, "Ray tracing unit cache miss"},
+   {0x17a, "Texture unit backpressure cycles"},
+   {0x17b, "Varying unit backpressure cycles"},
+   {0x178, "Blend unit backpressure cycles"},
+   {0x17c, "ZS unit backpressure cycles"},
+   {0x179, "Load/store unit backpressure cycles"},
+   {0x16f, "Attribute unit backpressure cycles"},
+   {0x217, "Ray tracing unit load/store cache write beats"},
+   {0x213, "Ray tracing box tests due to resumes"},
+   {0x1b6, "Ray tracing new trace messages"},
+   {0x1b7, "Ray tracing resume trace messages"},
+   {0x1ad, "Ray tracing unit issue cycles"},
+   {0x1b8, "Ray tracing resumed rays"},
+   {0x1b2, "Ray tracing TLAS box tests"},
+   {0x1b3, "Ray tracing BLAS instances"},
+   {0x1b5, "Ray tracing culled primitives"},
+   {0x1b4, "Ray tracing culled BLAS instances"},
+};
+
+uint32_t
+panvk_perf_counters_by_region_select(const uint32_t *ids, uint32_t count)
+{
+   const uint32_t n = MIN2(count, PANVK_PERF_COUNTERS_BY_REGION_MAX);
+   uint32_t select = 0;
+
+   for (uint32_t i = 0; i < n; i++) {
+      for (uint32_t c = 0; c < PANVK_PERF_COUNTERS_BY_REGION_COUNT; c++) {
+         if (panvk_perf_counters_by_region[c].id == ids[i]) {
+            select |= c << (8 * i);
+            break;
+         }
+      }
+   }
+
+   return select;
+}

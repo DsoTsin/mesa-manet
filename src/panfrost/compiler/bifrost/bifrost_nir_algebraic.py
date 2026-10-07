@@ -84,6 +84,13 @@ algebraic_late = [
     (('f2u16', a), ('u2u16', ('f2u32', a)), 'is_kraid'),
     (('f2i16', a), ('u2u16', ('f2i32', a)), 'is_kraid'),
 
+    (('f2e4m3fn', ('f2f32', 'a@16')), ('f162e4m3fn_pan', a)),
+    (('f2e4m3fn_sat', ('f2f32', 'a@16')), ('f162e4m3fn_sat_pan', a)),
+    (('f2e5m2', ('f2f32', 'a@16')), ('f162e5m2_pan', a)),
+    (('f2e5m2_sat', ('f2f32', 'a@16')), ('f162e5m2_sat_pan', a)),
+    (('f2f16', ('e4m3fn2f', a)), ('e4m3fn2f16_pan', a)),
+    (('f2f16', ('e5m22f', a)), ('e5m22f16_pan', a)),
+
     # Copy-prop will clean these up
     (('pack_uvec2_to_uint', a), ('pack_32_2x16', ('u2u16', a))),
     (('pack_uvec4_to_uint', a), ('pack_32_4x8', ('u2u8', a))),
@@ -91,6 +98,27 @@ algebraic_late = [
     # On v11+, because FROUND.v2f16 is gone we end up with precision issues.
     # We lower ffract here instead to ensure lower_bit_size has been performed.
     (('ffract', a), ('fadd', a, ('fneg', ('ffloor', a))), 'gpu_arch >= 11'),
+]
+
+for fmt in ['e4m3fn', 'e5m2']:
+    for sat in ['', '_sat']:
+        for rnd in ['_rtz', '_ru', '_rd']:
+            op = f'f2{fmt}{sat}{rnd}'
+            algebraic_late += [((op, ('f2f32', 'a@16')), (op, a))]
+
+algebraic_fp16 = []
+for convert in ['f2f16', 'f2f16_rtz', 'f2f16_rtne', 'f2fmp']:
+    for op in ['fneg', 'fabs']:
+        algebraic_fp16 += [
+            ((convert, (op, ('f2f32', 'a@16'))),
+             (op, ('fcanonicalize', a)), 'is_kraid'),
+        ]
+
+algebraic_fp16 += [
+    (('fcanonicalize', 'a@16'), a,
+     'is_kraid && !nir_is_denorm_flush_to_zero(info->float_controls_execution_mode, 16)'),
+    (('fcanonicalize', 'a@16(is_created_as_float)'), a, 'is_kraid'),
+    (('fcanonicalize(is_only_used_as_float)', 'a@16'), a, 'is_kraid'),
 ]
 
 # nir_lower_bool_to_bitsize can generate needless conversions.
@@ -127,15 +155,13 @@ for fsz in [16, 32]:
     ]
 
 for isz in [8, 16, 32]:
-    upcast = (f'i2i{isz}', a)
-    downcast = a if isz == 32 else (f'u2u{isz}', a)
+    for bsz in [8, 16, 32, 64]:
+        conv = a if bsz == isz else (f'u2u{isz}' if bsz > isz else f'i2i{isz}', a)
 
-    algebraic_late += [
-        ((f'b2i{isz}', ('inot', f'a@32')), ('bcsel_pan', downcast, 0, 1), 'is_kraid'),
-        ((f'b2i{isz}', ('inot', a)), ('bcsel_pan', upcast, 0, 1), 'is_kraid'),
-        ((f'b2i{isz}', f'a@{isz}'), ('bcsel_pan', downcast, 1, 0), 'is_kraid'),
-        ((f'b2i{isz}', a), ('bcsel_pan', upcast, 1, 0), 'is_kraid'),
-    ]
+        algebraic_late += [
+            ((f'b2i{isz}', ('inot', f'a@{bsz}')), ('bcsel_pan', conv, 0, 1), 'is_kraid'),
+            ((f'b2i{isz}', f'a@{bsz}'), ('bcsel_pan', conv, 1, 0), 'is_kraid'),
+        ]
 
 LOPS = ['and', 'or', 'xor']
 SHIFTS = [
@@ -204,6 +230,16 @@ algebraic_late += [
     (('fpow', 'a@16', 'b@16'), ('fexp2', ('fmul', ('flog2', a), b)))
 ]
 
+# Arm's compiler multiplies out pow with a small integral exponent
+# (x^5 = (x*x)^2 * x) instead of the FLOGD/FEXP sequence; the product is at
+# least as accurate as exp2(n * log2(x)), which is what pow must match.
+algebraic_late += [
+    (('fpow', 'a@32', 2.0), ('fmul', a, a)),
+    (('fpow', 'a@32', 3.0), ('fmul', ('fmul', a, a), a)),
+    (('fpow', 'a@32', 4.0), ('fmul', ('fmul', a, a), ('fmul', a, a))),
+    (('fpow', 'a@32', 5.0), ('fmul', ('fmul', ('fmul', a, a), ('fmul', a, a)), a)),
+]
+
 # Bifrost LDEXP.v2f16 takes i16 exponent, while nir_op_ldexp takes i32. Lower
 # to nir_op_ldexp16_pan.
 #
@@ -224,6 +260,23 @@ algebraic_late += [
 ]
 
 
+uniform_reassoc = [
+    (('~fmul', ('fadd(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)'), 'c(is_uniform_expr)'),
+     ('ffma', a, c, ('fmul', b, c))),
+    (('~fmul', ('ffma(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)', 'c(is_uniform_expr)'), 'd(is_uniform_expr)'),
+     ('ffma', a, ('fmul', b, d), ('fmul', c, d))),
+    (('~fmul', ('fmul(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)'), 'c(is_uniform_expr)'),
+     ('fmul', a, ('fmul', b, c))),
+    (('~ffma', ('fadd(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)'), 'c(is_uniform_expr)', 'd(is_uniform_expr)'),
+     ('ffma', a, c, ('ffma', b, c, d))),
+    (('~ffma', ('fmul(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)'), 'c(is_uniform_expr)', d),
+     ('ffma', a, ('fmul', b, c), d)),
+    (('~fadd', ('fadd(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)'), 'c(is_uniform_expr)'),
+     ('fadd', a, ('fadd', b, c))),
+    (('~fadd', ('ffma(is_used_once)', 'a(is_not_uniform_expr)', 'b(is_uniform_expr)', 'c(is_uniform_expr)'), 'd(is_uniform_expr)'),
+     ('ffma', a, b, ('fadd', c, d))),
+]
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--import-path', required=True)
@@ -239,6 +292,11 @@ def run():
 
     print(nir_algebraic.AlgebraicPass("bifrost_nir_opt_boolean_bitwise",
                                       opt_bool_bitwise).render())
+    print(nir_algebraic.AlgebraicPass("bifrost_nir_opt_fp16",
+                                      algebraic_fp16,
+                                      [("bool ", "is_kraid")]).render())
+    print(nir_algebraic.AlgebraicPass("bifrost_nir_opt_uniform_reassoc",
+                                      uniform_reassoc).render())
     print(nir_algebraic.AlgebraicPass("bifrost_nir_lower_algebraic_late",
                                       algebraic_late,
                                       [

@@ -93,6 +93,7 @@ impl WordCopies<'_> {
 
                     if op.round == FRound::NearestEven
                         && op.clamp == FClamp::None
+                        && !op.dst.lanes.is_f16_narrow()
                     {
                         if op.srcs[0].is_fneg_zero(op.dst_type) {
                             self.add_copy(ssa, op.srcs[1].clone(), op.dst_type);
@@ -248,7 +249,7 @@ impl WordCopies<'_> {
             SrcMod::None => (),
             SrcMod::BNot => {
                 // BNot requires an integer type
-                if !src_type.is_int_type() {
+                if !src_type.is_any_int_type() {
                     return;
                 }
             }
@@ -433,7 +434,7 @@ impl WordCopies<'_> {
     fn try_prop_to_src(&self, instr: &mut Instr, src_idx: usize) {
         let src = &instr.srcs()[src_idx];
         let src_type = instr.src_type(src);
-        let is_sr = self.model.op_src_is_staging_reg(&instr.op, src);
+        let is_sr = self.model.op_src_is_reg_only(&instr.op, src);
 
         if is_sr {
             debug_assert!(src.src_mod.is_none());
@@ -748,7 +749,7 @@ impl ByteCopies<'_> {
 
     fn try_prop_to_src(&self, instr: &mut Instr, src_idx: usize) {
         let src = &instr.srcs()[src_idx];
-        let is_sr = self.model.op_src_is_staging_reg(&instr.op, src);
+        let is_sr = self.model.op_src_is_reg_only(&instr.op, src);
         let SrcRef::SSA(src_vec) = &src.src_ref else {
             return;
         };

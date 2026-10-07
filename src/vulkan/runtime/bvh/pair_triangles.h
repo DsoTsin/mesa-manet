@@ -45,7 +45,12 @@ main(void)
          id = DEREF(key32_id).id;
    }
 
-   if (id != VK_BVH_INVALID_NODE) {
+   bool pre_paired =
+      id != VK_BVH_INVALID_NODE &&
+      DEREF(vk_ir_triangle_node_get_quad_ref(REF(vk_ir_triangle_node)OFFSET(args.bvh, ir_id_to_offset(id))))
+            .triangle_id != VK_QUAD_TRIANGLE_ID_UNUSED;
+
+   if (id != VK_BVH_INVALID_NODE && !pre_paired) {
       REF(vk_ir_triangle_node) triangle_ptr = REF(vk_ir_triangle_node)OFFSET(args.bvh, ir_id_to_offset(id));
       vk_ir_triangle_node triangle = DEREF(triangle_ptr);
 

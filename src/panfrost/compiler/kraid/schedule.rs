@@ -199,18 +199,18 @@ impl DepTracker {
     }
 }
 
-fn pressure_schedule_block(
+pub(crate) fn pressure_schedule(
     model: &dyn Model,
     ssa_alloc: &SSAValueAllocator,
-    b: &mut BasicBlock,
-    bl: &BlockLiveness,
-) {
+    b: &BasicBlock,
+    live_out: &BitSet<u32>,
+) -> (Vec<usize>, u32) {
     let body_range = b.body_ip_range();
 
     let mut deps = DepTracker::for_block(b, body_range.clone());
 
     let mut live = LiveSet::new();
-    for idx in bl.live_out_set().iter() {
+    for idx in live_out.iter() {
         live.insert(ssa_alloc.lookup_by_idx(idx));
     }
 
@@ -272,8 +272,20 @@ fn pressure_schedule_block(
     // Assert we placed all of them
     assert!(end_ip == body_range.start);
 
+    (schedule, max_live.reg)
+}
+
+fn pressure_schedule_block(
+    model: &dyn Model,
+    ssa_alloc: &SSAValueAllocator,
+    b: &mut BasicBlock,
+    bl: &BlockLiveness,
+) {
+    let (schedule, max_live) =
+        pressure_schedule(model, ssa_alloc, b, bl.live_out_set());
+
     // Replace with the new scheduling if it's better.
-    if max_live.reg < bl.max_live_bytes().reg {
+    if max_live < bl.max_live_bytes().reg {
         // SAFETY:
         //
         // We already asserted that we placed each instruction exactly once.
@@ -283,7 +295,87 @@ fn pressure_schedule_block(
     }
 }
 
+fn message_schedule_region(model: &dyn Model, instr: &Instr) -> bool {
+    instr.flow == FlowCtrl::NONE
+        && instr.op.can_eliminate()
+        && instr.op.var_update_mode() == VaryingUpdateMode::None
+        && !instr.reads_discard() && !instr.writes_discard()
+        && instr.iter_reg_uses().next().is_none()
+        && instr.iter_reg_defs().next().is_none()
+        && (matches!(instr.op, Op::Load(_) | Op::LdPka(_))
+            || (!model.op_is_message(&instr.op)
+                && instr.op.memory_effect() == MemoryEffect::None))
+}
+
+fn message_schedule_order(instrs: &[Instr]) -> Vec<usize> {
+    let mut successors = vec![Vec::new(); instrs.len()];
+    let mut pending = vec![0; instrs.len()];
+    let mut defs: FxHashMap<SSAValue, usize> = FxHashMap::default();
+    for (ip, instr) in instrs.iter().enumerate() {
+        let mut predecessors = BitSet::new();
+        for ssa in instr.iter_ssa_uses() {
+            if let Some(&pred) = defs.get(ssa) {
+                if predecessors.insert(pred) {
+                    successors[pred].push(ip);
+                    pending[ip] += 1;
+                }
+            }
+        }
+        for ssa in instr.iter_ssa_defs() {
+            assert!(defs.insert(*ssa, ip).is_none());
+        }
+    }
+    let mut distance = vec![usize::MAX; instrs.len()];
+    for ip in (0..instrs.len()).rev() {
+        distance[ip] = if matches!(instrs[ip].op, Op::Load(_) | Op::LdPka(_)) {
+            0
+        } else {
+            successors[ip].iter().map(|&next| distance[next].saturating_add(1))
+                .min().unwrap_or(usize::MAX)
+        };
+    }
+    let mut ready: Vec<_> = pending.iter().enumerate()
+        .filter_map(|(ip, &count)| (count == 0).then_some(ip)).collect();
+    let mut order = Vec::with_capacity(instrs.len());
+    while !ready.is_empty() {
+        let best = (0..ready.len()).min_by_key(|&idx| (distance[ready[idx]], ready[idx])).unwrap();
+        let ip = ready.swap_remove(best);
+        order.push(ip);
+        for &next in &successors[ip] {
+            pending[next] -= 1;
+            if pending[next] == 0 {
+                ready.push(next);
+            }
+        }
+    }
+    assert_eq!(order.len(), instrs.len());
+    order
+}
+
 impl Shader<'_> {
+    pub fn schedule_for_message_loads(&mut self) {
+        if self.model.arch() != 15 {
+            return;
+        }
+        for block in self.blocks.iter_mut() {
+            let body = block.body_ip_range();
+            let mut start = body.start;
+            while start < body.end {
+                let end = start + block.instrs[start..body.end].iter()
+                    .take_while(|instr| message_schedule_region(self.model, instr)).count();
+                if end > start + 1 && block.instrs[start..end].iter()
+                    .any(|instr| matches!(instr.op, Op::Load(_) | Op::LdPka(_)))
+                {
+                    let order = message_schedule_order(&block.instrs[start..end]);
+                    let mut instrs: Vec<_> = block.instrs.drain(start..end).map(Some).collect();
+                    block.instrs.splice(start..start,
+                        order.into_iter().map(|ip| instrs[ip].take().unwrap()));
+                }
+                start = end + 1;
+            }
+        }
+    }
+
     pub fn schedule_for_pressure(&mut self) {
         let live = Liveness::for_shader(self);
         for (bi, block) in self.blocks.iter_mut().enumerate() {
@@ -294,5 +386,68 @@ impl Shader<'_> {
                 live.block(bi),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ssa_value::AllocSSA;
+    use crate::flow::FlowWaitBit;
+    use crate::model::model_for_gpu_id;
+    use crate::ops::{MemAccess, OpBarrier, OpIAdd, OpLdPka, OpLoad, OpMov};
+
+    #[test]
+    fn message_schedule_issues_address_producers_before_consumers() {
+        let mut alloc = SSAValueAllocator::default();
+        let a = alloc.alloc_ref(32);
+        let used_a = alloc.alloc_ref(32);
+        let addr = alloc.alloc_ref(64);
+        let b = alloc.alloc_ref(32);
+        let used_b = alloc.alloc_ref(32);
+        let instrs = vec![
+            Instr::from(OpLdPka { dst: a.clone().into(), dst_type: DataType::I32,
+                                 access: MemAccess::None, handle: 0_u32.into(), offset: 0_u32.into() }),
+            OpMov { dst: used_a.into(), dst_type: DataType::I32, src: a.into() }.into(),
+            OpIAdd { dst: addr.clone().into(), dst_type: DataType::U64,
+                     saturate: false, srcs: [0_u32.into(), 0_u32.into()] }.into(),
+            OpLoad { dst: b.clone().into(), dst_type: DataType::I32, is_tls: false,
+                     access: MemAccess::None, addr: addr.into(), offset: 0 }.into(),
+            OpMov { dst: used_b.into(), dst_type: DataType::I32, src: b.into() }.into(),
+        ];
+        assert_eq!(message_schedule_order(&instrs), vec![0, 2, 3, 1, 4]);
+    }
+
+    #[test]
+    fn message_schedule_preserves_load_dependencies() {
+        let mut alloc = SSAValueAllocator::default();
+        let handle = alloc.alloc_ref(32);
+        let offset = alloc.alloc_ref(32);
+        let value = alloc.alloc_ref(32);
+        let used_value = alloc.alloc_ref(32);
+        let instrs = vec![
+            Instr::from(OpLdPka { dst: handle.clone().into(), dst_type: DataType::I32,
+                                 access: MemAccess::None, handle: 0_u32.into(), offset: 0_u32.into() }),
+            OpMov { dst: offset.clone().into(), dst_type: DataType::I32, src: handle.clone().into() }.into(),
+            OpLdPka { dst: value.clone().into(), dst_type: DataType::I32,
+                      access: MemAccess::None, handle: handle.into(), offset: offset.into() }.into(),
+            OpMov { dst: used_value.into(), dst_type: DataType::I32, src: value.into() }.into(),
+        ];
+        assert_eq!(message_schedule_order(&instrs), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn message_schedule_regions_exclude_flow_and_physical_registers() {
+        let model = model_for_gpu_id(0x0f080000f0000000, 4).unwrap();
+        let reg = RegRef::new(0, RegRange::Regs(1));
+        let physical = Instr::from(OpMov { dst: reg.into(), dst_type: DataType::I32, src: reg.into() });
+        assert!(!message_schedule_region(model.as_ref(), &physical));
+        assert!(!message_schedule_region(model.as_ref(), &OpBarrier {}.into()));
+        let mut alloc = SSAValueAllocator::default();
+        let mut flow = Instr::from(OpMov { dst: alloc.alloc_ref(32).into(),
+                                          dst_type: DataType::I32, src: 0_u32.into() });
+        assert!(message_schedule_region(model.as_ref(), &flow));
+        flow.flow.set_wait_bit(FlowWaitBit::Slot0);
+        assert!(!message_schedule_region(model.as_ref(), &flow));
     }
 }

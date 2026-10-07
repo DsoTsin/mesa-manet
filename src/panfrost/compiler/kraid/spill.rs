@@ -8,10 +8,11 @@ use crate::phi::{PhiMap, PhiWordSet};
 use crate::ssa_value::{AllocSSA, SSAValueIndexedVec};
 
 use compiler::bitset::BitSet;
-use compiler::dataflow::BackwardDataflow;
 use rustc_hash::FxHashMap;
 use std::cmp::{Ord, Ordering, PartialOrd, Reverse};
 use std::collections::BinaryHeap;
+
+pub const SPILL_LOOP_EXIT_DISTANCE: usize = 1 << 16;
 
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Dist(usize);
@@ -86,7 +87,11 @@ struct GlobalNextUse {
 }
 
 impl GlobalNextUse {
-    fn for_shader(s: &Shader, live: &Liveness) -> GlobalNextUse {
+    fn for_shader(
+        s: &Shader,
+        live: &Liveness,
+        loop_exit_distance: usize,
+    ) -> GlobalNextUse {
         let mut last_use = SSADistMap::with_count(s.ssa_alloc.count());
 
         let mut block_next_use_in = Vec::new();
@@ -129,19 +134,22 @@ impl GlobalNextUse {
             block_next_use_out.push(next_use_out);
         }
 
-        BackwardDataflow {
-            cfg: &s.blocks,
-            block_in: &mut block_next_use_in[..],
-            block_out: &mut block_next_use_out[..],
-            transfer: |_, block, live_in, live_out| {
-                let delta = block.instrs.len().try_into().unwrap();
-                live_in.update_from(live_out, delta)
-            },
-            join: |live_out, succ_live_in| {
-                live_out.update_from(succ_live_in, 0);
-            },
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for bi in (0..s.blocks.len()).rev() {
+                let depth = s.blocks.loop_depth(bi);
+                for &succ in s.blocks.succ_indices(bi) {
+                    let exits = depth.saturating_sub(s.blocks.loop_depth(succ));
+                    let penalty = exits.saturating_mul(loop_exit_distance);
+                    changed |= block_next_use_out[bi]
+                        .update_from(&block_next_use_in[succ], penalty);
+                }
+                let delta = s.blocks[bi].instrs.len();
+                changed |= block_next_use_in[bi]
+                    .update_from(&block_next_use_out[bi], delta);
+            }
         }
-        .solve();
 
         GlobalNextUse { block_next_use_out }
     }
@@ -524,8 +532,14 @@ impl Iterator for SpillChoiceIter {
     }
 }
 
-fn spill(s: &mut Shader, live: Liveness, limit: u32) {
-    let global_next_use = GlobalNextUse::for_shader(s, &live);
+fn spill(
+    s: &mut Shader,
+    live: Liveness,
+    limit: u32,
+    loop_exit_distance: usize,
+) {
+    let global_next_use =
+        GlobalNextUse::for_shader(s, &live, loop_exit_distance);
     let phi_map = PhiMap::for_shader(s);
     let blocks = &mut s.blocks;
 
@@ -1017,7 +1031,12 @@ fn spill(s: &mut Shader, live: Liveness, limit: u32) {
 }
 
 impl Shader<'_> {
-    pub fn spill_values(&mut self, live: Liveness, limit: u32) {
-        spill(self, live, limit);
+    pub fn spill_values(
+        &mut self,
+        live: Liveness,
+        limit: u32,
+        loop_exit_distance: usize,
+    ) {
+        spill(self, live, limit, loop_exit_distance);
     }
 }

@@ -1,0 +1,514 @@
+<?xml version="1.0" ?>
+<mali-isa major="15" minor="8" patch="11">
+  <instruction name="LD_TENSOR" variant="i8" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i8"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write1"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LD_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LD_TENSOR" variant="i16" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i16"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write1"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LD_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LD_TENSOR" variant="i32" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i32"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write1"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LD_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LD_TENSOR" variant="i64" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i64"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write2"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LD_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LD_TENSOR" variant="i128" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i128"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write4"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LD_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LEA_TENSOR" variant="i8" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i8"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write4"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LEA_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LEA_TENSOR" variant="i16" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i16"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write4"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LEA_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LEA_TENSOR" variant="i32" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i32"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write4"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LEA_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LEA_TENSOR" variant="i64" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i64"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write4"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LEA_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <instruction name="LEA_TENSOR" variant="i128" exec_unit="msg" since="15" until="15">
+    <syntax>
+      <name>
+        <modifier name="message_slot_index"/>
+        <modifier name="flow"/>
+      </name>
+      <staging name="sw" direction="output"/>
+      <staging name="sr" direction="input"/>
+      <src name="src0"/>
+    </syntax>
+    <virtual name="src0" type="SourceEncoding">
+      <expression operator="bitwise_or">
+        <expression identifier="src0_lo"/>
+        <expression operator="lshift">
+          <expression identifier="src0_hi"/>
+          <expression literal="8" type="uint"/>
+        </expression>
+      </expression>
+    </virtual>
+    <field name="src0_lo" pos="0" width="8">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="7" type="uint"/>
+        <expression literal="0" type="uint"/>
+      </expression>
+    </field>
+    <reserved pos="8" width="8" type="zero"/>
+    <field name="staging_register_write_index" pos="16" width="8" type="uint" max="127"/>
+    <reserved pos="24" width="3" type="zero"/>
+    <field name="tensor_memory_width" pos="27" width="3" type="tensor_memory_width_t" exact="i128"/>
+    <field name="message_slot_index" pos="30" width="2" type="message_slot_narrow_index_m" restrict="slot0 slot1 slot2"/>
+    <field name="sr_count" pos="32" width="3" type="sr_count_t" exact="count4"/>
+    <field name="sr_write_count" pos="35" width="3" type="sr_write_count_t" exact="write4"/>
+    <field name="sr_control2" pos="38" width="1" type="instruction_msg_sr_control2_t" exact="read_write"/>
+    <field name="sr_control" pos="39" width="1" type="instruction_msg_sr_control_t" exact="read_or_read_write"/>
+    <field name="staging_register_index" pos="40" width="8" type="uint" max="127"/>
+    <field name="src0_hi" pos="48" width="1">
+      <expression operator="slice">
+        <expression identifier="src0"/>
+        <expression literal="8" type="uint"/>
+        <expression literal="8" type="uint"/>
+      </expression>
+    </field>
+    <field name="operands" pos="49" width="1" type="instruction_msg_group_a_not_tex_operands_t" exact="msg_operands01"/>
+    <field name="opcode1" pos="50" width="4" type="MRW01_tensor_opcode1_t" exact="LEA_TENSOR"/>
+    <field name="subclass" pos="54" width="1" type="instruction_msg_group_a_subclass_t" exact="is_not_tex"/>
+    <field name="instruction_class" pos="55" width="3" type="instruction_major_class_t" exact="msg_group_a"/>
+    <field name="flow" pos="58" width="4" type="flow_control_m"/>
+    <field name="fau_page_index" pos="62" width="2" type="uint"/>
+  </instruction>
+  <enum name="MRW01_tensor_opcode1_t" since="15" until="15">
+    <value name="LEA_TENSOR" canonical="1" value="0"/>
+    <value name="LD_TENSOR" canonical="1" value="1"/>
+  </enum>
+  <enum name="tensor_memory_width_t" since="15" until="15">
+    <value name="i8" canonical="1" value="0"/>
+    <value name="i16" canonical="1" value="1"/>
+    <value name="i32" canonical="1" value="3"/>
+    <value name="i64" canonical="1" value="5"/>
+    <value name="i128" canonical="1" value="7"/>
+  </enum>
+</mali-isa>

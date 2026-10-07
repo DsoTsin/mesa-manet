@@ -205,7 +205,18 @@ vk_gralloc_to_drm_explicit_layout(
       out_layouts[2] = tmp;
    }
 
+   mesa_logi("%s @ %d: VK_SUCCESS, info.modifier=0x%lx", __func__, __LINE__, info.modifier);
    return VK_SUCCESS;
+}
+
+static struct u_gralloc_buffer_handle
+vk_android_anb_gralloc_handle(const VkNativeBufferANDROID *anb)
+{
+   return (struct u_gralloc_buffer_handle){
+      .handle = anb->handle,
+      .hal_format = anb->format,
+      .pixel_stride = anb->stride,
+   };
 }
 
 VkResult
@@ -216,7 +227,15 @@ vk_android_import_anb_memory(struct vk_device *device,
 {
    assert(anb && anb->handle && anb->handle->numFds > 0);
 
-   int dma_buf_fd = anb->handle->data[0];
+   struct u_gralloc *u_gralloc = vk_android_get_ugralloc();
+   struct u_gralloc_buffer_handle gr_handle = vk_android_anb_gralloc_handle(anb);
+   struct u_gralloc_buffer_basic_info info;
+   if (!u_gralloc || u_gralloc_get_buffer_basic_info(u_gralloc, &gr_handle, &info) != 0) {
+      mesa_loge("u_gralloc_get_buffer_basic_info failed");
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+
+   int dma_buf_fd = info.fds[0];
 
    /* Query image memory requirements for size and supported memory types */
    VkMemoryRequirements mem_reqs;
@@ -311,11 +330,8 @@ vk_android_get_anb_layout(
    const VkNativeBufferANDROID *native_buffer =
       vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
 
-   struct u_gralloc_buffer_handle gr_handle = {
-      .handle = native_buffer->handle,
-      .hal_format = native_buffer->format,
-      .pixel_stride = native_buffer->stride,
-   };
+   struct u_gralloc_buffer_handle gr_handle =
+      vk_android_anb_gralloc_handle(native_buffer);
 
    return vk_gralloc_to_drm_explicit_layout(&gr_handle, out,
                                             out_layouts, max_planes);
@@ -1224,6 +1240,8 @@ vk_common_GetAndroidHardwareBufferPropertiesANDROID(
       format_prop->suggestedYcbcrRange    = format_prop2->suggestedYcbcrRange;
       format_prop->suggestedXChromaOffset = format_prop2->suggestedXChromaOffset;
       format_prop->suggestedYChromaOffset = format_prop2->suggestedYChromaOffset;
+      mesa_logi("%s @ %d: format=%d, externalFormat=%lu, formatFeatures=%d",
+         __func__, __LINE__, format_prop->format, format_prop->externalFormat, format_prop->formatFeatures);
    }
 
    if (format_resolve) {
@@ -1241,14 +1259,30 @@ vk_common_GetAndroidHardwareBufferPropertiesANDROID(
 
    const native_handle_t *handle = AHardwareBuffer_getNativeHandle(buffer);
    assert(handle && handle->numFds > 0);
-   pProperties->allocationSize = lseek(handle->data[0], 0, SEEK_END);
 
    VkMemoryFdPropertiesKHR fd_props = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
    };
-   result = device->dispatch_table.GetMemoryFdPropertiesKHR(
-      device_h, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, handle->data[0],
-      &fd_props);
+
+   result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   for (int i = 0; i < handle->numFds; i++) {
+      mesa_logi("  candidate_fd=%d (%d of %d)", handle->data[i], i, handle->numFds);
+      int candidate_fd = handle->data[i];
+      if (candidate_fd < 0) continue;
+      int res = lseek(candidate_fd, 0, SEEK_END);
+      if (res < 0) continue;
+      pProperties->allocationSize = res;
+      result = device->dispatch_table.GetMemoryFdPropertiesKHR(
+         device_h, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, candidate_fd,
+         &fd_props);
+      if (result == VK_SUCCESS)
+         break;
+   }
+
+   mesa_logi("result=%d, fd_props.memoryTypeBits=%u", result, fd_props.memoryTypeBits);
+   // result = device->dispatch_table.GetMemoryFdPropertiesKHR(
+   //    device_h, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, handle->data[0],
+   //    &fd_props);
    if (result != VK_SUCCESS)
       return result;
 

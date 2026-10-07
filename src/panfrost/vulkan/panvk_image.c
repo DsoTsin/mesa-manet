@@ -15,6 +15,7 @@
 #include "pan_afbc.h"
 #include "pan_props.h"
 
+#include "panvk_bc_emu.h"
 #include "panvk_android.h"
 #include "panvk_device.h"
 #include "panvk_device_memory.h"
@@ -58,7 +59,8 @@ get_iusage(struct panvk_image *image, const VkImageCreateInfo *create_info)
 
    if (image->vk.usage &
        (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR))
       iusage.bind |= PAN_BIND_SAMPLER_VIEW;
 
    if (image->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT)
@@ -83,6 +85,9 @@ get_iusage(struct panvk_image *image, const VkImageCreateInfo *create_info)
 static unsigned
 get_plane_count(struct panvk_image *image)
 {
+   if (image->bc_emu_format != VK_FORMAT_UNDEFINED)
+      return 2;
+
    bool combined_ds = vk_format_aspects(image->vk.format) ==
                       (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
 
@@ -145,6 +150,9 @@ select_plane_pfmt(struct panvk_image *image, uint64_t mod, unsigned plane)
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(image->vk.base.device->physical);
    unsigned arch = pan_arch(phys_dev->kmod.dev->props.gpu_id);
+   if (plane == 1 && image->bc_emu_format != VK_FORMAT_UNDEFINED)
+      return vk_format_to_pipe_format(image->bc_emu_format);
+
    if (panvk_image_is_planar_depth_stencil(image)) {
       return plane > 0 ? select_stencil_plane_pfmt(image)
                        : select_depth_plane_pfmt(image, mod);
@@ -165,13 +173,14 @@ panvk_image_can_use_mod(struct panvk_image *image,
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(image->vk.base.device->physical);
    unsigned arch = pan_arch(phys_dev->kmod.dev->props.gpu_id);
-   const bool forced_linear = PANVK_DEBUG(LINEAR) ||
-                              image->vk.tiling == VK_IMAGE_TILING_LINEAR ||
-                              image->vk.image_type == VK_IMAGE_TYPE_1D;
+   const bool forced_linear =
+      PANVK_DEBUG(LINEAR) || image->vk.tiling == VK_IMAGE_TILING_LINEAR ||
+      image->vk.image_type == VK_IMAGE_TYPE_1D ||
+      (image->vk.usage & VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM);
 
    /* If the image is meant to be linear, don't bother testing the
     * other cases. */
-   if (forced_linear)
+   if (forced_linear || image->bc_emu_format != VK_FORMAT_UNDEFINED)
       return mod == DRM_FORMAT_MOD_LINEAR;
 
    assert(image->vk.tiling == VK_IMAGE_TILING_OPTIMAL ||
@@ -188,7 +197,8 @@ panvk_image_can_use_mod(struct panvk_image *image,
 
       /* Can't do AFBC if store/host copy is requested. */
       if ((image->vk.usage | image->vk.stencil_usage) &
-          (VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT))
+          (VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT |
+           VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR))
          return false;
 
       /* Can't do AFBC on v7- if mutable format is requested. */
@@ -492,6 +502,23 @@ panvk_image_init_layouts(struct panvk_image *image,
       }
    }
 
+   if (image->bc_emu_format != VK_FORMAT_UNDEFINED) {
+      struct pan_image_props *props = &image->planes[1].image.props;
+      const struct pan_image_usage emu_usage = {
+         .bind = panvk_bc_emu_astc(image->vk.format)
+                    ? PAN_BIND_SAMPLER_VIEW
+                    : PAN_BIND_SAMPLER_VIEW | PAN_BIND_STORAGE_IMAGE,
+      };
+
+      props->crc = false;
+      props->modifier = DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED;
+      if (pan_image_test_props(&phys_dev->kmod.dev->props, props, &emu_usage) ==
+          PAN_MOD_NOT_SUPPORTED)
+         props->modifier = DRM_FORMAT_MOD_LINEAR;
+      image->planes[1].image.mod_handler =
+         pan_mod_get_handler(arch, props->modifier);
+   }
+
    /* initialize plane layout */
    const bool use_strict_import = strict_import(image);
    struct pan_image_layout_constraints plane_layout = {
@@ -503,12 +530,17 @@ panvk_image_init_layouts(struct panvk_image *image,
             .offset_B = explicit_info->pPlaneLayouts[plane].offset,
             .wsi_row_pitch_B = explicit_info->pPlaneLayouts[plane].rowPitch,
             .wsi_array_pitch_B = explicit_info->pPlaneLayouts[plane].arrayPitch,
+            .afbc_body_align_B =
+               panvk_android_is_gralloc_image(pCreateInfo) ? 1024 : 0,
             .strict = use_strict_import,
          };
       }
 
       struct pan_image *pan_img = PAN_IMAGE_FROM(arch, image, plane);
       const uint8_t pan_plane = PAN_IMAGE_PLANE_INDEX_FROM(arch, image, plane);
+
+      if (plane == 1 && image->bc_emu_format != VK_FORMAT_UNDEFINED)
+         plane_layout.offset_B = ALIGN_POT(plane_layout.offset_B, 4096);
 
       pan_img->planes[pan_plane] = &image->planes[plane].plane;
       if (!pan_image_layout_init(arch, pan_img, pan_plane, &plane_layout)) {
@@ -649,6 +681,13 @@ VkResult
 panvk_image_init(struct panvk_image *image,
                  const VkImageCreateInfo *pCreateInfo)
 {
+   struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(image->vk.base.device->physical);
+
+   image->bc_emu_format = panvk_bc_emulated(phys_dev, image->vk.format)
+                             ? panvk_bc_emu_format(image->vk.format)
+                             : VK_FORMAT_UNDEFINED;
+
    /* Needs to happen early for some panvk_image_ helpers to work. */
    image->plane_count = get_plane_count(image);
 
@@ -700,7 +739,8 @@ panvk_image_plane_bind_mem(struct panvk_device *dev,
                                  crc_size, PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH);
 
       if (temporary_map) {
-         int ret = os_munmap(cpu_map, pan_kmod_bo_size(mem->bo));
+         int ret = pan_kmod_bo_munmap(mem->bo, cpu_map,
+                                    pan_kmod_bo_size(mem->bo));
          assert(!ret);
       }
    }

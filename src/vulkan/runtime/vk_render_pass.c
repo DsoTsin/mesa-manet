@@ -1390,6 +1390,55 @@ clone_rp_sample_locations(const VkRenderPassSampleLocationsBeginInfoEXT *loc)
    return new_loc;
 }
 
+static VkRenderPassPerformanceCountersByRegionBeginInfoARM *
+clone_rp_perf_counters(
+   const VkRenderPassPerformanceCountersByRegionBeginInfoARM *info)
+{
+   VK_MULTIALLOC(ma);
+   VK_MULTIALLOC_DECL(&ma, VkRenderPassPerformanceCountersByRegionBeginInfoARM,
+                      new_info, 1);
+   VK_MULTIALLOC_DECL(&ma, VkDeviceAddress, addrs, info->counterAddressCount);
+   VK_MULTIALLOC_DECL(&ma, uint32_t, indices, info->counterIndexCount);
+   if (!vk_multialloc_alloc(&ma, vk_default_allocator(),
+                            VK_SYSTEM_ALLOCATION_SCOPE_OBJECT))
+      return NULL;
+
+   typed_memcpy(addrs, info->pCounterAddresses, info->counterAddressCount);
+   typed_memcpy(indices, info->pCounterIndices, info->counterIndexCount);
+
+   *new_info = (VkRenderPassPerformanceCountersByRegionBeginInfoARM) {
+      .sType =
+         VK_STRUCTURE_TYPE_RENDER_PASS_PERFORMANCE_COUNTERS_BY_REGION_BEGIN_INFO_ARM,
+      .counterAddressCount = info->counterAddressCount,
+      .pCounterAddresses = addrs,
+      .serializeRegions = info->serializeRegions,
+      .counterIndexCount = info->counterIndexCount,
+      .pCounterIndices = indices,
+   };
+
+   return new_info;
+}
+
+static VkRenderPassPerformanceCountersByRegionBeginInfoARM
+get_subpass_perf_counters(const struct vk_command_buffer *cmd_buffer)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const VkRenderPassPerformanceCountersByRegionBeginInfoARM *info =
+      cmd_buffer->pass_perf_counters;
+   const uint32_t stride = pass->is_multiview
+                              ? util_bitcount(pass->view_mask)
+                              : cmd_buffer->framebuffer->layers;
+   const uint32_t first = MIN2(cmd_buffer->subpass_idx * stride,
+                               info->counterAddressCount);
+
+   VkRenderPassPerformanceCountersByRegionBeginInfoARM subpass_info = *info;
+   subpass_info.pNext = NULL;
+   subpass_info.counterAddressCount =
+      MIN2(stride, info->counterAddressCount - first);
+   subpass_info.pCounterAddresses = info->pCounterAddresses + first;
+   return subpass_info;
+}
+
 static const VkSampleLocationsInfoEXT *
 get_subpass_sample_locations(const VkRenderPassSampleLocationsBeginInfoEXT *loc,
                              uint32_t subpass_idx)
@@ -2495,6 +2544,12 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
       __vk_append_struct(&rendering, &sample_locations_tmp);
    }
 
+   VkRenderPassPerformanceCountersByRegionBeginInfoARM perf_counters;
+   if (cmd_buffer->pass_perf_counters) {
+      perf_counters = get_subpass_perf_counters(cmd_buffer);
+      __vk_append_struct(&rendering, &perf_counters);
+   }
+
    /* Append this one last because it lives in the subpass and we don't want
     * to be changed by appending other structures later.
     */
@@ -2777,6 +2832,14 @@ vk_common_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
          att_state->clear_value = pRenderPassBeginInfo->pClearValues[a];
    }
 
+   const VkRenderPassPerformanceCountersByRegionBeginInfoARM *rp_pc_info =
+      vk_find_struct_const(pRenderPassBeginInfo->pNext,
+                           RENDER_PASS_PERFORMANCE_COUNTERS_BY_REGION_BEGIN_INFO_ARM);
+   if (rp_pc_info) {
+      cmd_buffer->pass_perf_counters = clone_rp_perf_counters(rp_pc_info);
+      assert(cmd_buffer->pass_perf_counters);
+   }
+
    const VkRenderPassSampleLocationsBeginInfoEXT *rp_sl_info =
       vk_find_struct_const(pRenderPassBeginInfo->pNext,
                            RENDER_PASS_SAMPLE_LOCATIONS_BEGIN_INFO_EXT);
@@ -2819,6 +2882,9 @@ vk_command_buffer_reset_render_pass(struct vk_command_buffer *cmd_buffer)
    if (cmd_buffer->pass_sample_locations != NULL)
       vk_free(vk_default_allocator(), cmd_buffer->pass_sample_locations);
    cmd_buffer->pass_sample_locations = NULL;
+   if (cmd_buffer->pass_perf_counters != NULL)
+      vk_free(vk_default_allocator(), cmd_buffer->pass_perf_counters);
+   cmd_buffer->pass_perf_counters = NULL;
 }
 
 VKAPI_ATTR void VKAPI_CALL

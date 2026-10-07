@@ -140,8 +140,13 @@ pan_blend_optimize_equation(struct pan_blend_equation *eq,
 {
    unsigned comp_mask = 0xf;
 
-   if (!eq->blend_enable)
+   if (!eq->blend_enable) {
+      if (format != PIPE_FORMAT_NONE &&
+          !((~eq->color_mask) &
+            util_format_colormask(util_format_description(format))))
+         eq->color_mask = 0xf;
       return;
+   }
 
    /* Sanitize alpha blend factors because later optimizations rely on COLOR
     * actually meaning color.

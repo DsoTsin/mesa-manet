@@ -1,5 +1,6 @@
 /*
  * Copyright © 2017 Intel Corporation
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -89,8 +90,13 @@ wsi_device_init(struct wsi_device *wsi,
    wsi->sw = device_options->sw_device || (WSI_DEBUG & WSI_DEBUG_SW);
    wsi->wants_linear = (WSI_DEBUG & WSI_DEBUG_LINEAR) != 0;
    wsi->x11.extra_xwayland_image = device_options->extra_xwayland_image;
+   wsi->x11.use_raw_fd_modifier =
+      device_options->x11_use_raw_fd_modifier;
+   wsi->x11.sw_without_dri3 = device_options->x11_sw_without_dri3;
    wsi->wayland.disable_timestamps = (WSI_DEBUG & WSI_DEBUG_NOWLTS) != 0;
    wsi->emulate_24as32 = device_options->emulate_24as32;
+   wsi->wait_present_before_queue =
+      device_options->wait_present_before_queue;
 #define WSI_GET_CB(func) \
    PFN_vk##func func = (PFN_vk##func)proc_addr(pdevice, "vk" #func)
    WSI_GET_CB(GetPhysicalDeviceExternalSemaphoreProperties);
@@ -449,39 +455,47 @@ configure_image(const struct wsi_swapchain *chain,
                 const struct wsi_base_image_params *params,
                 struct wsi_image_info *info)
 {
-   info->image_type = params->image_type;
-   info->color_space = pCreateInfo->imageColorSpace;
+   VkResult result;
 
    switch (params->image_type) {
    case WSI_IMAGE_TYPE_CPU: {
       const struct wsi_cpu_image_params *cpu_params =
          container_of(params, const struct wsi_cpu_image_params, base);
-      return wsi_configure_cpu_image(chain, pCreateInfo, cpu_params, info);
+      result = wsi_configure_cpu_image(chain, pCreateInfo, cpu_params, info);
+      break;
    }
 #ifdef HAVE_LIBDRM
    case WSI_IMAGE_TYPE_DRM: {
       const struct wsi_drm_image_params *drm_params =
          container_of(params, const struct wsi_drm_image_params, base);
-      return wsi_drm_configure_image(chain, pCreateInfo, drm_params, info);
+      result = wsi_drm_configure_image(chain, pCreateInfo, drm_params, info);
+      break;
    }
 #endif
 #ifdef _WIN32
    case WSI_IMAGE_TYPE_DXGI: {
       const struct wsi_dxgi_image_params *dxgi_params =
          container_of(params, const struct wsi_dxgi_image_params, base);
-      return wsi_dxgi_configure_image(chain, pCreateInfo, dxgi_params, info);
+      result = wsi_dxgi_configure_image(chain, pCreateInfo, dxgi_params, info);
+      break;
    }
 #endif
 #if defined(VK_USE_PLATFORM_METAL_EXT)
    case WSI_IMAGE_TYPE_METAL: {
       const struct wsi_metal_image_params *metal_params =
          container_of(params, const struct wsi_metal_image_params, base);
-      return wsi_metal_configure_image(chain, pCreateInfo, metal_params, info);
+      result = wsi_metal_configure_image(chain, pCreateInfo, metal_params, info);
+      break;
    }
 #endif
    default:
       UNREACHABLE("Invalid image type");
    }
+
+   /* Every type's setup starts with wsi_configure_image(), which clears info
+    * (and sets color_space again), so the type is set afterwards. */
+   info->image_type = params->image_type;
+   return result;
 }
 
 static void
@@ -2879,9 +2893,20 @@ wsi_common_queue_present(const struct wsi_device *wsi,
 #endif
       }
 
-      if (wsi->sw) {
-         wsi->WaitForFences(vk_device_to_handle(dev),
-                            1, &swapchain->fences[image_index], true, ~0ull);
+      /* The window system waits for the fence attached to the dma-buf above
+       * before it reads the image (implicit sync; mutter, for instance,
+       * applies the commit only once the dma-buf polls readable), so the
+       * CPU wait is only needed without that fence.  Termux:X11, behind the
+       * raw-FD DRI3 transport, is not known to honour implicit fences. */
+      if (wsi->sw ||
+          (wsi->wait_present_before_queue &&
+           (swapchain->dma_buf_semaphore == VK_NULL_HANDLE ||
+            wsi->x11.use_raw_fd_modifier))) {
+         results[i] = wsi->WaitForFences(
+            vk_device_to_handle(dev), 1, &swapchain->fences[image_index],
+            true, ~0ull);
+         if (results[i] != VK_SUCCESS)
+            continue;
       }
 
       const VkPresentRegionKHR *region = NULL;

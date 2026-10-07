@@ -82,7 +82,7 @@ bi_opt_word_prop(bi_context *ctx)
 
          if (use.type != BI_INDEX_NORMAL)
             continue;
-         if (bi_is_staging_src(ins, s))
+         if (bi_is_register_only_src(ins, s))
             continue;
 
          bi_index repl = replacement[use.value];
@@ -304,7 +304,7 @@ byte_chase_instr_srcs(bi_context *ctx, bi_instr *I, struct hash_table *ht)
       if (!bi_op_supports_swizzle(I->op, s, repl.swizzle, ctx->arch))
          continue;
 
-      if (bi_is_staging_src(I, s) && repl.type != BI_INDEX_NORMAL)
+      if (bi_is_register_only_src(I, s) && repl.type != BI_INDEX_NORMAL)
          continue;
 
       if (repl.type == BI_INDEX_CONSTANT && bi_reads_fau(I))

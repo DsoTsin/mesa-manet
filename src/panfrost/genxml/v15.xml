@@ -49,6 +49,29 @@
     <value name="Shader" value="8"/>
     <value name="Buffer" value="9"/>
     <value name="Plane" value="10"/>
+    <value name="Tensor" value="11"/>
+  </enum>
+
+  <enum name="Tensor Element Format">
+    <value name="U8" value="1"/>
+    <value name="U16" value="2"/>
+    <value name="U32" value="4"/>
+    <value name="U64" value="6"/>
+    <value name="S8" value="9"/>
+    <value name="S16" value="10"/>
+    <value name="S32" value="12"/>
+    <value name="S64" value="14"/>
+    <value name="F16" value="26"/>
+    <value name="F32" value="28"/>
+  </enum>
+
+  <enum name="Tensor Tiling">
+    <value name="Linear" value="0"/>
+    <value name="Brick 16" value="1"/>
+    <value name="Brick 8" value="2"/>
+    <value name="Brick 4" value="3"/>
+    <value name="Block U Interleaved" value="4"/>
+    <value name="Block U Interleaved 64K" value="5"/>
   </enum>
 
   <enum name="Buffer Type">
@@ -314,6 +337,25 @@
     <!-- 7-15 reserved -->
   </enum>
 
+  <enum name="YUV Writeback Format">
+    <value name="Y8U8V8" value="0"/>
+    <value name="Y8U8V8A8" value="1"/>
+    <value name="Y8U8Y8V8" value="2"/>
+    <value name="V8Y8U8Y8" value="3"/>
+    <value name="Y8 U8V8 422" value="4"/>
+    <value name="Y8 U8 V8 422" value="5"/>
+    <value name="Y8 U8V8 420" value="6"/>
+    <value name="Y8 U8 V8 420" value="7"/>
+    <value name="Y10U10V10A2" value="8"/>
+    <value name="YUYAAYVYAA" value="10"/>
+    <value name="Y10X6U10X6V10X6" value="16"/>
+    <value name="Y10X6U10X6V10X6A10X6" value="17"/>
+    <value name="Y10X6U10X6Y10X6V10X6" value="18"/>
+    <value name="V10X6Y10X6U10X6Y10X6" value="19"/>
+    <value name="Y10X6 U10X6V10X6 422" value="20"/>
+    <value name="Y10X6 U10X6V10X6 420" value="22"/>
+  </enum>
+
   <enum name="YUV Cr Siting">
     <value name="Co-Sited" value="0"/>
     <value name="Center Y" value="1"/>
@@ -441,6 +483,7 @@
     <value name="X" value="0"/>
     <value name="Y" value="1"/>
     <value name="Z" value="2"/>
+    <value name="Inferred" value="3"/>
   </enum>
 
   <enum name="Attribute Frequency">
@@ -487,6 +530,11 @@
   <enum name="CS Other Flush Mode">
     <value name="None" value="0"/>
     <value name="Invalidate" value="2"/>
+  </enum>
+
+  <enum name="CS Neural Flush Mode">
+    <value name="None" value="0"/>
+    <value name="Invalidate" value="1"/>
   </enum>
 
   <enum name="CS Sync Scope">
@@ -551,6 +599,8 @@
     <value name="SYNC_SET64" value="52"/>
     <value name="SYNC_WAIT64" value="53"/>
     <value name="ARITH_REG64" value="57"/>
+    <value name="PERF_COUNTER_ENABLE" value="58"/>
+    <value name="PERF_COUNTER_DISABLE" value="59"/>
     <value name="ENOP" value="128"/>
   </enum>
 
@@ -761,6 +811,14 @@
     <field name="Opcode" size="8" start="56" type="CS Opcode" default="FINISH_TILING"/>
   </struct>
 
+  <struct name="CS PERF_COUNTER_ENABLE" size="2">
+    <field name="Opcode" size="8" start="56" type="CS Opcode" default="PERF_COUNTER_ENABLE"/>
+  </struct>
+
+  <struct name="CS PERF_COUNTER_DISABLE" size="2">
+    <field name="Opcode" size="8" start="56" type="CS Opcode" default="PERF_COUNTER_DISABLE"/>
+  </struct>
+
   <struct name="CS FINISH_FRAGMENT" size="2">
     <field name="Increment Fragment Completed" size="1" start="0" type="bool"/>
     <field name="Wait Mask" size="16" start="16" type="hex"/>
@@ -915,6 +973,7 @@
     <field name="L2 Flush Mode" size="4" start="0" type="CS Flush Mode"/>
     <field name="LSC Flush Mode" size="4" start="4" type="CS Flush Mode"/>
     <field name="Other Flush Mode" size="4" start="8" type="CS Other Flush Mode"/>
+    <field name="Neural Flush Mode" size="1" start="15" type="CS Neural Flush Mode" default="None"/>
     <field name="Wait Mask" size="16" start="16" type="hex"/>
     <field name="Latest Flush ID" size="8" start="40" type="uint"/>
     <field name="Signal slot" size="4" start="48" type="uint"/>
@@ -1466,13 +1525,38 @@
     <value name="SAMPLE_POSITION_ARRAY_POINTER" value="44"/>
     <value name="FRAME_SHADER_DCD_POINTER" value="46"/>
     <value name="VRS_IMAGE" value="48"/>
-    <!-- 50-51, 53 zero -->
+    <value name="PERF_COUNTER_PLANE_POINTER" value="50"/>
+    <value name="PERF_COUNTER_SELECT" value="53"/>
     <value name="FBD_POINTER" value="54"/> <!-- SW ABI -->
   </enum>
 
   <struct name="Descriptor Header" size="1" align="32">
     <field name="Type" size="4" start="0:0" type="Descriptor Type" default="Null"/>
     <field name="Ignore" size="28" start="0:4" type="uint"/>
+  </struct>
+
+  <struct name="Tensor" size="16" align="64">
+    <field name="Type" size="4" start="0:0" type="Descriptor Type" default="Tensor"/>
+    <field name="Rolling" size="1" start="0:4" type="bool"/>
+    <field name="Element format" size="5" start="0:5" type="Tensor Element Format"/>
+    <field name="Tiling" size="3" start="0:10" type="Tensor Tiling"/>
+    <field name="Wide dimension" size="2" start="0:14" type="uint"/>
+    <field name="Wide dimension high" size="16" start="0:16" type="uint"/>
+    <field name="Dimension 0" size="16" start="1:0" type="uint"/>
+    <field name="Dimension 1" size="16" start="1:16" type="uint"/>
+    <field name="Dimension 2" size="16" start="2:0" type="uint"/>
+    <field name="Dimension 3" size="16" start="2:16" type="uint"/>
+    <field name="Stride 0" size="32" start="3:0" type="uint"/>
+    <field name="Stride 1" size="32" start="4:0" type="uint"/>
+    <field name="Stride 2" size="32" start="5:0" type="uint"/>
+    <field name="Address" size="64" start="6:0" type="address"/>
+    <field name="Wrap 0" size="5" start="8:10" type="uint"/>
+    <field name="Wrap 1" size="5" start="8:15" type="uint"/>
+    <field name="Wrap 2" size="5" start="8:20" type="uint"/>
+    <field name="Wrap 3" size="5" start="8:25" type="uint"/>
+    <field name="Wrap divisor dimension" size="2" start="8:30" type="uint"/>
+    <field name="Wrap divisor" size="16" start="9:0" type="uint"/>
+    <field name="Wrap divisor reciprocal" size="32" start="10:0" type="uint"/>
   </struct>
 
   <struct name="Null Descriptor" size="8" align="32">
@@ -2245,7 +2329,8 @@
   <struct name="Fragment Flags 1" size="1">
     <field name="Sample Count" size="3" start="0:0" type="uint" default="1" modifier="log2"/>
     <field name="Sample Pattern" size="3" start="0:3" type="Sample Pattern"/>
-    <!-- 0:6-0:7 zero -->
+    <field name="Perf Counters Enable" size="1" start="0:6" type="bool"/>
+    <field name="Serialize Regions" size="1" start="0:7" type="bool"/>
     <field name="Effective Tile Size" size="4" start="0:9" type="uint" modifier="log2"/>
     <field name="First provoking vertex" size="1" start="0:14" type="bool"/>
     <field name="Point sprite coord origin max Y" size="1" start="0:15" type="bool" default="true"/>
@@ -2304,7 +2389,7 @@
 
   <struct name="VRS Image" size="2">
     <field name="VRS Image Rate" size="3" start="0" type="VRS Image Rate"/>
-    <field name="VRS Image Plane" size="59" start="5" type="address"/>
+    <field name="VRS Image Plane" size="59" start="5" type="address" modifier="shr(5)"/>
   </struct>
 
   <struct name="CRC" align="64" size="16">
@@ -2433,7 +2518,7 @@
     <field name="Dithered Clear" size="1" start="0:25" type="bool"/>
     <field name="Internal Format" size="6" start="0:26" type="Color Buffer Internal Format"/>
     <field name="Write Enable" size="1" start="1:0" type="bool"/>
-    <field name="Writeback Format" size="5" start="1:3" type="Color Format"/>
+    <field name="Writeback Format" size="5" start="1:3" type="YUV Writeback Format"/>
     <field name="Writeback Block Format" size="4" start="1:8" type="Block Format"/>
     <field name="Writeback MSAA" size="2" start="1:12" type="MSAA"/>
     <field name="sRGB" size="1" start="1:14" type="bool"/>
@@ -2492,7 +2577,7 @@
     <field name="Dithered Clear" size="1" start="0:25" type="bool"/>
     <field name="Internal Format" size="6" start="0:26" type="Color Buffer Internal Format"/>
     <field name="Write Enable" size="1" start="1:0" type="bool"/>
-    <field name="Writeback Format" size="5" start="1:3" type="Color Format"/>
+    <field name="Writeback Format" size="5" start="1:3" type="YUV Writeback Format"/>
     <field name="Writeback Block Format" size="4" start="1:8" type="Block Format"/>
     <field name="Writeback MSAA" size="2" start="1:12" type="MSAA"/>
     <field name="sRGB" size="1" start="1:14" type="bool"/>

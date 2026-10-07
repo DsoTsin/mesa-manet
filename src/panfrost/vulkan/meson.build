@@ -1,4 +1,5 @@
 # Copyright © 2021 Collabora Ltd.
+# Copyright © 2026 Pix Philosophy (HK) Limited
 #
 # Derived from the freedreno driver which is:
 # Copyright © 2017 Intel Corporation
@@ -60,10 +61,15 @@ libpanvk_files = files(
   'panvk_image.c',
   'panvk_instance.c',
   'panvk_mempool.c',
+  'panvk_nir_fold_passthrough_gs.c',
   'panvk_nir_lower_cooperative_matrix.c',
   'panvk_nir_lower_tile_image.c',
+  'panvk_perf_counters_by_region.c',
   'panvk_physical_device.c',
   'panvk_priv_bo.c',
+  'panvk_rt_shader_group.c',
+  'panvk_shader_instrumentation.c',
+  'panvk_tensor.c',
   'panvk_utrace.c',
   'panvk_wsi.c',
 )
@@ -87,6 +93,11 @@ fifthgen_archs = [12, 13, 14, 15]
 fifthgen_inc_dir = ['fifthgen']
 fifthgen_files = []
 
+tensor_archs = [15]
+tensor_files = [
+  'panvk_vX_tensor.c',
+]
+
 jm_archs = [6, 7]
 jm_inc_dir = ['jm']
 jm_files = [
@@ -105,11 +116,17 @@ csf_inc_dir = ['csf']
 csf_files = [
   'csf/panvk_vX_cmd_buffer.c',
   'csf/panvk_vX_cmd_cond_render.c',
+  'csf/panvk_vX_cmd_dgc.c',
   'csf/panvk_vX_cmd_dispatch.c',
   'csf/panvk_vX_cmd_draw.c',
   'csf/panvk_vX_cmd_event.c',
+  'csf/panvk_vX_cmd_xfb.c',
   'csf/panvk_vX_cmd_query.c',
   'csf/panvk_vX_cmd_precomp.c',
+  'csf/panvk_vX_cmd_pilot.c',
+  'csf/panvk_vX_cmd_shader_instrumentation.c',
+  'csf/panvk_vX_dgc.c',
+  'csf/panvk_vX_dgc_submit.c',
   'csf/panvk_vX_event.c',
   'csf/panvk_vX_exception_handler.c',
   'csf/panvk_vX_gpu_queue.c',
@@ -117,11 +134,27 @@ csf_files = [
   'csf/panvk_vX_utrace.c',
 ]
 
+subdir('bvh')
+subdir('bcn')
+
+rt_archs = [15]
+rt_files = [
+  'panvk_vX_acceleration_structure.c',
+  'panvk_vX_nir_lower_ray_queries.c',
+  'panvk_vX_nir_rt_traversal.c',
+  'panvk_vX_nir_rt_pipeline.c',
+  'panvk_vX_rt_pipeline.c',
+  'panvk_vX_rt_pipeline_binary.c',
+  'csf/panvk_vX_cmd_ray_tracing.c',
+  panvk_bvh_spv,
+]
+
 common_per_arch_files = [
   panvk_entrypoints[0],
   panvk_tracepoints[0],
   panvk_drirc[1],
   'panvk_vX_blend.c',
+  'panvk_vX_blend_state.c',
   'panvk_vX_buffer_view.c',
   'panvk_vX_cmd_desc_state.c',
   'panvk_vX_cmd_dispatch.c',
@@ -156,6 +189,18 @@ foreach arch : [6, 7, 10, 11, 12, 13, 14, 15]
   elif arch in fifthgen_archs
     inc_panvk_per_arch += fifthgen_inc_dir
     per_arch_files += fifthgen_files
+  endif
+
+  if arch in tensor_archs
+    per_arch_files += tensor_files
+  endif
+
+  if arch in rt_archs
+    per_arch_files += rt_files
+  endif
+
+  if arch in csf_archs
+    per_arch_files += ['panvk_vX_bc_emu.c', panvk_bcn_spv, panvk_bcn_3d_spv, panvk_bcn_astc_spv]
   endif
 
   if arch in jm_archs
@@ -204,8 +249,8 @@ if with_platform_android
   libpanvk_files += files('panvk_android.c')
 endif
 
-libvulkan_panfrost = shared_library(
-  'vulkan_panfrost',
+libvulkan_manet = shared_library(
+  'vulkan_manet',
   [libpanvk_files, panvk_entrypoints, panvk_tracepoints, panvk_drirc],
   include_directories : [
     inc_include,
@@ -218,6 +263,7 @@ libvulkan_panfrost = shared_library(
     libpanfrost_decode,
     libpanfrost_lib,
     libpanfrost_compiler,
+    libpoly_nir,
   ],
   dependencies : [
     dep_dl,
@@ -247,7 +293,7 @@ if with_symbols_check
     'panvk symbols check',
     symbols_check,
     args : [
-      '--lib', libvulkan_panfrost,
+      '--lib', libvulkan_manet,
       '--symbols-file', vulkan_icd_symbols,
       symbols_check_args,
     ],
@@ -255,12 +301,12 @@ if with_symbols_check
   )
 endif
 
-icd_file_name = libname_prefix + 'vulkan_panfrost.' + libname_suffix
+icd_file_name = libname_prefix + 'vulkan_manet.' + libname_suffix
 
-panfrost_icd = custom_target(
-  'panfrost_icd',
+manet_icd = custom_target(
+  'manet_icd',
   input : [vk_icd_gen, vk_api_xml],
-  output : 'panfrost_icd.' + vulkan_manifest_suffix,
+  output : 'manet_icd.' + vulkan_manifest_suffix,
   command : [
     prog_python, '@INPUT0@',
     '--api-version', '1.4', '--xml', '@INPUT1@',
@@ -275,9 +321,9 @@ panfrost_icd = custom_target(
   install : true,
 )
 
-_dev_icdname = 'panfrost_devenv_icd.@0@.json'.format(host_machine.cpu())
+_dev_icdname = 'manet_devenv_icd.@0@.json'.format(host_machine.cpu())
 _dev_icd = custom_target(
-  'panfrost_devenv_icd',
+  'manet_devenv_icd',
   input : [vk_icd_gen, vk_api_xml],
   output : _dev_icdname,
   command : [

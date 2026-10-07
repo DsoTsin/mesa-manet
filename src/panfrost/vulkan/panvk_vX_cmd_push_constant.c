@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -28,8 +29,12 @@ prepare_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
    if (!push_uniforms->gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
+   struct panvk_priv_bo *ray_query_bo = p_atomic_read(&dev->ray_query.bo);
    struct panvk_common_sysvals_inner common_inner = {
       .printf_buffer_address = dev->printf.bo->addr.dev,
+      .instr_counters =
+         ((const struct panvk_common_sysvals *)sysvals)->common.instr_counters,
+      .ray_query_state = ray_query_bo ? ray_query_bo->addr.dev : 0,
 #if PAN_ARCH < 9
       .constant_data = panvk_priv_mem_dev_addr(shader->data_mem),
 #endif
@@ -105,6 +110,14 @@ panvk_per_arch(CmdPushConstants2KHR)(
    if (pPushConstantsInfo->stageFlags & VK_SHADER_STAGE_VERTEX_BIT)
       gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
 
+   if (pPushConstantsInfo->stageFlags &
+       VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT)
+      gfx_state_set_dirty(cmdbuf, TCS_PUSH_UNIFORMS);
+
+   if (pPushConstantsInfo->stageFlags &
+       VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
+      gfx_state_set_dirty(cmdbuf, TES_PUSH_UNIFORMS);
+
    if (pPushConstantsInfo->stageFlags & VK_SHADER_STAGE_FRAGMENT_BIT)
       gfx_state_set_dirty(cmdbuf, FS_PUSH_UNIFORMS);
 
@@ -114,5 +127,30 @@ panvk_per_arch(CmdPushConstants2KHR)(
    uint8_t *data =
       (uint8_t *)cmdbuf->state.push_constants.data + pPushConstantsInfo->offset;
 
+#if PAN_ARCH >= 15
+   if (pPushConstantsInfo->stageFlags & ~PANVK_RT_STAGE_FLAGS)
+      memcpy(data, pPushConstantsInfo->pValues, pPushConstantsInfo->size);
+   for (mesa_shader_stage stage = MESA_SHADER_RAYGEN;
+        stage <= MESA_SHADER_CALLABLE; stage++) {
+      if (pPushConstantsInfo->stageFlags & mesa_to_vk_shader_stage(stage)) {
+         uint8_t *rt_data = (uint8_t *)cmdbuf->state.ray_tracing.push_constants[
+            stage - MESA_SHADER_RAYGEN];
+         memcpy(rt_data + pPushConstantsInfo->offset,
+                pPushConstantsInfo->pValues, pPushConstantsInfo->size);
+      }
+   }
+#else
    memcpy(data, pPushConstantsInfo->pValues, pPushConstantsInfo->size);
+#endif
+   const VkShaderStageFlags dgc_stages[] = {
+      VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+      VK_SHADER_STAGE_COMPUTE_BIT,
+   };
+   for (unsigned s = 0; s < ARRAY_SIZE(dgc_stages); s++) {
+      if (pPushConstantsInfo->stageFlags & dgc_stages[s]) {
+         uint8_t *stage_data = (uint8_t *)cmdbuf->state.push_constants.dgc_stage_data[s];
+         memcpy(stage_data + pPushConstantsInfo->offset,
+                pPushConstantsInfo->pValues, pPushConstantsInfo->size);
+      }
+   }
 }

@@ -331,10 +331,16 @@ const driOptionDescription pan_driconf[] = {
 };
 DRM_DRIVER_DESCRIPTOR(panfrost, pan_driconf, ARRAY_SIZE(pan_driconf))
 DRM_DRIVER_DESCRIPTOR_ALIAS(panfrost, panthor, pan_driconf, ARRAY_SIZE(pan_driconf))
+#if defined(HAVE_PAN_KMOD_KBASE)
+DRM_DRIVER_DESCRIPTOR_STUB(kbase)
+#endif
 
 #else
 DRM_DRIVER_DESCRIPTOR_STUB(panfrost)
 DRM_DRIVER_DESCRIPTOR_STUB(panthor)
+#if defined(HAVE_PAN_KMOD_KBASE)
+DRM_DRIVER_DESCRIPTOR_STUB(kbase)
+#endif
 #endif
 
 #ifdef GALLIUM_ASAHI
