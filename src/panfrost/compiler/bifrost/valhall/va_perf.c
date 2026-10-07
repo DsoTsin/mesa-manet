@@ -17,15 +17,9 @@ va_instr_exec_time(bi_instr *I, unsigned arch)
    case BI_OPCODE_FROUND_F32:
       return arch >= 11 ? 2 : 1;
 
-   /* MMUL always takes 4 cycles */
-   case BI_OPCODE_MMUL_F32:
-   case BI_OPCODE_MMUL_V2F16:
-   case BI_OPCODE_MMUL_V4S8:
-   case BI_OPCODE_MMUL_V4U8:
-      return 4;
-
    default:
-      return 1;
+      /* MMUL always takes 4 cycles */
+      return bi_is_mmul(I->op) ? 4 : 1;
    }
 }
 

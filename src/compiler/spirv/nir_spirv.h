@@ -86,6 +86,7 @@ struct spirv_to_nir_options {
    nir_address_format global_addr_format;
    nir_address_format temp_addr_format;
    nir_address_format constant_addr_format;
+   nir_address_format tensor_addr_format;
 
    /** Minimum UBO alignment.
     *

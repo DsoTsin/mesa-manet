@@ -862,7 +862,7 @@ GENX(pan_emit_fb_desc)(const struct pan_fb_desc_info *info,
       cfg.pre_frame_0 = pan_fix_frame_shader_mode(info->frame_shaders.modes[0],
                                                   force_clean_tile);
       cfg.pre_frame_1 = pan_fix_frame_shader_mode(info->frame_shaders.modes[1],
-                                                  force_clean_tile);
+                                                  ct.zs || ct.s);
       cfg.post_frame = info->frame_shaders.modes[2];
       cfg.frame_shader_dcds = info->frame_shaders.dcd_pointer;
 

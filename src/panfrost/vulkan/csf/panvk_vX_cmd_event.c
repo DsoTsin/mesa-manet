@@ -68,6 +68,7 @@ collect_event_cache_flush(const struct panvk_cs_deps *deps)
       flush.l2 |= deps->src[i].cache_flush.l2;
       flush.lsc |= deps->src[i].cache_flush.lsc;
       flush.others |= deps->src[i].cache_flush.others;
+      flush.neural |= deps->src[i].cache_flush.neural;
    }
 
    return flush;
@@ -150,9 +151,10 @@ panvk_per_arch(CmdSetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
             if (!panvk_cache_flush_is_nop(&cache_flush)) {
                /* We rely on r88 being zero since we're in the if (r88 == 0)
                 * branch. */
-               cs_flush_caches(b, cache_flush.l2, cache_flush.lsc,
-                               cache_flush.others, seqno,
-                               cs_defer(sb_mask, SB_ID(DEFERRED_FLUSH)));
+               cs_flush_caches_with_neural(
+                  b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
+                  cache_flush.neural, seqno,
+                  cs_defer(sb_mask, SB_ID(DEFERRED_FLUSH)));
             }
 
             cs_move32_to(b, seqno, 1);
@@ -228,8 +230,10 @@ cmd_wait_event(struct panvk_cmd_buffer *cmdbuf, struct panvk_event *event,
          struct cs_index flush_id = cs_scratch_reg32(b, 0);
 
          cs_move32_to(b, flush_id, 0);
-         cs_flush_caches(b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
-                         flush_id, cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+         cs_flush_caches_with_neural(
+            b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
+            cache_flush.neural, flush_id,
+            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
          cs_wait_slot(b, SB_ID(IMM_FLUSH));
       }
 

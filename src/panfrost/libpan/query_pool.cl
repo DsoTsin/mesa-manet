@@ -10,6 +10,26 @@
 #include "vulkan/panvk_cmd_ts.h"
 
 #if (PAN_ARCH >= 10)
+KERNEL(1)
+panlib_copy_xfb_query_result(global uint64_t *reports,
+                            global uint32_t *available_addr,
+                            uint32_t query_count, uint64_t dst_addr,
+                            uint64_t dst_stride, uint32_t flags)
+{
+   uint32_t i = cl_global_id.x;
+   if (i >= query_count)
+      return;
+
+   uintptr_t dst = dst_addr + ((uint64_t)i * dst_stride);
+   bool available = available_addr[i * 2] != 0;
+   if (available || (flags & VK_QUERY_RESULT_PARTIAL_BIT)) {
+      vk_write_query(dst, 0, flags, reports[i * 2]);
+      vk_write_query(dst, 1, flags, reports[i * 2 + 1]);
+   }
+   if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
+      vk_write_query(dst, 2, flags, available);
+}
+
 static inline uint64_t
 compute_timestamp_query_result(global uint64_t *report_addr,
                                uint32_t report_count, uint32_t op,

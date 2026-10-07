@@ -1821,6 +1821,10 @@ handle_barrier(struct vectorize_ctx *ctx, nir_instr *instr, unsigned index)
       case nir_intrinsic_emit_vertex_with_counter:
          modes = nir_var_shader_out;
          break;
+      case nir_intrinsic_rt_trace_begin_pan:
+      case nir_intrinsic_rt_trace_resume_pan:
+         modes = nir_var_mem_global;
+         break;
       default:
          return false;
       }

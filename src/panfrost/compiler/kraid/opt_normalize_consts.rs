@@ -248,12 +248,36 @@ fn normalize_neg(src: &mut Src, mods: &[SrcMod], src_type: DataType) {
     }
 }
 
+fn imm_to_src1(instr: &mut Instr, model: &dyn Model) {
+    if !matches!(&instr.op, Op::IAdd(_) | Op::FAdd(_)) {
+        return;
+    }
+
+    let srcs = instr.srcs();
+    if !matches!(srcs[0].src_ref, SrcRef::Imm32(_))
+        || matches!(srcs[1].src_ref, SrcRef::Imm32(_))
+    {
+        return;
+    }
+
+    let (s0, s1) = (&srcs[0], &srcs[1]);
+    if model.op_src_supports_swizzle(&instr.op, s0, s1.swizzle)
+        && model.op_src_supports_swizzle(&instr.op, s1, s0.swizzle)
+        && model.op_src_supports_mod(&instr.op, s0, s1.src_mod)
+        && model.op_src_supports_mod(&instr.op, s1, s0.src_mod)
+    {
+        instr.srcs_mut().swap(0, 1);
+    }
+}
+
 fn normalize_consts_instr(
     instr: &mut Instr,
     swizzles: &mut Vec<SupportedSwizzle>,
     mods: &mut Vec<SrcMod>,
     model: &dyn Model,
 ) {
+    imm_to_src1(instr, model);
+
     for src_idx in 0..instr.srcs().len() {
         if !matches!(&instr.srcs()[src_idx].src_ref, SrcRef::Imm32(_)) {
             continue;
@@ -395,21 +419,21 @@ mod tests {
         fadd_f32_m1,
         any32,
         fadd(F32, isrc!(-1.0, NONE, None), any32.clone().into()),
-        fadd(F32, isrc!(f16b(1.0), HF0, FNeg), any32.clone().into())
+        fadd(F32, any32.clone().into(), isrc!(f16b(1.0), HF0, FNeg))
     );
 
     test_normalize!(
         fadd_f32_m1_neg,
         any32,
         fadd(F32, isrc!(-1.0, NONE, FNeg), any32.clone().into()),
-        fadd(F32, isrc!(f16b(1.0), HF0, None), any32.clone().into())
+        fadd(F32, any32.clone().into(), isrc!(f16b(1.0), HF0, None))
     );
 
     test_normalize!(
         fadd_f32_m1_abs,
         any32,
         fadd(F32, isrc!(-1.0, NONE, FAbs), any32.clone().into()),
-        fadd(F32, isrc!(f16b(1.0), HF0, FAbs), any32.clone().into())
+        fadd(F32, any32.clone().into(), isrc!(f16b(1.0), HF0, FAbs))
     );
 
     test_normalize!(

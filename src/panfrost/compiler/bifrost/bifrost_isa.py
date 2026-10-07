@@ -102,6 +102,8 @@ mod_names = {
     'update'  : [['update', None, None], None, ['store', 'retrieve', 'conditional', 'clobber']],
     'vecsize' : [['vecsize', None, None], 'none', ['none', 'v2', 'v3', 'v4']],
     'source_format' : [['source_format', None, None], None, ['flat32', 'flat16', 'f32', 'f16']],
+    'sub_a'   : [['sub_a', None, None], None, ['f0', 'f1', 'none']],
+    'sub_b'   : [['sub_b', None, None], None, ['f0', 'f1', 'none']],
 
     'array_enable': [['array_enable', None, None], 'none', ['none', 'array_enable']], 
     'integer_coordinates': [['integer_coordinates', None, None], 'none', ['none', 'integer_coordinates']],

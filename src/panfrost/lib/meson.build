@@ -2,6 +2,12 @@
 # Copyright © 2019 Collabora
 # SPDX-License-Identifier: MIT
 
+if panfrost_kmds.contains('kbase')
+  if not with_panfrost_rust
+    error('The kbase panfrost KMD backend requires -Dpanfrost-rust=true')
+  endif
+  subdir('kbase-rs')
+endif
 subdir('kmod')
 
 pixel_format_versions = ['5', '6', '7', '9', '10', '11', '12', '13', '14', '15']
@@ -75,6 +81,19 @@ libpanfrost_dep = declare_dependency(
 )
 
 if with_tests
+  test(
+    'panfrost_crc_v15',
+    executable(
+      'panfrost_crc_v15_test',
+      files('tests/test-crc-v15.c'),
+      c_args : [c_msvc_compat_args, '-DPAN_ARCH=15'],
+      gnu_symbol_visibility : 'hidden',
+      include_directories : [inc_include, inc_src, inc_panfrost],
+      dependencies: [libpanfrost_dep],
+    ),
+    suite : ['panfrost'],
+  )
+
   test(
     'panfrost_attribute',
     executable(

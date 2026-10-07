@@ -28,10 +28,23 @@ ForwardDecl('struct pan_fb_layout')
 ForwardDecl('struct panvk_device')
 
 Header('pan_fb.h', scope=HeaderScope.SOURCE)
+Header('panvk_utrace.h', scope=HeaderScope.SOURCE | HeaderScope.PERFETTO)
+ForwardDecl('struct panvk_utrace_pass')
 Header('util/format/u_format.h', scope=HeaderScope.SOURCE)
 
 
 def begin_end_tp(name, args=[], tp_struct=None):
+    if name in ('render', 'dispatch', 'dispatch_indirect'):
+        tp_struct = (tp_struct or []) + [
+            Arg(type='uint64_t', var='pass->command_buffer', name='command_buffer', c_format='0x%" PRIx64 "'),
+            Arg(type='uint32_t', var='pass->pass', name='pass', c_format='%u'),
+            Arg(type='uint8_t', var='pass->subqueue', name='subqueue', c_format='%u'),
+            Arg(type='str', var='pass->label', name='label', c_format='%s',
+                length_arg='128', copy_func='memcpy',
+                to_prim_type='panvk_utrace_label({backend}, {})', free_prim_type_func='free'),
+        ]
+        args = [ArgStruct(type='const struct panvk_utrace_pass *', var='pass')] + args
+
     Tracepoint(
         f'begin_{name}',
         tp_perfetto=f'panvk_utrace_perfetto_begin_{name}',
@@ -130,47 +143,47 @@ def define_tracepoints():
         'dispatch',
         args=[
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='base_group_x',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='base_group_y',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='base_group_z',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='group_count_x',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='group_count_y',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='group_count_z',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='group_size_x',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='group_size_y',
                 c_format='%u',
             ),
             Arg(
-                type='uint16_t',
+                type='uint32_t',
                 var='group_size_z',
                 c_format='%u',
             ),

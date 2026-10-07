@@ -283,6 +283,7 @@ enum vtn_base_type {
    vtn_base_type_tensor_layout,
    vtn_base_type_tensor_view,
    vtn_base_type_buffer,
+   vtn_base_type_tensor,
 };
 
 struct vtn_type {
@@ -408,6 +409,11 @@ struct vtn_type {
          nir_tensor_clamp_mode tensor_layout_clamp_mode;
       };
 
+      struct {
+         struct vtn_type *tensor_element_type;
+         uint32_t tensor_rank;
+      };
+
       /* Members for tensor view */
       struct {
          /* for structures, the vtn_type for each member */
@@ -479,6 +485,7 @@ enum vtn_variable_mode {
    vtn_variable_mode_output,
    vtn_variable_mode_image,
    vtn_variable_mode_accel_struct,
+   vtn_variable_mode_tensor,
    vtn_variable_mode_call_data,
    vtn_variable_mode_call_data_in,
    vtn_variable_mode_ray_payload,
@@ -1041,6 +1048,9 @@ nir_address_format vtn_mode_to_address_format(struct vtn_builder *b,
 nir_rounding_mode vtn_rounding_mode_to_nir(struct vtn_builder *b,
                                            SpvFPRoundingMode mode);
 
+nir_rounding_mode vtn_float8_rounding_mode(struct vtn_builder *b,
+                                           struct vtn_value *val);
+
 static inline uint32_t
 vtn_align_u32(uint32_t v, uint32_t a)
 {
@@ -1124,6 +1134,10 @@ void vtn_handle_tensor_layout_type(struct vtn_builder *b, struct vtn_value *val,
                                    SpvOp opcode, const uint32_t *w, unsigned count);
 void vtn_handle_tensor_layout_instruction(struct vtn_builder *b, SpvOp opcode,
                                           const uint32_t *w, unsigned count);
+void vtn_handle_tensor_type(struct vtn_builder *b, struct vtn_value *val,
+                            const uint32_t *w, unsigned count);
+void vtn_handle_tensor_instruction(struct vtn_builder *b, SpvOp opcode,
+                                   const uint32_t *w, unsigned count);
 mesa_shader_stage vtn_stage_for_execution_model(SpvExecutionModel model);
 
 static inline bool

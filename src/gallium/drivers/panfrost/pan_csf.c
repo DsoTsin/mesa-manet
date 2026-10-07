@@ -1753,7 +1753,8 @@ GENX(csf_launch_draw)(struct panfrost_batch *batch,
 
 #if PAN_ARCH >= 12
    cs_run_idvs2(b, flags_override, true, drawid,
-                MALI_IDVS_SHADING_MODE_EARLY);
+                MALI_IDVS_SHADING_MODE_EARLY,
+                MALI_IDVS_PIPELINE_STAGE_INTERNAL);
 #else
    cs_run_idvs(b, flags_override, true, cs_shader_res_sel(0, 0, 1, 0),
                cs_shader_res_sel(2, 2, 2, 0), drawid);
@@ -1803,7 +1804,8 @@ GENX(csf_launch_draw_indirect)(struct panfrost_batch *batch,
       cs_wait_slot(b, PANFROST_SB_LS);
 #if PAN_ARCH >= 12
       cs_run_idvs2(b, flags_override, true, drawid,
-                  MALI_IDVS_SHADING_MODE_EARLY);
+                  MALI_IDVS_SHADING_MODE_EARLY,
+                  MALI_IDVS_PIPELINE_STAGE_INTERNAL);
 #else
       cs_run_idvs(b, flags_override, true, cs_shader_res_sel(0, 0, 1, 0),
                   cs_shader_res_sel(2, 2, 2, 0), drawid);

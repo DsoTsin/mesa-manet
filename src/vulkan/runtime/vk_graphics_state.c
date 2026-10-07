@@ -1373,8 +1373,16 @@ vk_render_pass_state_init(struct vk_render_pass_state *rp,
    }
 
    rp->attachments = 0;
+   rp->merged_subpass = vk_get_pipeline_rendering_merged_subpass(info);
+
+   const VkRenderingAttachmentLocationInfoKHR *merged_cal_info =
+      rp->merged_subpass ? vk_get_pipeline_rendering_cal_info(info) : NULL;
 
    for (uint32_t i = 0; i < r_info->colorAttachmentCount; i++) {
+      if (merged_cal_info != NULL &&
+          merged_cal_info->pColorAttachmentLocations[i] == VK_ATTACHMENT_UNUSED)
+         continue;
+
       if (rp->color_attachment_formats[i] != VK_FORMAT_UNDEFINED)
          rp->attachments |= MESA_VK_RP_ATTACHMENT_COLOR_BIT(i);
    }
@@ -1834,7 +1842,9 @@ vk_graphics_pipeline_state_fill(const struct vk_device *device,
                       info->pNext, RENDERING_INPUT_ATTACHMENT_INDEX_INFO_KHR);
 
    const VkRenderingAttachmentLocationInfoKHR *cal_info =
-      vk_find_struct_const(info->pNext, RENDERING_ATTACHMENT_LOCATION_INFO_KHR);
+      !driver_rp ? vk_get_pipeline_rendering_cal_info(info)
+                 : vk_find_struct_const(
+                      info->pNext, RENDERING_ATTACHMENT_LOCATION_INFO_KHR);
 
    VkPipelineDepthStencilStateCreateInfo custom_ds_info;
    /* With VK_EXT_dynamic_rendering_unused_attachments, we must explicitly

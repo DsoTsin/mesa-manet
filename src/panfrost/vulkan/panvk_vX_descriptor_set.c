@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "util/mesa-blake3.h"
+#include "vk_acceleration_structure.h"
 #include "vk_alloc.h"
 #include "vk_descriptor_update_template.h"
 #include "vk_descriptors.h"
@@ -213,6 +214,25 @@ write_buffer_desc(struct panvk_descriptor_set *set,
 #endif
 }
 
+#if PAN_ARCH >= 15
+static void
+write_accel_struct_desc(struct panvk_descriptor_set *set,
+                        VkAccelerationStructureKHR handle, uint32_t binding,
+                        uint32_t elem)
+{
+   VK_FROM_HANDLE(vk_acceleration_structure, as, handle);
+   struct mali_buffer_packed desc;
+
+   pan_pack(&desc, BUFFER, cfg) {
+      if (as) {
+         cfg.address = vk_acceleration_structure_get_va(as);
+         cfg.size = MIN2(as->size, UINT32_MAX);
+      }
+   }
+   write_desc(set, binding, elem, &desc, NO_SUBDESC);
+}
+#endif
+
 static void
 write_dynamic_buffer_desc(struct panvk_descriptor_set *set,
                           const VkDescriptorBufferInfo *const info,
@@ -266,6 +286,18 @@ write_buffer_view_desc(struct panvk_descriptor_set *set,
 #else
    write_desc(set, binding, elem, &view->descs.buf, NO_SUBDESC);
 #endif
+}
+
+static void
+write_tensor_desc(struct panvk_descriptor_set *set, VkTensorViewARM tensorView,
+                  uint32_t binding, uint32_t elem)
+{
+   VK_FROM_HANDLE(panvk_tensor_view, view, tensorView);
+   static const uint32_t null_desc[PANVK_TENSOR_DESCRIPTOR_SIZE / 4];
+
+   write_desc_data(set, binding, elem, NO_SUBDESC, 0,
+                   view ? view->desc : null_desc,
+                   PANVK_TENSOR_DESCRIPTOR_SIZE);
 }
 
 static void
@@ -381,7 +413,7 @@ panvk_per_arch(CreateDescriptorPool)(
                               VK_OBJECT_TYPE_DESCRIPTOR_POOL))
       return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   uint32_t desc_count = 0;
+   uint32_t desc_count = 0, tensor_count = 0;
    for (unsigned i = 0; i < pCreateInfo->poolSizeCount; ++i) {
       if (!vk_descriptor_type_is_dynamic(pCreateInfo->pPoolSizes[i].type)) {
          const struct panvk_descriptor_set_binding_layout layout = {
@@ -392,7 +424,13 @@ panvk_per_arch(CreateDescriptorPool)(
          desc_count += panvk_get_desc_stride(&layout) *
                        pCreateInfo->pPoolSizes[i].descriptorCount;
       }
+
+      if (pCreateInfo->pPoolSizes[i].type == VK_DESCRIPTOR_TYPE_TENSOR_ARM)
+         tensor_count += pCreateInfo->pPoolSizes[i].descriptorCount;
    }
+
+   if (tensor_count)
+      desc_count += tensor_count + pCreateInfo->maxSets;
 
    /* initialize to all ones to indicate all sets are free */
    BITSET_SET_COUNT(free_sets, 0, pCreateInfo->maxSets);
@@ -547,8 +585,10 @@ panvk_desc_pool_allocate_set(struct panvk_descriptor_pool *pool,
 
    uint64_t descs_dev_addr = 0;
    if (num_descs) {
-      descs_dev_addr = util_vma_heap_alloc(&pool->desc_heap, descs_size,
-                                           PANVK_DESCRIPTOR_SIZE);
+      descs_dev_addr = util_vma_heap_alloc(
+         &pool->desc_heap, descs_size,
+         layout->has_tensors ? PANVK_TENSOR_DESCRIPTOR_SIZE
+                             : PANVK_DESCRIPTOR_SIZE);
       if (!descs_dev_addr)
          return panvk_error(pool, VK_ERROR_FRAGMENTED_POOL);
    }
@@ -734,6 +774,29 @@ panvk_per_arch(descriptor_set_write)(struct panvk_descriptor_set *set,
       }
       break;
 
+   case VK_DESCRIPTOR_TYPE_TENSOR_ARM: {
+      const VkWriteDescriptorSetTensorARM *tensor_info =
+         vk_find_struct_const(write->pNext, WRITE_DESCRIPTOR_SET_TENSOR_ARM);
+      for (uint32_t j = 0; j < write->descriptorCount; j++) {
+         write_tensor_desc(set, tensor_info->pTensorViews[j],
+                           write->dstBinding, write->dstArrayElement + j);
+      }
+      break;
+   }
+#if PAN_ARCH >= 15
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+      const VkWriteDescriptorSetAccelerationStructureKHR *as_info =
+         vk_find_struct_const(write->pNext,
+                              WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+      for (uint32_t j = 0; j < write->descriptorCount; j++) {
+         write_accel_struct_desc(set, as_info->pAccelerationStructures[j],
+                                 write->dstBinding,
+                                 write->dstArrayElement + j);
+      }
+      break;
+   }
+#endif
+
    default:
       UNREACHABLE("Unsupported descriptor type");
    }
@@ -768,6 +831,8 @@ panvk_descriptor_set_copy(const VkCopyDescriptorSet *copy)
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
    case VK_DESCRIPTOR_TYPE_MUTABLE_EXT:
+   case VK_DESCRIPTOR_TYPE_TENSOR_ARM:
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
       for (uint32_t i = 0; i < copy->descriptorCount; i++) {
          const void *src = get_desc_slot_ptr(src_set, copy->srcBinding,
                                              copy->srcArrayElement + i,
@@ -922,6 +987,27 @@ panvk_per_arch(descriptor_set_write_template)(
          write_iub(set, entry->binding, entry->array_element,
                    entry->array_count, data + entry->offset);
          break;
+
+      case VK_DESCRIPTOR_TYPE_TENSOR_ARM:
+         for (uint32_t j = 0; j < entry->array_count; j++) {
+            const VkTensorViewARM *view =
+               data + entry->offset + j * entry->stride;
+
+            write_tensor_desc(set, *view, entry->binding,
+                              entry->array_element + j);
+         }
+         break;
+#if PAN_ARCH >= 15
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         for (uint32_t j = 0; j < entry->array_count; j++) {
+            const VkAccelerationStructureKHR *as =
+               data + entry->offset + j * entry->stride;
+
+            write_accel_struct_desc(set, *as, entry->binding,
+                                    entry->array_element + j);
+         }
+         break;
+#endif
 
       default:
          UNREACHABLE("Unsupported descriptor type");

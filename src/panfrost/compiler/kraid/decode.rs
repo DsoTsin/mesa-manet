@@ -225,4 +225,16 @@ mod tests {
         "TEX_FETCH.slot2.wait0.skip.tex2d.dst32.rgba @r48:r49:r50:r51, @r0:r1, u2.zext",
         14u8
     );
+
+    disasm_case!(0xc06d0a00000008fe, "ADR r10, 0x10", 15u8);
+    disasm_case!(
+        0xc6ad001200ff8bc0,
+        "JUMP_EX.wait0.not.call k0, r11^, pc.w1",
+        15u8
+    );
+    disasm_case!(
+        0xd6ad001000ff0ac0,
+        "JUMP_EX.wait02.not.return k0, r10, pc.w1",
+        15u8
+    );
 }

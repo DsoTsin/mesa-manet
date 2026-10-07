@@ -1501,6 +1501,11 @@ def triop_shift_pan(name, type0, shift_expr):
 
 triop_shift_pan("arshift", tint, "src0 >> shift")
 triop_shift_pan("lshift", tuint, "src0 << shift")
+for name, index_type in [("shadd", tuint64), ("shadd_u32", tuint32),
+                         ("shadd_s32", tint32)]:
+    opcode(name + "_pan", 0, tuint64, [0, 0, 0],
+           [tuint64, index_type, tuint32], False, "",
+           "src0 + ((uint64_t)src1 << (src2 & 63))")
 triop_shift_pan("rshift", tuint, "src0 >> shift")
 triop_shift_pan("lrot", tuint, "(src0 << shift) |\
                                 (src0 >> ((-shift) & shift_mask))")
@@ -1722,6 +1727,11 @@ dst = ldexpf(src0, src1);
 /* flush denormals to zero. */
 if (!isnormal(dst))
    dst = copysignf(0.0f, src0);
+""")
+
+opcode("ffma_rscale_pan", 0, tfloat32, [0, 0, 0, 0],
+       [tfloat32, tfloat32, tfloat32, tint32], False, "", """
+dst = ldexpf(fmaf(src0, src1, src2), src3);
 """)
 
 # vc4-specific opcodes
@@ -2099,6 +2109,21 @@ unop_numeric_convert("f2e4m3fn_satfn", tuint8, tfloat32, "isinf(src0) ? 0x7f : _
 unop_numeric_convert("e5m22f", tfloat32, tuint8, "_mesa_e5m2_to_float(src0)")
 unop_numeric_convert("f2e5m2", tuint8, tfloat32, "_mesa_float_to_e5m2(src0)")
 unop_numeric_convert("f2e5m2_sat", tuint8, tfloat32, "_mesa_float_to_e5m2_sat(src0)")
+
+for fmt in ["e4m3fn", "e5m2"]:
+   for sat in ["", "_sat"]:
+      for rnd, mode in [("_rtz", "FLOAT8_ROUND_TO_ZERO"), ("_ru", "FLOAT8_ROUND_UP"),
+                        ("_rd", "FLOAT8_ROUND_DOWN")]:
+         unop_numeric_convert("f2" + fmt + sat + rnd, tuint8, tfloat,
+                              "_mesa_float_to_{}_round(src0, {}, {})".format(
+                                 fmt, mode, "true" if sat else "false"))
+
+unop_numeric_convert("e4m3fn2f16_pan", tfloat16, tuint8, "_mesa_e4m3fn_to_float(src0)")
+unop_numeric_convert("e5m22f16_pan", tfloat16, tuint8, "_mesa_e5m2_to_float(src0)")
+unop_numeric_convert("f162e4m3fn_pan", tuint8, tfloat16, "_mesa_float_to_e4m3fn(src0)")
+unop_numeric_convert("f162e4m3fn_sat_pan", tuint8, tfloat16, "_mesa_float_to_e4m3fn_sat(src0)")
+unop_numeric_convert("f162e5m2_pan", tuint8, tfloat16, "_mesa_float_to_e5m2(src0)")
+unop_numeric_convert("f162e5m2_sat_pan", tuint8, tfloat16, "_mesa_float_to_e5m2_sat(src0)")
 
 
 opcode("f16dot2_fadd", 1, tfloat, [2, 2, 1], [tfloat16, tfloat16, tfloat],

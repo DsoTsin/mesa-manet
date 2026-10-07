@@ -503,6 +503,84 @@ TEST(AFBCLayout, Linear16x16Minimalv6)
    EXPECT_EQ(l.slices[0].size_B, 128 + (32 * 8));
 }
 
+TEST(AFBCLayout, Imported32x8BodyAlignment)
+{
+   struct pan_image_props p = {
+      .modifier = DRM_FORMAT_MOD_ARM_AFBC(
+         AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_YTR |
+         AFBC_FORMAT_MOD_SPLIT | AFBC_FORMAT_MOD_SPARSE),
+      .format = PIPE_FORMAT_R8G8B8A8_UNORM,
+      .extent_px = {
+         .width = 1260,
+         .height = 2772,
+         .depth = 1,
+      },
+      .nr_samples = 1,
+      .dim = MALI_TEXTURE_DIMENSION_2D,
+      .nr_slices = 1,
+      .array_size = 1,
+   };
+   struct pan_image_layout_constraints constraints = {
+      .wsi_row_pitch_B = 5120,
+      .afbc_body_align_B = 1024,
+   };
+   struct pan_image_layout l = {};
+
+   ASSERT_TRUE(layout_init(15, &p, 0, &constraints, &l));
+   EXPECT_EQ(l.slices[0].offset_B, 0);
+   EXPECT_EQ(l.slices[0].afbc.header.row_stride_B, 640);
+   EXPECT_EQ(l.slices[0].afbc.header.surface_size_B, 222720);
+   EXPECT_EQ(l.slices[0].afbc.body_offset_B, 223232);
+   EXPECT_EQ(l.slices[0].afbc.surface_stride_B, 14477312);
+   EXPECT_EQ(l.slices[0].size_B, 14477312);
+   EXPECT_EQ(l.data_size_B, 14477312);
+
+   constraints.afbc_body_align_B = 0;
+   ASSERT_TRUE(layout_init(15, &p, 0, &constraints, &l));
+   EXPECT_EQ(l.slices[0].afbc.header.surface_size_B, 222720);
+   EXPECT_EQ(l.slices[0].afbc.body_offset_B, 222720);
+   EXPECT_EQ(l.slices[0].afbc.surface_stride_B, 14476800);
+
+   ASSERT_TRUE(layout_init(15, &p, 0, NULL, &l));
+   EXPECT_EQ(l.slices[0].afbc.header.surface_size_B, 222720);
+   EXPECT_EQ(l.slices[0].afbc.body_offset_B, 222720);
+   EXPECT_EQ(l.slices[0].afbc.surface_stride_B, 14476800);
+}
+
+TEST(AFBCLayout, ImportedTiled32x8BodyAlignment)
+{
+   struct pan_image_props p = {
+      .modifier = DRM_FORMAT_MOD_ARM_AFBC(
+         AFBC_FORMAT_MOD_BLOCK_SIZE_32x8 | AFBC_FORMAT_MOD_TILED |
+         AFBC_FORMAT_MOD_SPARSE),
+      .format = PIPE_FORMAT_R8G8B8A8_UNORM,
+      .extent_px = {
+         .width = 1,
+         .height = 1,
+         .depth = 1,
+      },
+      .nr_samples = 1,
+      .dim = MALI_TEXTURE_DIMENSION_2D,
+      .nr_slices = 1,
+      .array_size = 1,
+   };
+   struct pan_image_layout_constraints constraints = {
+      .wsi_row_pitch_B = 1024,
+      .afbc_body_align_B = 1024,
+   };
+   struct pan_image_layout l = {};
+
+   ASSERT_TRUE(layout_init(15, &p, 0, &constraints, &l));
+   EXPECT_EQ(l.slices[0].afbc.header.surface_size_B, 1024);
+   EXPECT_EQ(l.slices[0].afbc.body_offset_B, 4096);
+   EXPECT_EQ(l.slices[0].afbc.surface_stride_B, 69632);
+
+   ASSERT_TRUE(layout_init(15, &p, 0, NULL, &l));
+   EXPECT_EQ(l.slices[0].afbc.header.surface_size_B, 1024);
+   EXPECT_EQ(l.slices[0].afbc.body_offset_B, 4096);
+   EXPECT_EQ(l.slices[0].afbc.surface_stride_B, 69632);
+}
+
 TEST(AFBCLayout, Tiled16x16Minimal)
 {
    uint64_t modifier =

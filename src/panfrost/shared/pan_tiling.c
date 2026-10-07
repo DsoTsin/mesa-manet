@@ -9,8 +9,13 @@
 #include "pan_tiling.h"
 #include <math.h>
 #include <stdbool.h>
+#include "util/detect_arch.h"
 #include "util/macros.h"
 #include "util/ralloc.h"
+
+#if DETECT_ARCH_AARCH64
+#include <arm_neon.h>
+#endif
 
 /*
  * This file implements software encode/decode of u-interleaved textures.
@@ -285,6 +290,258 @@ pan_access_tiled_image_generic(void *dst, void *src, unsigned sx, unsigned sy,
          TILED_ALIGNED_VARIANT(PAN_INTERLEAVE_NONE, store, 128, 128, 4);       \
    }
 
+#if DETECT_ARCH_AARCH64
+static const uint8_t neon_store_idx8[4][16] = {
+   {0, 1, 17, 16, 2, 3, 19, 18, 34, 35, 51, 50, 32, 33, 49, 48},
+   {4, 5, 21, 20, 6, 7, 23, 22, 38, 39, 55, 54, 36, 37, 53, 52},
+   {8, 9, 25, 24, 10, 11, 27, 26, 42, 43, 59, 58, 40, 41, 57, 56},
+   {12, 13, 29, 28, 14, 15, 31, 30, 46, 47, 63, 62, 44, 45, 61, 60},
+};
+
+static const uint8_t neon_load_idx8[4][16] = {
+   {0, 1, 4, 5, 16, 17, 20, 21, 32, 33, 36, 37, 48, 49, 52, 53},
+   {3, 2, 7, 6, 19, 18, 23, 22, 35, 34, 39, 38, 51, 50, 55, 54},
+   {12, 13, 8, 9, 28, 29, 24, 25, 44, 45, 40, 41, 60, 61, 56, 57},
+   {15, 14, 11, 10, 31, 30, 27, 26, 47, 46, 43, 42, 63, 62, 59, 58},
+};
+
+static ALWAYS_INLINE uint8x16_t
+neon_zip1_32(uint8x16_t a, uint8x16_t b)
+{
+   return vreinterpretq_u8_u32(
+      vzip1q_u32(vreinterpretq_u32_u8(a), vreinterpretq_u32_u8(b)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_zip2_32(uint8x16_t a, uint8x16_t b)
+{
+   return vreinterpretq_u8_u32(
+      vzip2q_u32(vreinterpretq_u32_u8(a), vreinterpretq_u32_u8(b)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_uzp1_32(uint8x16_t a, uint8x16_t b)
+{
+   return vreinterpretq_u8_u32(
+      vuzp1q_u32(vreinterpretq_u32_u8(a), vreinterpretq_u32_u8(b)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_uzp2_32(uint8x16_t a, uint8x16_t b)
+{
+   return vreinterpretq_u8_u32(
+      vuzp2q_u32(vreinterpretq_u32_u8(a), vreinterpretq_u32_u8(b)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_zip1_64(uint8x16_t a, uint8x16_t b)
+{
+   return vreinterpretq_u8_u64(
+      vzip1q_u64(vreinterpretq_u64_u8(a), vreinterpretq_u64_u8(b)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_zip2_64(uint8x16_t a, uint8x16_t b)
+{
+   return vreinterpretq_u8_u64(
+      vzip2q_u64(vreinterpretq_u64_u8(a), vreinterpretq_u64_u8(b)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_rev32_16(uint8x16_t v)
+{
+   return vreinterpretq_u8_u16(vrev32q_u16(vreinterpretq_u16_u8(v)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_rev64_16(uint8x16_t v)
+{
+   return vreinterpretq_u8_u16(vrev64q_u16(vreinterpretq_u16_u8(v)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_rev64_32(uint8x16_t v)
+{
+   return vreinterpretq_u8_u32(vrev64q_u32(vreinterpretq_u32_u8(v)));
+}
+
+static ALWAYS_INLINE uint8x16_t
+neon_swap_64(uint8x16_t v)
+{
+   return vextq_u8(v, v, 8);
+}
+
+static ALWAYS_INLINE void
+neon_store_tile_rows(uint8_t *tile, const uint8_t *l0, unsigned by,
+                     uint32_t stride, unsigned bpp_B)
+{
+   unsigned row_blk = bit_duplication[by];
+   const uint8_t *l1 = l0 + stride, *l2 = l1 + stride, *l3 = l2 + stride;
+
+   if (bpp_B == 1) {
+      uint8x16x4_t rows = {
+         {vld1q_u8(l0), vld1q_u8(l1), vld1q_u8(l2), vld1q_u8(l3)}};
+      for (unsigned bx = 0; bx < 4; bx++)
+         vst1q_u8(tile + (row_blk ^ space_4[bx]) * 16,
+                  vqtbl4q_u8(rows, vld1q_u8(neon_store_idx8[bx])));
+   } else if (bpp_B == 2) {
+      for (unsigned half = 0; half < 2; half++) {
+         uint8_t *a = tile + (row_blk ^ space_4[2 * half]) * 32;
+         uint8_t *b = tile + (row_blk ^ space_4[2 * half + 1]) * 32;
+         unsigned o = half * 16;
+         uint8x16_t r0 = vld1q_u8(l0 + o);
+         uint8x16_t r1 = neon_rev32_16(vld1q_u8(l1 + o));
+         uint8x16_t r2 = neon_rev64_32(vld1q_u8(l2 + o));
+         uint8x16_t r3 = neon_rev64_16(vld1q_u8(l3 + o));
+         vst1q_u8(a, neon_zip1_32(r0, r1));
+         vst1q_u8(b, neon_zip2_32(r0, r1));
+         vst1q_u8(a + 16, neon_zip1_32(r2, r3));
+         vst1q_u8(b + 16, neon_zip2_32(r2, r3));
+      }
+   } else {
+      for (unsigned bx = 0; bx < 4; bx++) {
+         uint8_t *blk = tile + (row_blk ^ space_4[bx]) * 16 * bpp_B;
+         unsigned o = bx * 4 * bpp_B;
+
+         if (bpp_B == 4) {
+            uint8x16_t r0 = vld1q_u8(l0 + o);
+            uint8x16_t r1 = neon_rev64_32(vld1q_u8(l1 + o));
+            uint8x16_t r2 = vld1q_u8(l2 + o);
+            uint8x16_t r3 = neon_rev64_32(vld1q_u8(l3 + o));
+            vst1q_u8(blk, neon_zip1_64(r0, r1));
+            vst1q_u8(blk + 16, neon_zip2_64(r0, r1));
+            vst1q_u8(blk + 32, neon_zip2_64(r2, r3));
+            vst1q_u8(blk + 48, neon_zip1_64(r2, r3));
+         } else if (bpp_B == 8) {
+            vst1q_u8(blk, vld1q_u8(l0 + o));
+            vst1q_u8(blk + 16, neon_swap_64(vld1q_u8(l1 + o)));
+            vst1q_u8(blk + 32, vld1q_u8(l0 + o + 16));
+            vst1q_u8(blk + 48, neon_swap_64(vld1q_u8(l1 + o + 16)));
+            vst1q_u8(blk + 64, vld1q_u8(l2 + o + 16));
+            vst1q_u8(blk + 80, neon_swap_64(vld1q_u8(l3 + o + 16)));
+            vst1q_u8(blk + 96, vld1q_u8(l2 + o));
+            vst1q_u8(blk + 112, neon_swap_64(vld1q_u8(l3 + o)));
+         } else {
+            for (unsigned r = 0; r < 4; r++) {
+               for (unsigned c = 0; c < 4; c++)
+                  vst1q_u8(blk + (bit_duplication[r] ^ space_4[c]) * 16,
+                           vld1q_u8(l0 + r * stride + o + c * 16));
+            }
+         }
+      }
+   }
+}
+
+static ALWAYS_INLINE void
+neon_load_tile_rows(const uint8_t *tile, uint8_t *l0, unsigned by, unsigned r,
+                    uint32_t stride, unsigned bpp_B)
+{
+   unsigned row_blk = bit_duplication[by];
+   uint8_t *l1 = l0 + stride;
+
+   if (bpp_B == 1) {
+      uint8x16x4_t blocks = {{vld1q_u8(tile + (row_blk ^ space_4[0]) * 16),
+                              vld1q_u8(tile + (row_blk ^ space_4[1]) * 16),
+                              vld1q_u8(tile + (row_blk ^ space_4[2]) * 16),
+                              vld1q_u8(tile + (row_blk ^ space_4[3]) * 16)}};
+      vst1q_u8(l0, vqtbl4q_u8(blocks, vld1q_u8(neon_load_idx8[r])));
+      vst1q_u8(l1, vqtbl4q_u8(blocks, vld1q_u8(neon_load_idx8[r + 1])));
+   } else if (bpp_B == 2) {
+      for (unsigned half = 0; half < 2; half++) {
+         uint8x16_t a =
+            vld1q_u8(tile + (row_blk ^ space_4[2 * half]) * 32 + r * 8);
+         uint8x16_t b =
+            vld1q_u8(tile + (row_blk ^ space_4[2 * half + 1]) * 32 + r * 8);
+         uint8x16_t even = neon_uzp1_32(a, b), odd = neon_uzp2_32(a, b);
+         unsigned o = half * 16;
+         if (r == 0) {
+            vst1q_u8(l0 + o, even);
+            vst1q_u8(l1 + o, neon_rev32_16(odd));
+         } else {
+            vst1q_u8(l0 + o, neon_rev64_32(even));
+            vst1q_u8(l1 + o, neon_rev64_16(odd));
+         }
+      }
+   } else if (bpp_B == 4) {
+      for (unsigned bx = 0; bx < 4; bx++) {
+         const uint8_t *blk = tile + (row_blk ^ space_4[bx]) * 64 + r * 16;
+         uint8x16_t q0 = vld1q_u8(blk), q1 = vld1q_u8(blk + 16);
+         if (r != 0) {
+            uint8x16_t t = q0;
+            q0 = q1;
+            q1 = t;
+         }
+         vst1q_u8(l0 + bx * 16, neon_zip1_64(q0, q1));
+         vst1q_u8(l1 + bx * 16, neon_rev64_32(neon_zip2_64(q0, q1)));
+      }
+   } else if (bpp_B == 8) {
+      unsigned oa = (bit_duplication[r] & ~1u) * 8, ob = oa ^ 32;
+      for (unsigned bx = 0; bx < 4; bx++) {
+         const uint8_t *blk = tile + (row_blk ^ space_4[bx]) * 128;
+         uint8x16_t a = vld1q_u8(blk + oa), b = vld1q_u8(blk + ob);
+         if (r & 1) {
+            a = neon_swap_64(a);
+            b = neon_swap_64(b);
+         }
+         vst1q_u8(l0 + bx * 32, a);
+         vst1q_u8(l0 + bx * 32 + 16, b);
+      }
+   } else {
+      for (unsigned bx = 0; bx < 4; bx++) {
+         const uint8_t *blk = tile + (row_blk ^ space_4[bx]) * 256;
+         for (unsigned c = 0; c < 4; c++)
+            vst1q_u8(l0 + bx * 64 + c * 16,
+                     vld1q_u8(blk + (bit_duplication[r] ^ space_4[c]) * 16));
+      }
+   }
+}
+
+static ALWAYS_INLINE void
+neon_access_tiled(uint8_t *tiled, uint8_t *lin, unsigned sx, unsigned sy,
+                  unsigned w, unsigned h, uint32_t tiled_stride,
+                  uint32_t lin_stride, unsigned bpp_B, bool is_store)
+{
+   size_t tile_B = PIXELS_PER_TILE * bpp_B;
+   unsigned rows = is_store ? 4 : bpp_B <= 4 ? 2 : 1;
+   uint8_t *tile_row =
+      tiled + (size_t)(sy >> 4) * tiled_stride + (sx >> 4) * tile_B;
+
+   for (unsigned ty = 0; ty < h; ty += TILE_HEIGHT) {
+      for (unsigned y = 0; y < TILE_HEIGHT; y += rows) {
+         uint8_t *lin_row = lin + (size_t)(ty + y) * lin_stride;
+         for (unsigned tx = 0; tx < w; tx += TILE_WIDTH) {
+            uint8_t *tile = tile_row + (tx >> 4) * tile_B;
+            if (is_store)
+               neon_store_tile_rows(tile, lin_row + tx * bpp_B, y >> 2,
+                                    lin_stride, bpp_B);
+            else
+               neon_load_tile_rows(tile, lin_row + tx * bpp_B, y >> 2, y & 3,
+                                   lin_stride, bpp_B);
+         }
+      }
+      tile_row += tiled_stride;
+   }
+}
+
+#define NEON_TILED_VARIANT(bpp_B, store)                                       \
+   neon_access_tiled(dst, src, sx, sy, w, h, dst_stride, src_stride, bpp_B,    \
+                     store)
+
+#define NEON_TILED_VARIANTS(store)                                             \
+   {                                                                           \
+      if (bpp == 8)                                                            \
+         NEON_TILED_VARIANT(1, store);                                         \
+      else if (bpp == 16)                                                      \
+         NEON_TILED_VARIANT(2, store);                                         \
+      else if (bpp == 32)                                                      \
+         NEON_TILED_VARIANT(4, store);                                         \
+      else if (bpp == 64)                                                      \
+         NEON_TILED_VARIANT(8, store);                                         \
+      else if (bpp == 128)                                                     \
+         NEON_TILED_VARIANT(16, store);                                        \
+   }
+#endif
+
 /* Optimized variant of pan_access_tiled_image_generic except that requires
  * sx/sy/w/h to be tile-aligned, and bpp to be a power of two */
 static void
@@ -301,6 +558,16 @@ pan_access_tiled_image_generic_aligned(
    assert(w % TILE_WIDTH == 0);
    assert(h % TILE_HEIGHT == 0);
    assert(util_is_power_of_two_nonzero(bpp));
+
+#if DETECT_ARCH_AARCH64
+   if (interleave == PAN_INTERLEAVE_NONE) {
+      if (is_store)
+         NEON_TILED_VARIANTS(true)
+      else
+         NEON_TILED_VARIANTS(false)
+      return;
+   }
+#endif
 
    if (is_store)
       TILED_ALIGNED_VARIANTS(true)
@@ -439,21 +706,25 @@ pan_copy_tiled_image(void *dst, const void *src, unsigned dst_x, unsigned dst_y,
 {
    const struct util_format_description *desc = util_format_description(format);
    unsigned block_size_B = desc->block.bits / 8;
+   unsigned tile_w_bl = desc->block.width > 1 ? 4 : TILE_WIDTH;
+   unsigned tile_h_bl = desc->block.width > 1 ? 4 : TILE_HEIGHT;
+   unsigned tile_w_px = tile_w_bl * desc->block.width;
+   unsigned tile_h_px = tile_h_bl * desc->block.height;
 
    /* If both the src and dst region are tile-aligned, we can just memcpy
     * whole tiles without any (de)tiling */
-   if (src_x % TILE_WIDTH == 0 && src_y % TILE_HEIGHT == 0 &&
-       dst_x % TILE_WIDTH == 0 && dst_y % TILE_HEIGHT == 0 &&
-       w % TILE_WIDTH == 0 && h % TILE_HEIGHT == 0) {
+   if (src_x % tile_w_px == 0 && src_y % tile_h_px == 0 &&
+       dst_x % tile_w_px == 0 && dst_y % tile_h_px == 0 &&
+       w % tile_w_px == 0 && h % tile_h_px == 0) {
 
-      unsigned tile_size_B = block_size_B * PIXELS_PER_TILE;
+      unsigned tile_size_B = block_size_B * tile_w_bl * tile_h_bl;
 
-      unsigned w_t = w / TILE_WIDTH;
-      unsigned h_t = h / TILE_HEIGHT;
-      unsigned src_x_t = src_x / TILE_WIDTH;
-      unsigned src_y_t = src_y / TILE_HEIGHT;
-      unsigned dst_x_t = dst_x / TILE_WIDTH;
-      unsigned dst_y_t = dst_y / TILE_HEIGHT;
+      unsigned w_t = w / tile_w_px;
+      unsigned h_t = h / tile_h_px;
+      unsigned src_x_t = src_x / tile_w_px;
+      unsigned src_y_t = src_y / tile_h_px;
+      unsigned dst_x_t = dst_x / tile_w_px;
+      unsigned dst_y_t = dst_y / tile_h_px;
 
       for (unsigned y_t = 0; y_t < h_t; y_t++) {
          void *dst_tile_row = dst +
@@ -492,8 +763,8 @@ pan_copy_tiled_image(void *dst, const void *src, unsigned dst_x, unsigned dst_y,
 
    /* Align chunk copy regions to src tiles, to optimize detiling. We can't
     * get tile alignment on both src and dst, but one is better than nothing. */
-   unsigned src_first_tile_x = (src_x / TILE_WIDTH) * TILE_WIDTH;
-   unsigned src_first_tile_y = (src_y / TILE_HEIGHT) * TILE_HEIGHT;
+   unsigned src_first_tile_x = (src_x / tile_w_px) * tile_w_px;
+   unsigned src_first_tile_y = (src_y / tile_h_px) * tile_h_px;
 
    for (unsigned x = src_first_tile_x; x < src_x + w; x += chunk_width_px) {
       for (unsigned y = src_first_tile_y; y < src_y + h; y += chunk_height_px) {

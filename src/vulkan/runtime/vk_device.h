@@ -318,6 +318,8 @@ struct vk_device {
    /* Link-time optimization disable */
    bool disable_lto;
 
+   bool merge_subpasses;
+
    struct vk_device_memory_report *memory_reports;
    uint32_t memory_report_count;
 

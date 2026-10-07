@@ -37,6 +37,29 @@ layout (constant_id = ROOT_FLAGS_OFFSET_ID) const int ROOT_FLAGS_OFFSET = -1;
 layout (constant_id = MORTON_SORT_WORKGROUP_SIZE_ID) const int MORTON_SORT_WORKGROUP_SIZE = 512;
 layout (constant_id = MORTON_SORT_KVS_PER_THREAD_ID) const int MORTON_SORT_KVS_PER_THREAD = 2;
 
+uint32_t
+vk_load_indirect_geometry(inout vk_bvh_geometry_data geometry, uint32_t primitive_count)
+{
+   if (geometry.indirect_range == 0)
+      return primitive_count;
+
+   uvec4 range;
+   for (uint32_t i = 0; i < 4; i++)
+      range[i] = DEREF(INDEX(uint32_t, geometry.indirect_range, i));
+   if (geometry.geometry_type == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
+      geometry.data += uint64_t(range.z) * geometry.stride;
+      if (geometry.index_format == VK_INDEX_TYPE_NONE_KHR)
+         geometry.data += range.y;
+      else
+         geometry.indices += range.y;
+      if (geometry.transform != 0)
+         geometry.transform += range.w;
+   } else {
+      geometry.data += range.y;
+   }
+   return min(primitive_count, range.x);
+}
+
 /* copied from u_math.h */
 uint32_t
 align(uint32_t value, uint32_t alignment)
@@ -457,6 +480,10 @@ vk_prefix_scan(uvec4 ballot, REF(vk_prefix_scan_partition) partitions, uint32_t 
 #define VK_TEST_BUILD_FLAG_64BIT_KEYS ((BUILD_FLAGS & VK_BUILD_FLAG_64BIT_KEYS) != 0)
 #endif
 
+#if ((VK_USED_BUILD_FLAGS & VK_BUILD_FLAG_EARLY_PAIRS) != 0)
+#define VK_TEST_BUILD_FLAG_EARLY_PAIRS ((BUILD_FLAGS & VK_BUILD_FLAG_EARLY_PAIRS) != 0)
+#endif
+
 REF(vk_ir_triangle_node_quad)
 vk_ir_triangle_node_get_quad_ref(REF(vk_ir_triangle_node) node)
 {
@@ -491,5 +518,27 @@ vk_ir_node_size(uint32_t geometry_type)
    return size;
 }
 #endif
+
+mat3 mat_abs(mat3 in_mat) {
+    return mat3(abs(in_mat[0]), abs(in_mat[1]), abs(in_mat[2]));
+}
+
+vk_aabb
+calculate_instance_node_bounds(vk_aabb blas_aabb, mat3x4 otw_matrix)
+{
+   vk_aabb aabb;
+
+   /* https://zeux.io/2010/10/17/aabb-from-obb-with-component-wise-abs */
+   vec3 blas_aabb_center = (blas_aabb.min + blas_aabb.max) * 0.5;
+   vec3 blas_aabb_extent = (blas_aabb.max - blas_aabb.min) * 0.5;
+
+   vec3 new_center = vec4(blas_aabb_center, 1.0) * otw_matrix;
+   vec3 new_extent = blas_aabb_extent * mat_abs(mat3(otw_matrix));
+
+   aabb.min = new_center - new_extent;
+   aabb.max = new_center + new_extent;
+
+   return aabb;
+}
 
 #endif

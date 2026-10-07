@@ -2330,7 +2330,7 @@
 
   <struct name="VRS Image" size="2">
     <field name="VRS Image Rate" size="3" start="0" type="VRS Image Rate"/>
-    <field name="VRS Image Plane" size="59" start="5" type="address"/>
+    <field name="VRS Image Plane" size="59" start="5" type="address" modifier="shr(5)"/>
   </struct>
 
   <struct name="CRC" align="64" size="16">

@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -14,6 +15,7 @@
 #include "panvk_mempool.h"
 #include "panvk_precomp_cache.h"
 #include "panvk_queue.h"
+#include "libpan_csf_dgc_execute.h"
 
 void
 panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
@@ -38,34 +40,37 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
       panvk_per_arch(precomp_cache_get)(dev->precomp_cache, idx);
    assert(shader);
 
-   struct pan_ptr push_uniforms = panvk_cmd_alloc_dev_mem(
-      cmdbuf, desc, BIFROST_PRECOMPILED_KERNEL_SYSVALS_SIZE + data_size, 16);
-
-   assert(push_uniforms.gpu);
-
-   struct bifrost_precompiled_kernel_sysvals sysvals;
-   sysvals.num_workgroups.x = grid.count[0];
-   sysvals.num_workgroups.y = grid.count[1];
-   sysvals.num_workgroups.z = grid.count[2];
-   sysvals.printf_buffer_address = dev->printf.bo->addr.dev;
-
-   bifrost_precompiled_kernel_prepare_push_uniforms(push_uniforms.cpu, data,
-                                                    data_size, &sysvals);
-
+   struct pan_ptr push_uniforms = {0};
    struct pan_compute_dim dim = {.x = grid.count[0],
                                  .y = grid.count[1],
                                  .z = grid.count[2]};
+   uint64_t tsd = 0;
+   if (!ctx->dgc) {
+      push_uniforms = panvk_cmd_alloc_dev_mem(
+         cmdbuf, desc, BIFROST_PRECOMPILED_KERNEL_SYSVALS_SIZE + data_size, 16);
 
-   uint64_t tsd = panvk_per_arch(cmd_dispatch_prepare_tls)(
-      cmdbuf, shader, &dim, grid.csf.dynamic_count);
-   assert(tsd);
+      assert(push_uniforms.gpu);
+
+      struct bifrost_precompiled_kernel_sysvals sysvals;
+      sysvals.num_workgroups.x = grid.count[0];
+      sysvals.num_workgroups.y = grid.count[1];
+      sysvals.num_workgroups.z = grid.count[2];
+      sysvals.printf_buffer_address = dev->printf.bo->addr.dev;
+
+      bifrost_precompiled_kernel_prepare_push_uniforms(push_uniforms.cpu, data,
+                                                       data_size, &sysvals);
+
+      tsd = panvk_per_arch(cmd_dispatch_prepare_tls)(
+         cmdbuf, shader, &dim, grid.csf.dynamic_count);
+      assert(tsd);
+   }
 
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
    const struct cs_tracing_ctx *tracing_ctx =
       &cmdbuf->state.cs[PANVK_SUBQUEUE_COMPUTE].tracing;
 
    /* Copy the global TLS pointer and size to the per-job TSD. */
-   if (shader->info.tls_size) {
+   if (!ctx->dgc && shader->info.tls_size) {
       cs_move64_to(b, cs_scratch_reg64(b, 0), cmdbuf->state.tls.desc.gpu);
       cs_load32_to(b, cs_scratch_reg32(b, 4), cs_scratch_reg64(b, 0), 0);
       cs_load64_to(b, cs_scratch_reg64(b, 2), cs_scratch_reg64(b, 0), 8);
@@ -82,7 +87,18 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
       uint64_t fau_count =
          DIV_ROUND_UP(BIFROST_PRECOMPILED_KERNEL_SYSVALS_SIZE + data_size, 8);
       uint64_t fau_ptr = push_uniforms.gpu | (fau_count << 56);
-      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_FAU), fau_ptr);
+      if (ctx->dgc) {
+         struct cs_index node = cs_scratch_reg64(b, 0);
+         cs_load64_to(b, node, cs_subqueue_ctx_reg(b),
+                      offsetof(struct panvk_cs_subqueue_context, dgc.current));
+         cs_load64_to(b, cs_reg64(b, PANVK_PRECOMP_FAU), node,
+                      offsetof(struct panlib_dgc_submit_node, prepare_fau));
+         cs_load64_to(b, cs_reg64(b, PANVK_PRECOMP_TSD), node,
+                      offsetof(struct panlib_dgc_submit_node, prepare_tsd));
+      } else {
+         cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_FAU), fau_ptr);
+         cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_TSD), tsd);
+      }
 
 #if PAN_ARCH >= 15
       struct mali_shader_program_pointer_packed spp;
@@ -96,8 +112,6 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
       cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SPD),
                    panvk_priv_mem_dev_addr(shader->spd));
 #endif
-
-      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_TSD), tsd);
 
       /* Global attribute offset */
       cs_move32_to(b, cs_sr_reg32(b, COMPUTE, GLOBAL_ATTRIBUTE_OFFSET), 0);
@@ -175,7 +189,8 @@ panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
          shader, phys_dev, &dim, &task_axis, &task_increment);
    }
    cs_trace_run_compute(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
-                        task_increment, task_axis, PANVK_PRECOMP_RES_SEL);
+                        task_increment, task_axis, PANVK_PRECOMP_RES_SEL,
+                        false);
 
    if (barrier & PANLIB_BARRIER_CSF_SYNC)
       panvk_per_arch(cmd_signal_barrier)(cmdbuf, PANVK_CSF_BARRIER_SYNC);

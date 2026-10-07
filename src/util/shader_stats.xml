@@ -90,6 +90,8 @@
         <stat name="Spill cost">Cost of spill and fill instructions</stat>
 	<stat name="Registers used">Number of registers used</stat>
 	<stat name="Uniforms used">Uniform registers used</stat>
+        <stat name="Stack alloca bytes">Thread-local storage allocated before register allocation</stat>
+        <stat name="Stack spill bytes">Thread-local storage added by register allocation</stat>
      </isa>
    </family>
 

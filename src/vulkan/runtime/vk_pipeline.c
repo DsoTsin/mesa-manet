@@ -1247,6 +1247,9 @@ vk_pipeline_to_shader_flags(VkPipelineCreateFlags2KHR pipeline_flags,
    if (pipeline_flags & VK_PIPELINE_CREATE_2_INDIRECT_BINDABLE_BIT_EXT)
       shader_flags |= VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
 
+   if (pipeline_flags & VK_PIPELINE_CREATE_2_INSTRUMENT_SHADERS_BIT_ARM)
+      shader_flags |= VK_SHADER_CREATE_INSTRUMENT_SHADER_BIT_ARM;
+
    if (stage == MESA_SHADER_FRAGMENT) {
       if (pipeline_flags & VK_PIPELINE_CREATE_2_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR)
          shader_flags |= VK_SHADER_CREATE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_EXT;

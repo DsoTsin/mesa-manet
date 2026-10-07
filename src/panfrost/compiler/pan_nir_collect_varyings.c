@@ -308,6 +308,17 @@ static const struct pan_varying_slot special_varying_slots[] = {{
 static struct pan_varying_slot
 hw_varying_slot(unsigned arch, mesa_shader_stage stage, gl_varying_slot slot)
 {
+   if (arch >= 6 && stage != MESA_SHADER_FRAGMENT &&
+       slot == VARYING_SLOT_PRIMITIVE_SHADING_RATE) {
+      return (struct pan_varying_slot){
+         .location = VARYING_SLOT_PRIMITIVE_SHADING_RATE,
+         .alu_type = nir_type_uint8,
+         .ncomps = 1,
+         .section = PAN_VARYING_SECTION_ATTRIBS,
+         .offset = 4,
+      };
+   }
+
    bool vs_pos = slot == VARYING_SLOT_POS && stage == MESA_SHADER_VERTEX;
    /* pos is only special in fragment shader input, not vertex shader output */
    if (arch < 6 && !vs_pos) {

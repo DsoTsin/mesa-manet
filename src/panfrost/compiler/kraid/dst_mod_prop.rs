@@ -300,8 +300,13 @@ impl<A: AllocSSA> DstModProp<'_, A> {
                 debug_assert!(vec.comps() == 1);
                 let ssa = vec[0];
 
+                let src_type = match SrcType::from_src(src, op.dst_type) {
+                    SrcType::None => return false,
+                    SrcType::F16 => DataType::F16,
+                    SrcType::F32 => DataType::F32,
+                };
                 let clamp_changed =
-                    self.try_remove_clamp(&mut op.clamp, ssa, op.dst_type);
+                    self.try_remove_clamp(&mut op.clamp, ssa, src_type);
 
                 if let Some(ssa_f16) = self.def_f16.get(&ssa) {
                     debug_assert!(op.dst_type == DataType::F32);

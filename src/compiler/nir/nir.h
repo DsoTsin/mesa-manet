@@ -204,6 +204,7 @@ typedef enum {
    nir_descriptor_type_uniform_buffer = 0,
    nir_descriptor_type_storage_buffer = 1,
    nir_descriptor_type_acceleration_structure = 2,
+   nir_descriptor_type_tensor_arm = 3,
 } nir_descriptor_type;
 
 /**
@@ -1326,6 +1327,9 @@ nir_get_glsl_base_type_for_nir_type(nir_alu_type base_type);
 
 nir_op nir_type_conversion_op(nir_alu_type src, nir_alu_type dst,
                               nir_rounding_mode rnd);
+
+nir_op nir_float8_conversion_op(bool e4m3fn, bool saturate,
+                                nir_rounding_mode rnd);
 
 /**
  * Atomic intrinsics perform different operations depending on the value of
@@ -7050,6 +7054,7 @@ typedef bool (*nir_opt_licm_filter_cb)(nir_instr *instr, nir_loop *loop,
 bool nir_opt_licm(nir_shader *shader,
                   nir_opt_licm_filter_cb filter);
 bool nir_opt_loop(nir_shader *shader);
+bool nir_opt_loop_rotate(nir_shader *shader);
 
 bool nir_opt_loop_unroll(nir_shader *shader);
 
@@ -7142,6 +7147,7 @@ typedef struct nir_opt_peephole_select_options {
    bool indirect_load_ok;
    bool expensive_alu_ok;
    bool discard_ok;
+   unsigned collapse_limit;
 } nir_opt_peephole_select_options;
 
 bool nir_opt_peephole_select(nir_shader *shader,

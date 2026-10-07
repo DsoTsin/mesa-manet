@@ -334,7 +334,8 @@ split_cmat_convert(nir_builder *b,
       b->cursor = nir_before_instr(instr);
       nir_cmat_convert(b, &dst_deref->def, &src_deref->def, .saturate = nir_intrinsic_saturate(intr),
                        .cmat_signed_mask = nir_intrinsic_cmat_signed_mask(intr),
-                       .fp_math_ctrl = nir_intrinsic_fp_math_ctrl(intr));
+                       .fp_math_ctrl = nir_intrinsic_fp_math_ctrl(intr),
+                       .rounding_mode = nir_intrinsic_rounding_mode(intr));
    }
    nir_instr_remove(instr);
    return true;

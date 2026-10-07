@@ -338,6 +338,21 @@ if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedre
   endif
 endif
 
+panfrost_kmds = get_option('panfrost-kmds')
+if (with_gallium_panfrost or with_panfrost_vk) and panfrost_kmds.length() == 0
+  error('At least one Panfrost KMD must be enabled when building Panfrost.')
+endif
+
+if panfrost_kmds.contains('panfrost')
+  pre_args += '-DHAVE_PAN_KMOD_PANFROST'
+endif
+if panfrost_kmds.contains('panthor')
+  pre_args += '-DHAVE_PAN_KMOD_PANTHOR'
+endif
+if panfrost_kmds.contains('kbase')
+  pre_args += '-DHAVE_PAN_KMOD_KBASE'
+endif
+
 # This has to be below the freedreno_kmds check since that can change system_has_kms_drm
 with_gallium_kmsro = with_gallium_drm or (system_has_kms_drm and with_gallium_zink)
 
@@ -739,7 +754,7 @@ if with_gallium_d3d12 and not _with_gallium_d3d12_video.disabled()
   pre_args += '-DHAVE_GALLIUM_D3D12_VIDEO'
 endif
 
-with_bvh = with_amd_vk or with_intel_vk or with_swrast_vk or with_freedreno_vk
+with_bvh = with_amd_vk or with_intel_vk or with_swrast_vk or with_freedreno_vk or with_panfrost_vk
 _glslang_preamble_version = '12.2'
 
 # GLSL has interesting version output and Meson doesn't parse it correctly as of
@@ -933,7 +948,8 @@ endif
 
 _rtti = get_option('cpp_rtti')
 
-with_panfrost_rust = (with_gallium_panfrost or with_panfrost_vk) and get_option('panfrost-rust')
+with_kraidoc = with_tools.contains('panfrost') and get_option('panfrost-rust')
+with_panfrost_rust = (with_gallium_panfrost or with_panfrost_vk or with_kraidoc) and get_option('panfrost-rust')
 
 with_gallium_rusticl = get_option('gallium-rusticl')
 if with_gallium_rusticl
@@ -1062,6 +1078,7 @@ with_llvm = with_llvm \
 with_poly = [
   with_gallium_asahi, with_asahi_vk, with_tools.contains('asahi'),
   with_kosmickrisp_vk,
+  with_panfrost_vk,
 ].contains(true)
 
 dep_clc = null_dep
@@ -1078,6 +1095,7 @@ endif
 with_gfx_compute = [
   with_any_opengl,
   with_any_vk,
+  with_kraidoc,
   with_clc,
   with_gallium_va and with_video_encode,
   with_gallium_mediafoundation and with_video_encode,
@@ -1296,6 +1314,11 @@ _attributes = [
 foreach a : cc.get_supported_function_attributes(_attributes)
   pre_args += '-DHAVE_FUNC_ATTRIBUTE_@0@'.format(a.to_upper())
 endforeach
+if cc.get_id() == 'clang-cl' and cc.compiles(
+    'struct p { char c; int i; } __attribute__((packed)); _Static_assert(sizeof(struct p) == 5, "packed struct");',
+    name : 'packed structs with clang-cl')
+  pre_args += '-DHAVE_FUNC_ATTRIBUTE_PACKED'
+endif
 if cc.has_function_attribute('visibility:hidden')
   pre_args += '-DHAVE_FUNC_ATTRIBUTE_VISIBILITY'
 endif
@@ -2099,13 +2122,24 @@ else
 endif
 
 with_spirv_tools = get_option('spirv-tools') \
-    .enable_if(with_clc, error_message : 'CLC requires SPIRV-Tools')
+    .enable_if(with_clc or with_kraidoc, error_message : 'CLC and kraidoc require SPIRV-Tools')
 
-dep_spirv_tools = dependency(
-  'SPIRV-Tools',
-  required : with_spirv_tools,
-  version : '>= 2024.1',
-)
+spirv_tools_sdk = meson.get_external_property('vulkan-sdk', '')
+if with_spirv_tools.disabled()
+  dep_spirv_tools = dependency('', required : false)
+else
+  dep_spirv_tools = dependency(
+    'SPIRV-Tools',
+    required : with_spirv_tools.enabled() and spirv_tools_sdk == '',
+    version : '>= 2024.1',
+  )
+  if not dep_spirv_tools.found() and spirv_tools_sdk != ''
+    dep_spirv_tools = declare_dependency(
+      dependencies : cc.find_library('SPIRV-Tools', dirs : join_paths(spirv_tools_sdk, 'Lib')),
+      include_directories : include_directories(join_paths(spirv_tools_sdk, 'Include')),
+    )
+  endif
+endif
 if dep_spirv_tools.found()
   pre_args += '-DHAVE_SPIRV_TOOLS'
 endif

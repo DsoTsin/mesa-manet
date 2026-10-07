@@ -7,6 +7,7 @@
 #define __PAN_DESC_H
 
 #include "genxml/gen_macros.h"
+#include "pan_compute.h"
 
 #include "kmod/pan_kmod.h"
 #include "pan_image.h"
@@ -20,10 +21,6 @@ struct pan_buffer_view {
    } astc;
    unsigned width_el;
    uint64_t base;
-};
-
-struct pan_compute_dim {
-   uint32_t x, y, z;
 };
 
 struct pan_crc_state {
@@ -410,10 +407,19 @@ static enum mali_pre_post_frame_shader_mode
 pan_fix_frame_shader_mode(enum mali_pre_post_frame_shader_mode mode,
                           bool force_clean_tile)
 {
-   if (force_clean_tile && mode == MALI_PRE_POST_FRAME_SHADER_MODE_INTERSECT)
-      return MALI_PRE_POST_FRAME_SHADER_MODE_ALWAYS;
-   else
+   if (!force_clean_tile)
       return mode;
+
+   switch (mode) {
+   case MALI_PRE_POST_FRAME_SHADER_MODE_INTERSECT:
+      return MALI_PRE_POST_FRAME_SHADER_MODE_ALWAYS;
+#if PAN_ARCH >= 13
+   case MALI_PRE_POST_FRAME_SHADER_MODE_PREPASS_INTERSECT:
+      return MALI_PRE_POST_FRAME_SHADER_MODE_PREPASS_ALWAYS;
+#endif
+   default:
+      return mode;
+   }
 }
 #endif
 

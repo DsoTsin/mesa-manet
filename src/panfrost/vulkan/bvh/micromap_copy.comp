@@ -1,0 +1,34 @@
+#version 460
+
+#include "panvk_micromap.h"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform CONSTS {
+   panvk_micromap_copy_args args;
+};
+
+void
+main()
+{
+   uint64_t source = args.src;
+   uint64_t destination = args.dst;
+   if (args.mode == 2)
+      source += PANVK_MICROMAP_SERIAL_HEADER_SIZE;
+   uint32_t size = DEREF(REF(panvk_micromap_header)(source)).size;
+
+   if (args.mode == 1) {
+      destination += PANVK_MICROMAP_SERIAL_HEADER_SIZE;
+      if (gl_GlobalInvocationID.x == 0) {
+         for (uint32_t i = 0; i < 8; i++)
+            DEREF(INDEX(uint32_t, args.dst, i)) = args.uuid[i];
+         DEREF(INDEX(uint64_t, args.dst + 32, 0)) = uint64_t(size) + PANVK_MICROMAP_SERIAL_HEADER_SIZE;
+         DEREF(INDEX(uint64_t, args.dst + 32, 1)) = size;
+         DEREF(INDEX(uint64_t, args.dst + 32, 2)) = 0;
+      }
+   }
+
+   for (uint32_t offset = gl_GlobalInvocationID.x * 4; offset < size;
+        offset += gl_NumWorkGroups.x * 64 * 4)
+      DEREF(REF(uint32_t)(destination + offset)) = DEREF(REF(uint32_t)(source + offset));
+}

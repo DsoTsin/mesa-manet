@@ -129,6 +129,30 @@ __forceinline short _interlockedadd16(short volatile * _Addend, short _Value)
    return _InterlockedExchangeAdd16(_Addend, _Value) + _Value;
 }
 
+#if defined(__clang__) && defined(_WIN64)
+#define _interlockedincrement64 _InterlockedIncrement64
+#define _interlockeddecrement64 _InterlockedDecrement64
+#define _interlockedexchangeadd64 _InterlockedExchangeAdd64
+#define _interlockedexchange64 _InterlockedExchange64
+
+static __forceinline long
+util_interlocked_add(long volatile *value, long increment)
+{
+   return (long)((unsigned long)_InterlockedExchangeAdd(value, increment) +
+                 (unsigned long)increment);
+}
+
+static __forceinline __int64
+util_interlocked_add64(__int64 volatile *value, __int64 increment)
+{
+   return (__int64)((unsigned __int64)_InterlockedExchangeAdd64(value, increment) +
+                    (unsigned __int64)increment);
+}
+
+#define _interlockedadd util_interlocked_add
+#define _interlockedadd64 util_interlocked_add64
+#endif
+
 /* MSVC supports decltype keyword, but it's only supported on C++ and doesn't
  * quite work here; and if a C++-only solution is worthwhile, then it would be
  * better to use templates / function overloading, instead of decltype magic.

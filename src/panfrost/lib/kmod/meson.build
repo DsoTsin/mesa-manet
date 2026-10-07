@@ -3,9 +3,15 @@
 
 libpankmod_lib_files = files(
   'pan_kmod.c',
-  'panfrost_kmod.c',
-  'panthor_kmod.c',
 )
+
+if panfrost_kmds.contains('panfrost')
+  libpankmod_lib_files += files('panfrost_kmod.c')
+endif
+
+if panfrost_kmds.contains('panthor')
+  libpankmod_lib_files += files('panthor_kmod.c')
+endif
 
 libpankmod_lib = static_library(
   'pankmod_lib',
@@ -14,6 +20,7 @@ libpankmod_lib = static_library(
   c_args : [no_override_init_args],
   gnu_symbol_visibility : 'hidden',
   dependencies: [dep_libdrm, idep_mesautil, idep_pan_packers, libpanfrost_model_dep],
+  link_with : panfrost_kmds.contains('kbase') ? [libpankmod_kbase] : [],
   build_by_default : false,
 )
 

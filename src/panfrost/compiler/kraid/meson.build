@@ -115,7 +115,7 @@ libpanfrost_kraid = static_library(
   rust_abi : 'c',
   rust_args : [
     panfrost_rust_args,
-    '--cfg', 'kraid_isa_xml_path="' + meson.current_source_dir() + '"',
+    '--cfg', 'kraid_isa_xml_path="' + meson.current_source_dir().replace('\\', '/') + '"',
     # Otherwise, rustc trips up on -pthread
     '-Clink-arg=-Wno-unused-command-line-argument',
   ],

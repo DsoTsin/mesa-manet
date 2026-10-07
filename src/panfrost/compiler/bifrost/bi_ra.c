@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2020,2025 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -9,6 +10,13 @@
 #include "compiler.h"
 #include "nodearray.h"
 #include "valhall.h"
+
+#define LCRA_MAX_HINTS 4
+
+struct lcra_hint {
+   unsigned node;
+   signed delta;
+};
 
 struct lcra_state {
    unsigned node_count;
@@ -31,6 +39,15 @@ struct lcra_state {
 
    /** Node which caused register allocation to fail */
    unsigned spill_node;
+
+   /* Colour nodes allowed at most half the file in a first pass */
+   bool constrained_first;
+
+   /* Per node, up to LCRA_MAX_HINTS move partners and the register offset
+    * that makes the move a no-op: solution = partner's solution + delta.
+    */
+   struct lcra_hint *hints;
+   uint8_t *hint_count;
 };
 
 /* This module is an implementation of "Linearly Constrained
@@ -49,6 +66,8 @@ lcra_alloc_equations(unsigned node_count)
    l->linear = calloc(sizeof(l->linear[0]), node_count);
    l->solutions = calloc(sizeof(l->solutions[0]), node_count);
    l->affinity = calloc(sizeof(l->affinity[0]), node_count);
+   l->hints = calloc(sizeof(l->hints[0]), node_count * LCRA_MAX_HINTS);
+   l->hint_count = calloc(sizeof(l->hint_count[0]), node_count);
 
    memset(l->solutions, ~0, sizeof(l->solutions[0]) * node_count);
 
@@ -63,6 +82,8 @@ lcra_free(struct lcra_state *l)
 
    free(l->linear);
    free(l->affinity);
+   free(l->hints);
+   free(l->hint_count);
    free(l->solutions);
    free(l);
 }
@@ -141,30 +162,52 @@ lcra_test_linear(struct lcra_state *l, unsigned *solutions, unsigned i)
    return true;
 }
 
+/* Colours nodes first-fit in index order. With constrained_first, nodes allowed
+ * at most half the file (pair-aligned vector writes, preload-restricted nodes)
+ * go first, so scalars coloured earlier cannot leave them without a window.
+ */
 static bool
 lcra_solve(struct lcra_state *l)
 {
-   for (unsigned step = 0; step < l->node_count; ++step) {
-      if (l->solutions[step] != ~0)
-         continue;
-      if (l->affinity[step] == 0)
-         continue;
+   for (unsigned pass = l->constrained_first ? 0 : 1; pass < 2; ++pass) {
+      for (unsigned step = 0; step < l->node_count; ++step) {
+         if (l->solutions[step] != ~0 || l->affinity[step] == 0)
+            continue;
+         if (pass == 0 && util_bitcount64(l->affinity[step]) > 32)
+            continue;
 
-      bool succ = false;
+         bool succ = false;
 
-      u_foreach_bit64(r, l->affinity[step]) {
-         l->solutions[step] = r;
+         /* Prefer the register that turns a move to or from an already
+          * coloured node into a no-op, so bi_opt_post_ra can drop it.
+          */
+         for (unsigned h = 0; h < l->hint_count[step] && !succ; ++h) {
+            const struct lcra_hint *hint = &l->hints[step * LCRA_MAX_HINTS + h];
+            if (l->solutions[hint->node] == ~0)
+               continue;
 
-         if (lcra_test_linear(l, l->solutions, step)) {
-            succ = true;
-            break;
+            signed r = (signed)l->solutions[hint->node] + hint->delta;
+            if (r < 0 || r >= 64 || !(l->affinity[step] & BITFIELD64_BIT(r)))
+               continue;
+
+            l->solutions[step] = r;
+            succ = lcra_test_linear(l, l->solutions, step);
          }
-      }
 
-      /* Out of registers - prepare to spill */
-      if (!succ) {
-         l->spill_node = step;
-         return false;
+         u_foreach_bit64(r, succ ? 0 : l->affinity[step]) {
+            l->solutions[step] = r;
+
+            if (lcra_test_linear(l, l->solutions, step)) {
+               succ = true;
+               break;
+            }
+         }
+
+         /* Out of registers - prepare to spill */
+         if (!succ) {
+            l->spill_node = step;
+            return false;
+         }
       }
    }
 
@@ -388,10 +431,7 @@ bi_mark_interference(bi_block *block, struct lcra_state *l, uint8_t *live,
       /* MMUL must not write its result into a multiply operand, but the
        * accumulator (src2) may be reused.
        */
-      if (ins->op == BI_OPCODE_MMUL_F32 ||
-          ins->op == BI_OPCODE_MMUL_V2F16 ||
-          ins->op == BI_OPCODE_MMUL_V4S8 ||
-          ins->op == BI_OPCODE_MMUL_V4U8) {
+      if (bi_is_mmul(ins->op)) {
          const unsigned dnode = ins->dest[0].value;
          const unsigned dmask = bi_writemask(ins, 0);
 
@@ -451,10 +491,45 @@ bi_compute_interference(bi_context *ctx, struct lcra_state *l, bool full_regs,
    }
 }
 
+static void
+lcra_add_hint(struct lcra_state *l, unsigned node, unsigned partner,
+              signed delta)
+{
+   if (node == partner || l->hint_count[node] == LCRA_MAX_HINTS)
+      return;
+
+   l->hints[node * LCRA_MAX_HINTS + l->hint_count[node]++] =
+      (struct lcra_hint){partner, delta};
+}
+
+/* Moves between register nodes: vector collect/split components from
+ * bi_lower_vector and phi copies from bi_out_of_ssa.
+ */
+static void
+bi_add_move_hints(bi_context *ctx, struct lcra_state *l)
+{
+   bi_foreach_instr_global(ctx, I) {
+      if (I->op != BI_OPCODE_MOV_I32 || I->dest[0].type != BI_INDEX_NORMAL ||
+          I->src[0].type != BI_INDEX_NORMAL)
+         continue;
+
+      unsigned dst = I->dest[0].value, src = I->src[0].value;
+      signed delta = (signed)I->src[0].offset - (signed)I->dest[0].offset;
+
+      lcra_add_hint(l, dst, src, delta);
+      lcra_add_hint(l, src, dst, -delta);
+   }
+}
+
 static struct lcra_state *
 bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
 {
    struct lcra_state *l = lcra_alloc_equations(ctx->ssa_alloc);
+
+   /* After SSA spilling the program sits at the file limit, where the
+    * colouring order decides whether vector windows remain.
+    */
+   l->constrained_first = ctx->has_spill_pcopy_reserved;
 
    /* Blend shaders are restricted to R0-R15. Other shaders at full
     * occupancy also can access R48-R63. At half occupancy they can access
@@ -519,6 +594,7 @@ bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
    }
 
    bi_compute_interference(ctx, l, full_regs, contains_blend);
+   bi_add_move_hints(ctx, l);
 
    /* Coalesce register moves if we're allowed. We need to be careful due
     * to the restricted affinity induced by the blend shader ABI.
@@ -746,8 +822,13 @@ bi_load_tl(bi_builder *b, unsigned bits, bi_index dst, unsigned offset)
 {
    if (b->shader->arch >= 9) {
       assert(offset < 0x8000);  /* valhall has 16 bit signed offset */
-      return bi_load_to(b, bits, dst, bi_tls_ptr(false), bi_tls_ptr(true),
-                        BI_SEG_TL, offset);
+      bi_instr *I = bi_load_to(b, bits, dst, bi_tls_ptr(false), bi_tls_ptr(true),
+                               BI_SEG_TL, offset);
+      /* Spilled values are private to the invocation, including helper
+       * invocations. Preserve the same access semantics as NIR scratch loads.
+       */
+      I->mem_access = VA_MEMORY_ACCESS_FORCE;
+      return I;
    } else {
       return bi_load_to(b, bits, dst, bi_imm_u32(offset), bi_zero(), BI_SEG_TL,
                         0);
@@ -759,8 +840,10 @@ bi_store_tl(bi_builder *b, unsigned bits, bi_index src, unsigned offset)
 {
    if (b->shader->arch >= 9) {
       assert(offset < 0x8000);  /* valhall has 16 bit signed offset */
-      bi_store(b, bits, src, bi_tls_ptr(false), bi_tls_ptr(true), BI_SEG_TL,
-               offset);
+      bi_instr *I = bi_store(b, bits, src, bi_tls_ptr(false), bi_tls_ptr(true),
+                             BI_SEG_TL, offset);
+      /* Helpers must retain their spills for later reloads and derivatives. */
+      I->mem_access = VA_MEMORY_ACCESS_FORCE;
    } else {
       bi_store(b, bits, src, bi_imm_u32(offset), bi_zero(), BI_SEG_TL, 0);
    }
@@ -1229,48 +1312,33 @@ op_is_store(enum bi_opcode op)
 static void
 compute_spill_cost(bi_context *ctx)
 {
-   void *mctx = ralloc_context(NULL);
-
-   /* Required for finding blocks belonging to loops. */
-   bi_calc_dominance(ctx);
-
-   /* The cost of a spill/fill is just 10*block_depth for now. */
-
-   uint32_t *block_depth = rzalloc_array(mctx, uint32_t, ctx->num_blocks);
-   BITSET_WORD *loop_block = BITSET_RZALLOC(mctx, ctx->num_blocks);
-
-   bi_foreach_block(ctx, block) {
-      if (!block->loop_header)
-         continue;
-
-      bi_find_loop_blocks(ctx, block, loop_block);
-
-      for (uint32_t b = 0; b < ctx->num_blocks; ++b) {
-         if (BITSET_TEST(loop_block, b))
-            block_depth[b] += 1;
-      }
-   }
-
+   uint8_t *depth = bi_loop_depths(ctx);
    unsigned spills = 0, fills = 0;
    uint64_t cost = 0;
+   ctx->spill_weight = 0;
+
    bi_foreach_block(ctx, block) {
-      uint64_t per_spill_cost = 10 * (block_depth[block->index] + 1);
+      uint64_t per_spill_cost = 10 * (depth[block->index] + 1);
       bi_foreach_instr_in_block(block, I) {
-         if (op_is_load(I->op) && I->seg == BI_SEG_TL) {
+         if (I->seg != BI_SEG_TL)
+            continue;
+
+         if (op_is_load(I->op))
             fills++;
-            cost += per_spill_cost;
-         } else if (op_is_store(I->op) && I->seg == BI_SEG_TL) {
+         else if (op_is_store(I->op))
             spills++;
-            cost += per_spill_cost;
-         }
+         else
+            continue;
+
+         cost += per_spill_cost;
+         ctx->spill_weight += bi_loop_weight(depth[block->index]);
       }
    }
 
    ctx->spills = spills;
    ctx->fills = fills;
    ctx->spill_cost = cost;
-
-   ralloc_free(mctx);
+   free(depth);
 }
 
 void
@@ -1302,12 +1370,12 @@ bi_register_allocate(bi_context *ctx)
          bi_print_shader(ctx, stderr);
       }
       unsigned register_demand = bi_calc_register_demand(ctx);
-      if (register_demand > regs_to_use) {
+      if (register_demand > regs_to_use - ctx->spill_headroom) {
          /* spill registers if we can */
          if (ctx->inputs->is_blend)
             UNREACHABLE("Blend shaders may not spill");
 
-         bi_spill_ssa(ctx, regs_to_use);
+         bi_spill_ssa(ctx, regs_to_use - ctx->spill_headroom);
          spill_count += bi_lower_spill(ctx, spill_count);
 
          /* By default, we use packed TLS addressing on Valhall.
@@ -1370,6 +1438,7 @@ bi_register_allocate(bi_context *ctx)
       }
    }
 
+   ctx->lcra_spilled = iter_count > 1;
    compute_spill_cost(ctx);
 
    assert(success);

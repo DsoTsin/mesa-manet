@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Collabora Ltd.
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  * SPDX-License-Identifier: MIT
  */
 
@@ -20,6 +21,8 @@ struct panvk_cmd_buffer;
 
 struct panvk_precomp_ctx {
    struct panvk_cmd_buffer *cmdbuf;
+   /* DGC execution prepares per-submit FAUs/TSDs in the queue arena. */
+   bool dgc;
 };
 
 static inline struct panvk_precomp_ctx

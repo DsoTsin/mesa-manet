@@ -6,9 +6,9 @@ use compiler::lower_bounded::*;
 use std::fmt;
 use std::ops::{Deref, DerefMut, Range};
 
-type SSAValueInner = LowerBoundedU32<9>;
-type SSARefInnerShort = LowerBoundedU32Array<9, 3>;
-type SSARefInnerLong = LowerBoundedU32Array<9, 7>;
+type SSAValueInner = LowerBoundedU32<17>;
+type SSARefInnerShort = LowerBoundedU32Array<17, 3>;
+type SSARefInnerLong = LowerBoundedU32Array<17, 15>;
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -465,7 +465,7 @@ pub trait AllocSSA {
 /// This is the only valid way to create SSAValues.  At most one SSA value
 /// allocator may exist per shader to ensure the invariant that SSA value
 /// indices are unique.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SSAValueAllocator {
     meta: Vec<SSAValueMeta>,
 }

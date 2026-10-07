@@ -152,7 +152,8 @@ lower_gs_intrinsics(nir_shader *shader)
    /* Report the counts */
    for (unsigned stream = 0; stream < NIR_MAX_XFB_STREAMS; ++stream) {
       nir_set_vertex_and_primitive_count(
-         &b, nir_imm_int(&b, 0), nir_load_var(&b, state.indices),
+         &b, nir_load_var(&b, state.vertices[stream]),
+         nir_load_var(&b, state.indices),
          nir_load_var(&b, state.xfb_count[stream]), stream);
    }
 
@@ -170,6 +171,9 @@ struct lower_gs_state {
    int count_index[POLY_MAX_VERTEX_STREAMS];
 
    struct poly_gs_info *info;
+
+   bool vertex_output;
+   int static_vertices;
 };
 
 /* Helpers for loading from the vertex state buffer */
@@ -417,6 +421,24 @@ calc_unrolled_index_id(nir_builder *b)
    return nir_imul_imm(b, prim, vertex_stride);
 }
 
+static nir_def *
+calc_vertex_base(nir_builder *b, const struct lower_gs_state *state)
+{
+   if (!state->vertex_output)
+      return calc_unrolled_index_id(b);
+
+   nir_def *id = calc_unrolled_id(b);
+   if (state->static_vertices >= 0)
+      return nir_imul_imm(b, id, state->static_vertices);
+
+   nir_def *prev = nir_iadd_imm(b, nir_umax(b, id, nir_imm_int(b, 1)), -1);
+   nir_def *addr =
+      nir_iadd(b, load_geometry_param(b, count_buffer),
+               nir_u2u64(b, nir_imul_imm(b, prev, sizeof(uint32_t))));
+   nir_def *base = nir_load_global_constant(b, 1, 32, addr, .align_mul = 4);
+   return nir_bcsel(b, nir_ieq_imm(b, id, 0), nir_imm_int(b, 0), base);
+}
+
 static void
 write_xfb_counts(nir_builder *b, nir_intrinsic_instr *intr,
                  struct lower_gs_state *state)
@@ -453,10 +475,21 @@ lower_gs_count_instr(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       nir_instr_remove(&intr->instr);
       return true;
 
-   case nir_intrinsic_set_vertex_and_primitive_count:
+   case nir_intrinsic_set_vertex_and_primitive_count: {
+      struct lower_gs_state *state = data;
       b->cursor = nir_instr_remove(&intr->instr);
-      write_xfb_counts(b, intr, data);
+
+      if (!state->vertex_output) {
+         write_xfb_counts(b, intr, state);
+      } else if (nir_intrinsic_stream_id(intr) == 0) {
+         nir_def *addr = nir_iadd(
+            b, load_geometry_param(b, count_buffer),
+            nir_u2u64(b, nir_imul_imm(b, calc_unrolled_id(b),
+                                      sizeof(uint32_t))));
+         nir_store_global(b, intr->src[0].ssa, addr, .align_mul = 4);
+      }
       return true;
+   }
 
    default:
       return false;
@@ -914,7 +947,7 @@ lower_gs_instr(nir_builder *b, nir_intrinsic_instr *intr, void *state_)
          b, load_geometry_param(b, output_index_buffer),
          nir_imul_imm(b, calc_unrolled_id(b), state->info->max_indices),
          intr->src[0].ssa,
-         nir_iadd(b, calc_unrolled_index_id(b), intr->src[1].ssa),
+         nir_iadd(b, calc_vertex_base(b, state), intr->src[1].ssa),
          intr->src[2].ssa,
          nir_imm_ivec3(b, nir_intrinsic_stream_id(intr),
                        stream_multiplier(b->shader),
@@ -1223,9 +1256,83 @@ optimize_static_topology(struct poly_gs_info *info, nir_shader *gs)
    info->shape = POLY_GS_SHAPE_STATIC_INDEXED;
 }
 
-bool
-poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
-                  nir_shader **pre_gs, struct poly_gs_info *info)
+struct gs_vertex_output_state {
+   struct lower_output_to_var_slot outputs[NUM_TOTAL_VARYING_SLOTS];
+   unsigned stream_multiplier;
+   const struct lower_gs_state *gs;
+};
+
+static bool
+lower_vertex_output_instr(nir_builder *b, nir_intrinsic_instr *intr,
+                          void *data)
+{
+   struct gs_vertex_output_state *state = data;
+
+   if (intr->intrinsic == nir_intrinsic_store_output) {
+      lower_store_to_var(b, intr, state->outputs);
+      return true;
+   }
+
+   if (intr->intrinsic != nir_intrinsic_select_vertex_poly)
+      return false;
+
+   b->cursor = nir_instr_remove(&intr->instr);
+   if (nir_intrinsic_stream_id(intr) != 0)
+      return true;
+
+   nir_def *id = nir_imul_imm(
+      b, nir_iadd(b, calc_vertex_base(b, state->gs), intr->src[0].ssa),
+      state->stream_multiplier);
+
+   u_foreach_bit64(slot, b->shader->info.outputs_written) {
+      struct lower_output_to_var_slot *output = &state->outputs[slot];
+      if (!output->output_var)
+         continue;
+
+      nir_store_per_vertex_output(
+         b, nir_load_var(b, output->output_var), id, nir_imm_int(b, 0),
+         .src_type = output->type,
+         .write_mask = nir_component_mask(output->nr_components),
+         .io_semantics.location = slot, .io_semantics.num_slots = 1);
+   }
+
+   return true;
+}
+
+static void
+lower_main_vertex_output(nir_shader *gs, const struct lower_gs_state *gs_state)
+{
+   struct gs_vertex_output_state state = {
+      .stream_multiplier = stream_multiplier(gs),
+      .gs = gs_state,
+   };
+
+   nir_shader_intrinsics_pass(gs, collect_output_types, nir_metadata_all,
+                              state.outputs);
+
+   u_foreach_bit64(slot, gs->info.outputs_written) {
+      struct lower_output_to_var_slot *output = &state.outputs[slot];
+      if (output->type == nir_type_invalid)
+         continue;
+
+      const char *slot_name =
+         gl_varying_slot_name_for_stage(slot, MESA_SHADER_GEOMETRY);
+      enum glsl_base_type type =
+         nir_get_glsl_base_type_for_nir_type(output->type);
+
+      output->output_var = nir_variable_create(
+         gs, nir_var_shader_temp,
+         glsl_vector_type(type, output->nr_components),
+         ralloc_asprintf(gs, "%s-out", slot_name));
+   }
+
+   nir_shader_intrinsics_pass(gs, lower_vertex_output_instr,
+                              nir_metadata_control_flow, &state);
+}
+
+static bool
+lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
+         nir_shader **pre_gs, struct poly_gs_info *info, bool vertex_output)
 {
    /* Lower I/O as assumed by the rest of GS lowering */
    if (gs->xfb_info != NULL) {
@@ -1289,7 +1396,10 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
    /* If we know counts at compile-time we can simplify, so try to figure out
     * the counts statically.
     */
-   struct lower_gs_state gs_state = {.info = info};
+   struct lower_gs_state gs_state = {
+      .info = info,
+      .vertex_output = vertex_output,
+   };
 
    *info = (struct poly_gs_info){
       .mode = gs->info.gs.output_primitive,
@@ -1298,9 +1408,12 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
       .multistream = gs->info.gs.active_stream_mask & ~1,
    };
 
+   int static_vertices[4] = {0};
    int static_indices[4] = {0};
-   nir_gs_count_vertices_and_primitives(gs, NULL, static_indices,
+   nir_gs_count_vertices_and_primitives(gs, static_vertices, static_indices,
                                         gs_state.static_count, 4);
+   gs_state.static_vertices = static_vertices[0];
+   info->static_vertices = static_vertices[0];
 
    STATIC_ASSERT(ARRAY_SIZE(gs_state.count_index) ==
                  ARRAY_SIZE(gs_state.static_count));
@@ -1322,7 +1435,7 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
 
    info->prefix_sum = info->count_words > 0 && gs->xfb_info != NULL;
 
-   if (static_indices[0] >= 0) {
+   if (static_indices[0] >= 0 && !vertex_output) {
       optimize_static_topology(info, gs);
    } else {
       info->shape = POLY_GS_SHAPE_DYNAMIC_INDEXED;
@@ -1331,7 +1444,8 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
    /* Ensure that outputs_written is still accurate after DCE. */
    nir_shader_gather_info(gs, nir_shader_get_entrypoint(gs));
 
-   *gs_copy = create_gs_rast_shader(gs, &gs_state);
+   if (gs_copy)
+      *gs_copy = vertex_output ? NULL : create_gs_rast_shader(gs, &gs_state);
 
    NIR_PASS(_, gs, nir_shader_intrinsics_pass, lower_id,
             nir_metadata_control_flow, NULL);
@@ -1343,21 +1457,25 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
    NIR_PASS(_, gs, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
    /* If there is any unknown count, we need a geometry count shader */
-   if (info->count_words > 0)
+   if (vertex_output ? gs_state.static_vertices < 0 : info->count_words > 0)
       *gs_count = create_geometry_count_shader(gs, &gs_state);
    else
       *gs_count = NULL;
 
-   /* Strip stores and atomics */
-   do {
-      progress = false;
-      NIR_PASS(progress, gs, nir_shader_intrinsics_pass,
-               strip_side_effect_from_main, nir_metadata_control_flow,
-               (void *)true);
+   if (vertex_output) {
+      lower_main_vertex_output(gs, &gs_state);
+   } else {
+      /* Strip stores and atomics */
+      do {
+         progress = false;
+         NIR_PASS(progress, gs, nir_shader_intrinsics_pass,
+                  strip_side_effect_from_main, nir_metadata_control_flow,
+                  (void *)true);
 
-      NIR_PASS(progress, gs, nir_opt_dce);
-      NIR_PASS(progress, gs, nir_opt_dead_cf);
-   } while (progress);
+         NIR_PASS(progress, gs, nir_opt_dce);
+         NIR_PASS(progress, gs, nir_opt_dead_cf);
+      } while (progress);
+   }
 
    NIR_PASS(_, gs, nir_shader_intrinsics_pass, lower_gs_instr,
             nir_metadata_none, &gs_state);
@@ -1381,7 +1499,7 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
    } while (progress);
 
    /* Strip remaining atomics, but not stores - since those are from us */
-   do {
+   while (!vertex_output) {
       progress = false;
       NIR_PASS(progress, gs, nir_shader_intrinsics_pass,
                strip_side_effect_from_main, nir_metadata_control_flow,
@@ -1389,7 +1507,10 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
 
       NIR_PASS(progress, gs, nir_opt_dce);
       NIR_PASS(progress, gs, nir_opt_dead_cf);
-   } while (progress);
+
+      if (!progress)
+         break;
+   }
 
    /* All those variables we created should've gone away by now */
    NIR_PASS(_, gs, nir_remove_dead_variables, nir_var_function_temp, NULL);
@@ -1442,6 +1563,20 @@ poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
    /* Create auxiliary programs */
    *pre_gs = create_pre_gs(&key, gs->options);
    return true;
+}
+
+bool
+poly_nir_lower_gs(nir_shader *gs, nir_shader **gs_count, nir_shader **gs_copy,
+                  nir_shader **pre_gs, struct poly_gs_info *info)
+{
+   return lower_gs(gs, gs_count, gs_copy, pre_gs, info, false);
+}
+
+bool
+poly_nir_lower_gs_vertex_output(nir_shader *gs, nir_shader **gs_count,
+                                nir_shader **pre_gs, struct poly_gs_info *info)
+{
+   return lower_gs(gs, gs_count, NULL, pre_gs, info, true);
 }
 
 /*

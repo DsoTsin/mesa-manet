@@ -1,5 +1,6 @@
 /*
  * Copyright © 2015 Intel Corporation
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -243,7 +244,8 @@ wsi_x11_connection_create(struct wsi_device *wsi_dev,
    xcb_query_extension_reply_t *dri3_reply, *pres_reply, *randr_reply,
                                *amd_reply, *nv_reply, *shm_reply = NULL,
                                *xfixes_reply, *xwl_reply;
-   bool wants_shm = wsi_dev->sw && !(WSI_DEBUG & WSI_DEBUG_NOSHM) &&
+   bool wants_shm = (wsi_dev->sw || wsi_dev->x11.sw_without_dri3) &&
+                    !(WSI_DEBUG & WSI_DEBUG_NOSHM) &&
                     wsi_dev->has_import_memory_host;
    bool has_dri3_v1_2 = false;
    bool has_present_v1_2 = false;
@@ -417,6 +419,16 @@ wsi_x11_check_for_dri3(struct wsi_x11_connection *wsi_conn)
                 "Note: you can probably enable DRI3 in your Xorg config\n");
    }
    return false;
+}
+
+/* Software presentation for this connection: the device is a software device,
+ * or it asked for the software fallback and the server has no DRI3. */
+static bool
+x11_use_sw(const struct wsi_device *wsi_device,
+           const struct wsi_x11_connection *wsi_conn)
+{
+   return wsi_device->sw ||
+          (wsi_device->x11.sw_without_dri3 && !wsi_conn->has_dri3);
 }
 
 /**
@@ -643,7 +655,7 @@ wsi_GetPhysicalDeviceXcbPresentationSupportKHR(VkPhysicalDevice physicalDevice,
    if (!wsi_conn)
       return false;
 
-   if (!wsi_device->sw) {
+   if (!x11_use_sw(wsi_device, wsi_conn)) {
       if (!wsi_x11_check_for_dri3(wsi_conn))
          return false;
    }
@@ -718,7 +730,7 @@ x11_surface_get_support(VkIcdSurfaceBase *icd_surface,
    if (!wsi_conn)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   if (!wsi_device->sw) {
+   if (!x11_use_sw(wsi_device, wsi_conn)) {
       if (!wsi_x11_check_for_dri3(wsi_conn)) {
          *pSupported = false;
          return VK_SUCCESS;
@@ -1263,6 +1275,8 @@ struct x11_swapchain {
 
    bool                                         has_dri3_modifiers;
    bool                                         has_mit_shm;
+   /* Software (PutImage/MIT-SHM) presentation for this swapchain. */
+   bool                                         sw;
    bool                                         has_async_may_tear;
    bool                                         msc_estimate_is_stable;
 
@@ -1795,7 +1809,8 @@ x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
        !wsi_device->x11.ignore_suboptimal)
       options |= XCB_PRESENT_OPTION_SUBOPTIMAL;
 
-   xshmfence_reset(image->shm_fence);
+   if (image->shm_fence)
+      xshmfence_reset(image->shm_fence);
 
    if (!chain->base.image_info.explicit_sync) {
       ++chain->sent_image_count;
@@ -2094,7 +2109,7 @@ x11_present_to_x11(struct x11_swapchain *chain, uint32_t image_index,
    x11_capture_trace(chain);
 
    VkResult result;
-   if (chain->base.wsi->sw && !chain->has_mit_shm)
+   if (chain->sw && !chain->has_mit_shm)
       result = x11_present_to_x11_sw(chain, image_index);
    else
 #ifdef HAVE_X11_DRM
@@ -2647,7 +2662,7 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
       return result;
 
    image->update_region = None;
-   if (chain->base.wsi->sw && !chain->has_mit_shm)
+   if (chain->sw && !chain->has_mit_shm)
       return VK_SUCCESS;
 
 #ifdef HAVE_X11_DRM
@@ -2658,7 +2673,7 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    image->update_region = xcb_generate_id(chain->conn);
    xcb_xfixes_create_region(chain->conn, image->update_region, 0, NULL);
 
-   if (chain->base.wsi->sw) {
+   if (chain->sw) {
       image->shmseg = xcb_generate_id(chain->conn);
 
       xcb_shm_attach(chain->conn,
@@ -2678,7 +2693,29 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    }
    image->pixmap = xcb_generate_id(chain->conn);
 
-   if (image->base.drm_modifier != DRM_FORMAT_MOD_INVALID) {
+   if (chain->base.wsi->x11.use_raw_fd_modifier) {
+      /* Termux:X11 and Winlator X Server use 1274 as a private marker for a
+       * directly mmap-able raw FD.  This is deliberately not advertised as
+       * a real DRM format modifier.
+       */
+      assert(image->base.num_planes == 1);
+      int fd = os_dupfd_cloexec(image->base.dma_buf_fd);
+      if (fd == -1)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+      cookie =
+         xcb_dri3_pixmap_from_buffers_checked(chain->conn,
+                                              image->pixmap,
+                                              chain->window,
+                                              1,
+                                              pCreateInfo->imageExtent.width,
+                                              pCreateInfo->imageExtent.height,
+                                              image->base.row_pitches[0],
+                                              image->base.offsets[0],
+                                              0, 0, 0, 0, 0, 0,
+                                              chain->depth, bpp,
+                                              1274, &fd);
+   } else if (image->base.drm_modifier != DRM_FORMAT_MOD_INVALID) {
       /* If the image has a modifier, we must have DRI3 v1.2. */
       assert(chain->has_dri3_modifiers);
 
@@ -2737,6 +2774,13 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
       free(error);
       goto fail_image;
    }
+
+   /* Termux:X11's raw-FD path does not support DRI3 FenceFromFD.  Present
+    * IdleNotify events still gate image reuse, and the driver waits for GPU
+    * completion before queueing the pixmap.
+    */
+   if (chain->base.wsi->x11.use_raw_fd_modifier)
+      return VK_SUCCESS;
 
 #ifdef HAVE_DRI3_EXPLICIT_SYNC
    if (chain->base.image_info.explicit_sync) {
@@ -2800,11 +2844,14 @@ x11_image_finish(struct x11_swapchain *chain,
                  struct x11_image *image)
 {
    xcb_void_cookie_t cookie;
-   if (!chain->base.wsi->sw || chain->has_mit_shm) {
+   if (!chain->sw || chain->has_mit_shm) {
 #ifdef HAVE_X11_DRM
-      cookie = xcb_sync_destroy_fence(chain->conn, image->sync_fence);
-      xcb_discard_reply(chain->conn, cookie.sequence);
-      xshmfence_unmap_shm(image->shm_fence);
+      if (image->sync_fence != XCB_NONE) {
+         cookie = xcb_sync_destroy_fence(chain->conn, image->sync_fence);
+         xcb_discard_reply(chain->conn, cookie.sequence);
+      }
+      if (image->shm_fence)
+         xshmfence_unmap_shm(image->shm_fence);
 #endif
 
       cookie = xcb_free_pixmap(chain->conn, image->pixmap);
@@ -2933,7 +2980,7 @@ wsi_x11_swapchain_query_dri3_modifiers_changed(struct x11_swapchain *chain)
 {
    const struct wsi_device *wsi_device = chain->base.wsi;
 
-   if (wsi_device->sw || !use_modifiers(wsi_device))
+   if (chain->sw || !use_modifiers(wsi_device))
       return false;
 
    struct wsi_drm_image_params drm_image_params;
@@ -3221,7 +3268,7 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    struct wsi_base_image_params *image_params = NULL;
    struct wsi_cpu_image_params cpu_image_params;
    uint64_t *modifiers[2] = {NULL, NULL};
-   if (wsi_device->sw) {
+   if (x11_use_sw(wsi_device, wsi_conn)) {
       cpu_image_params = (struct wsi_cpu_image_params) {
          .base.image_type = WSI_IMAGE_TYPE_CPU,
          .alloc_shm = wsi_conn->has_mit_shm ? &alloc_shm : NULL,
@@ -3234,6 +3281,7 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
          .same_gpu = wsi_x11_check_dri3_compatible(wsi_device, conn),
          .explicit_sync =
 #ifdef HAVE_DRI3_EXPLICIT_SYNC
+            !wsi_device->x11.use_raw_fd_modifier &&
             wsi_conn->has_dri3_explicit_sync &&
             (present_caps & XCB_PRESENT_CAPABILITY_SYNCOBJ) &&
             wsi_device_supports_explicit_sync(wsi_device),
@@ -3292,6 +3340,7 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->status = VK_SUCCESS;
    chain->has_dri3_modifiers = wsi_conn->has_dri3_modifiers;
    chain->has_mit_shm = wsi_conn->has_mit_shm;
+   chain->sw = x11_use_sw(wsi_device, wsi_conn);
    chain->has_async_may_tear = present_caps & XCB_PRESENT_CAPABILITY_ASYNC_MAY_TEAR;
    chain->has_reliable_msc = !wsi_conn->is_xwayland;
 

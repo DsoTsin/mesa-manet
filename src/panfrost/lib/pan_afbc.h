@@ -566,6 +566,8 @@ pan_afbc_format(unsigned arch, enum pipe_format format, unsigned plane_idx)
    case PIPE_FORMAT_R16G16B16_UNORM:
    case PIPE_FORMAT_R16G16B16A16_UNORM:
    case PIPE_FORMAT_R16G16B16X16_UNORM:
+   case PIPE_FORMAT_R32_UNORM:
+   case PIPE_FORMAT_R32G32_UNORM:
       if (arch < 10)
          return PAN_AFBC_MODE_INVALID;
       else
@@ -609,6 +611,8 @@ pan_afbc_format(unsigned arch, enum pipe_format format, unsigned plane_idx)
    case PIPE_FORMAT_R16G16B16_UNORM:   return PAN_AFBC_MODE_R16G16B16;
    case PIPE_FORMAT_R16G16B16A16_UNORM:
                                        return PAN_AFBC_MODE_R16G16B16A16;
+   case PIPE_FORMAT_R32_UNORM:         return PAN_AFBC_MODE_R8G8B8A8;
+   case PIPE_FORMAT_R32G32_UNORM:      return PAN_AFBC_MODE_R16G16B16A16;
 
    default:                            return PAN_AFBC_MODE_INVALID;
    }

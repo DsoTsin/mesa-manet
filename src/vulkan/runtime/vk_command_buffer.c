@@ -28,6 +28,7 @@
 #include "vk_command_pool.h"
 #include "vk_common_entrypoints.h"
 #include "vk_device.h"
+#include "vk_render_pass.h"
 
 #include "vk_util.h"
 
@@ -97,6 +98,9 @@ vk_command_buffer_begin(struct vk_command_buffer *command_buffer,
       command_buffer->ops->reset(command_buffer, 0);
 
    command_buffer->state = MESA_VK_COMMAND_BUFFER_STATE_RECORDING;
+   command_buffer->merged_subpass =
+      vk_get_command_buffer_inheritance_merged_subpass(command_buffer->level,
+                                                       pBeginInfo);
 }
 
 VkResult

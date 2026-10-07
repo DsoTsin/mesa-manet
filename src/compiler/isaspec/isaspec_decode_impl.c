@@ -38,8 +38,10 @@
 #include "util/half_float.h"
 #include "util/hash_table.h"
 #include "util/ralloc.h"
+#include "util/strndup.h"
 #include "util/u_debug.h"
 #include "util/u_math.h"
+#include "util/u_string.h"
 
 #include "isa.h"
 
@@ -988,7 +990,7 @@ isa_disasm(void *bin, int sz, FILE *out, const struct isa_decode_options *option
 		state->call_targets = BITSET_RZALLOC(state, state->num_instr);
 
 		/* Do a pre-pass to find all the branch targets: */
-		state->print.out = fopen("/dev/null", "w");
+		state->print.out = fopen(DETECT_OS_WINDOWS ? "NUL" : "/dev/null", "w");
 		state->options = &default_options;   /* skip hooks for prepass */
 		disasm(state, bin, sz);
 		fclose(state->print.out);

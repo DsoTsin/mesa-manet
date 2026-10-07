@@ -41,6 +41,12 @@ struct panvk_shader_desc_state {
 #endif
 };
 
+#if PAN_ARCH >= 15
+#define PANVK_DRIVER_SET_HAS_DYN_BUFS false
+#else
+#define PANVK_DRIVER_SET_HAS_DYN_BUFS true
+#endif
+
 #if PAN_ARCH >= 9
 static inline uint32_t
 panvk_shader_res_table_count(struct panvk_shader_desc_state *shader_desc_state)

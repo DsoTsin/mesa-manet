@@ -111,6 +111,21 @@ nir_type_conversion_op(nir_alu_type src, nir_alu_type dst, nir_rounding_mode rnd
    }
 }
 
+nir_op
+nir_float8_conversion_op(bool e4m3fn, bool saturate, nir_rounding_mode rnd)
+{
+   switch (rnd) {
+% for rnd_t in [('undef', ''), ('rtne', ''), ('rtz', '_rtz'), ('ru', '_ru'), ('rd', '_rd')]:
+   case nir_rounding_mode_${rnd_t[0]}:
+      if (e4m3fn)
+         return saturate ? nir_op_f2e4m3fn_sat${rnd_t[1]} : nir_op_f2e4m3fn${rnd_t[1]};
+      return saturate ? nir_op_f2e5m2_sat${rnd_t[1]} : nir_op_f2e5m2${rnd_t[1]};
+% endfor
+   default:
+      UNREACHABLE("Invalid float8 rounding mode");
+   }
+}
+
 const nir_op_info nir_op_infos[nir_num_opcodes] = {
 % for name, opcode in sorted(opcodes.items()):
 {

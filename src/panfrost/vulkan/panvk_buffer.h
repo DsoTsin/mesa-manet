@@ -14,6 +14,7 @@ struct panvk_priv_bo;
 
 struct panvk_buffer {
    struct vk_buffer vk;
+   uint64_t opaque_capture_address;
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(panvk_buffer, vk.base, VkBuffer,

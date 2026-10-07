@@ -1,5 +1,6 @@
 /*
  * Copyright © 2015 Intel Corporation
+ * Copyright © 2026 Pix Philosophy (HK) Limited
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -115,6 +116,14 @@ struct wsi_device {
 
    bool disable_unordered_submits;
 
+   /* Wait for rendering to finish before handing an image to the window
+    * system.  Used by dma-buf capable devices which cannot always attach
+    * their GPU completion fence to the dma-buf reservation object: the wait
+    * is skipped for images that carry the fence (dma_buf_semaphore), except
+    * on the raw-FD DRI3 transport.
+    */
+   bool wait_present_before_queue;
+
    struct {
       /* Override the minimum number of images on the swapchain.
        * 0 = no override */
@@ -132,6 +141,17 @@ struct wsi_device {
 
       /* adds an extra minImageCount when running under xwayland */
       bool extra_xwayland_image;
+
+      /* Termux:X11/Winlator private DRI3 protocol: pass a directly mmap-able
+       * dma-buf with modifier 1274 through PixmapFromBuffers.
+       */
+      bool use_raw_fd_modifier;
+
+      /* Present through the software (PutImage / MIT-SHM) path on X
+       * servers without DRI3 even though the device is not a software
+       * device.  Used by kbase, whose dma-heap images are CPU-mappable, so
+       * DRI3-less servers (e.g. software-rendered Xwayland) still work. */
+      bool sw_without_dri3;
 
       /* Never report VK_SUBOPTIMAL_KHR. Used to workaround
        * games that cannot handle SUBOPTIMAL correctly. */
@@ -267,6 +287,9 @@ struct wsi_device_options {
    bool sw_device;
    bool extra_xwayland_image;
    bool emulate_24as32;
+   bool wait_present_before_queue;
+   bool x11_use_raw_fd_modifier;
+   bool x11_sw_without_dri3;
 };
 
 VkResult

@@ -10,6 +10,7 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::slice;
 
 /// A [CFG] node
+#[derive(Clone)]
 pub struct CFGNode<N> {
     node: N,
     dom: usize,
@@ -389,6 +390,7 @@ fn detect_loops<N>(nodes: &mut Vec<CFGNode<N>>) -> bool {
 /// automatically sorted and stored in reverse post-DFS order.  This means that
 /// iterating over the nodes guarantees that dominators are visited before the
 /// nodes they dominate.
+#[derive(Clone)]
 pub struct CFG<N> {
     has_loop: bool,
     nodes: Vec<CFGNode<N>>,

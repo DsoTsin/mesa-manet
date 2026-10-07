@@ -263,6 +263,20 @@ panvk_per_arch(cmd_prepare_shader_res_table)(
    uint32_t first_unused_set = util_last_bit(desc_info->used_set_mask);
    uint32_t res_count =
       ALIGN_POT(1 + first_unused_set, MALI_RESOURCE_TABLE_SIZE_ALIGNMENT);
+   struct pan_ptr dyn_bufs = {0};
+
+   if (!PANVK_DRIVER_SET_HAS_DYN_BUFS && desc_info->dyn_bufs.count) {
+      dyn_bufs = panvk_cmd_alloc_dev_mem(
+         cmdbuf, desc, desc_info->dyn_bufs.count * PANVK_DESCRIPTOR_SIZE,
+         PANVK_DESCRIPTOR_SIZE);
+      if (!dyn_bufs.gpu)
+         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+
+      panvk_per_arch(cmd_fill_dyn_bufs)(desc_state, desc_info, dyn_bufs.cpu);
+      res_count = MAX2(res_count, ALIGN_POT(PANVK_DYN_BUF_TABLE + 1,
+                                            MALI_RESOURCE_TABLE_SIZE_ALIGNMENT));
+   }
+
    struct pan_ptr ptr =
       panvk_cmd_alloc_desc_array(cmdbuf, res_count * repeat_count, RESOURCE);
    if (!ptr.gpu)
@@ -299,9 +313,15 @@ panvk_per_arch(cmd_prepare_shader_res_table)(
       }
       for (uint32_t i = first_unused_set + 1; i < res_count; i++) {
          pan_pack(&res_table[i], RESOURCE, cfg) {
-            cfg.address = 0;
-            cfg.contains_descriptors = false;
-            cfg.size = 0;
+            if (dyn_bufs.gpu && i == PANVK_DYN_BUF_TABLE) {
+               cfg.address = dyn_bufs.gpu;
+               cfg.contains_descriptors = true;
+               cfg.size = desc_info->dyn_bufs.count * PANVK_DESCRIPTOR_SIZE;
+            } else {
+               cfg.address = 0;
+               cfg.contains_descriptors = false;
+               cfg.size = 0;
+            }
          }
       }
 
@@ -328,7 +348,7 @@ panvk_per_arch(cmd_prepare_push_descs)(struct panvk_cmd_buffer *cmdbuf,
 
       struct pan_ptr ptr = panvk_cmd_alloc_dev_mem(
          cmdbuf, desc, push_set->desc_count * PANVK_DESCRIPTOR_SIZE,
-         PANVK_DESCRIPTOR_SIZE);
+         PAN_ARCH >= 15 ? PANVK_TENSOR_DESCRIPTOR_SIZE : PANVK_DESCRIPTOR_SIZE);
       if (!ptr.gpu)
          return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -363,6 +383,11 @@ panvk_per_arch(CmdBindDescriptorSets2KHR)(
 
       compute_state_set_dirty(cmdbuf, DESC_STATE);
    }
+#if PAN_ARCH >= 15
+   if (pBindDescriptorSetsInfo->stageFlags & PANVK_RT_STAGE_FLAGS)
+      cmd_desc_state_bind_sets(&cmdbuf->state.ray_tracing.desc_state,
+                              pBindDescriptorSetsInfo);
+#endif
 }
 
 static void
@@ -411,6 +436,11 @@ panvk_per_arch(CmdPushDescriptorSet2KHR)(
 
       compute_state_set_dirty(cmdbuf, DESC_STATE);
    }
+#if PAN_ARCH >= 15
+   if (pPushDescriptorSetInfo->stageFlags & PANVK_RT_STAGE_FLAGS)
+      push_desc_set_write(cmdbuf, &cmdbuf->state.ray_tracing.desc_state,
+                          pPushDescriptorSetInfo);
+#endif
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -444,6 +474,6 @@ panvk_per_arch(CmdPushDescriptorSetWithTemplate2KHR)(
 
    if (template->bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS)
       gfx_state_set_dirty(cmdbuf, DESC_STATE);
-   else
+   else if (template->bind_point == VK_PIPELINE_BIND_POINT_COMPUTE)
       compute_state_set_dirty(cmdbuf, DESC_STATE);
 }

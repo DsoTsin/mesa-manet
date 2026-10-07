@@ -785,6 +785,7 @@ typedef struct nir_shader_compiler_options {
    unsigned max_unroll_iterations;
    unsigned max_unroll_iterations_aggressive;
    unsigned max_unroll_iterations_fp64;
+   unsigned max_unroll_cost;
 
    /** Register pressure a loop can be under before nir_opt_gcm stops moving
     * instructions out of it for free.
@@ -821,6 +822,10 @@ typedef struct nir_shader_compiler_options {
     * compiles at a single width.  Above one, GCM needs nir_metadata_divergence.
     */
    unsigned gcm_divergent_pressure_scale;
+   /* Avoid speculative unrolling based on array lengths. Explicit unroll
+    * hints and loops with a proven iteration bound are still considered.
+    */
+   bool skip_partial_unroll;
 
    bool lower_uniforms_to_ubo;
 

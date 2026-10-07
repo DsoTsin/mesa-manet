@@ -38,15 +38,15 @@ struct panvk_instr_end_args {
       } render;
 
       struct {
-         uint16_t base_group_x;
-         uint16_t base_group_y;
-         uint16_t base_group_z;
-         uint16_t group_count_x;
-         uint16_t group_count_y;
-         uint16_t group_count_z;
-         uint16_t group_size_x;
-         uint16_t group_size_y;
-         uint16_t group_size_z;
+         uint32_t base_group_x;
+         uint32_t base_group_y;
+         uint32_t base_group_z;
+         uint32_t group_count_x;
+         uint32_t group_count_y;
+         uint32_t group_count_z;
+         uint32_t group_size_x;
+         uint32_t group_size_y;
+         uint32_t group_size_z;
       } dispatch;
 
       struct {

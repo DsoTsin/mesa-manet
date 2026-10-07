@@ -2019,7 +2019,7 @@
     <field name="Z Clear" size="32" start="13:0" type="float"/>
     <field name="Tiler" size="64" start="14:0" type="address"/>
     <field name="VRS Image Rate" size="2" start="16:0" type="VRS Image Rate"/>
-    <field name="VRS Image Plane" size="59" start="16:5" type="address"/>
+    <field name="VRS Image Plane" size="59" start="16:5" type="address" modifier="shr(5)"/>
   </struct>
 
   <struct name="CRC" align="64" size="16">

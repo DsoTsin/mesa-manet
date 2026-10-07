@@ -96,15 +96,18 @@ panvk_utrace_read_ts(struct u_trace_context *utctx, void *timestamps,
       return U_TRACE_NO_TIMESTAMP;
    }
 
-   /* wait for the submit */
-   if (data->sync) {
-      if (vk_sync_wait(&dev->vk, data->sync, data->wait_value,
-                       VK_SYNC_WAIT_COMPLETE, UINT64_MAX) != VK_SUCCESS)
-         mesa_logw("failed to wait for utrace timestamps");
-
-      data->sync = NULL;
-      data->wait_value = 0;
+   struct panvk_utrace_submission *submission = data->submission;
+   if (!submission->waited && !submission->failed) {
+      submission->failed =
+         vk_sync_wait(&dev->vk, submission->sync, submission->wait_value,
+                      VK_SYNC_WAIT_COMPLETE, UINT64_MAX) != VK_SUCCESS;
+      if (submission->failed)
+          mesa_logw("failed to wait for utrace timestamps");
+      submission->waited = true;
    }
+
+   if (submission->failed)
+      return U_TRACE_NO_TIMESTAMP;
 
    const uint64_t *ts_ptr = buf->host + offset_B;
    uint64_t ts = *ts_ptr;
@@ -140,6 +143,42 @@ panvk_utrace_delete_flush_data(struct u_trace_context *utctx, void *flush_data)
       panvk_utrace_delete_buffer(utctx, *buf);
    util_dynarray_fini(&data->clone_cs_bufs);
 
-   if (data->free_self)
-      free(data);
+   panvk_utrace_submission_unref(utctx->pctx, data->submission);
+}
+
+void
+panvk_utrace_submission_unref(struct panvk_device *dev,
+                              struct panvk_utrace_submission *submission)
+{
+   if (submission && p_atomic_dec_zero(&submission->refs)) {
+      if (submission->owns_sync)
+         vk_sync_destroy(&dev->vk, submission->sync);
+      free(submission);
+   }
+}
+
+char *
+panvk_utrace_label(enum u_trace_backend_type backend, const char *label)
+{
+   if (backend != U_TRACE_BACKEND_JSON)
+      return strdup(label);
+
+   char *escaped = malloc(strlen(label) * 6 + 1);
+   if (!escaped)
+      return NULL;
+
+   char *out = escaped;
+   for (const unsigned char *p = (const unsigned char *)label; *p; p++) {
+      if (*p == '"' || *p == '\\') {
+         *out++ = '\\';
+         *out++ = *p;
+      } else if (*p < 0x20) {
+         snprintf(out, 7, "\\u%04x", *p);
+         out += 6;
+      } else {
+         *out++ = *p;
+      }
+   }
+   *out = 0;
+   return escaped;
 }

@@ -820,6 +820,8 @@ struct vk_render_pass_state {
 
    /** VkCustomResolveCreateInfoEXT::customResolve */
    bool custom_resolve;
+
+   bool merged_subpass;
 };
 
 static inline bool

@@ -377,6 +377,33 @@ should_peel_initial_break(nir_loop *loop)
           can_constant_fold(nir_get_scalar(nif->condition.ssa, 0), header_block);
 }
 
+static bool
+should_rotate_loop(nir_loop *loop)
+{
+   if (loop->do_while || (loop->control & nir_loop_control_unroll))
+      return false;
+
+   unsigned count = 0;
+   nir_foreach_instr(instr, nir_loop_first_block(loop)) {
+      if (instr->type == nir_instr_type_phi)
+         continue;
+
+      if (instr->type == nir_instr_type_intrinsic) {
+         if (!nir_intrinsic_can_reorder(nir_instr_as_intrinsic(instr)))
+            return false;
+      } else if (instr->type != nir_instr_type_alu &&
+                 instr->type != nir_instr_type_load_const &&
+                 instr->type != nir_instr_type_undef) {
+         return false;
+      }
+
+      if (++count > 8)
+         return false;
+   }
+
+   return true;
+}
+
 /**
  * This optimization tries to peel the first loop break.
  *
@@ -410,7 +437,7 @@ should_peel_initial_break(nir_loop *loop)
  *
  */
 static bool
-opt_loop_peel_initial_break(nir_loop *loop)
+opt_loop_peel_initial_break(nir_loop *loop, bool rotate)
 {
    nir_block *header_block = nir_loop_first_block(loop);
    nir_block *prev_block = nir_cf_node_cf_tree_prev(&loop->cf_node);
@@ -443,7 +470,7 @@ opt_loop_peel_initial_break(nir_loop *loop)
    if (nir_block_ends_in_jump(nir_loop_last_block(loop)))
       return false;
 
-   if (!should_peel_initial_break(loop))
+   if (rotate ? !should_rotate_loop(loop) : !should_peel_initial_break(loop))
       return false;
 
    /* Even though this if statement has a jump on one side, we may still have
@@ -646,7 +673,8 @@ is_basic_terminator_if(nir_if *nif)
  * if the compiler has a greater chance of unrolling the loop.
  */
 static bool
-opt_loop_merge_terminators(nir_builder *b, nir_if *nif, nir_loop *loop)
+opt_loop_merge_terminators(nir_builder *b, nir_if *nif, nir_loop *loop,
+                           bool allow_exit_phis)
 {
    if (!loop)
       return false;
@@ -654,7 +682,8 @@ opt_loop_merge_terminators(nir_builder *b, nir_if *nif, nir_loop *loop)
    /* If the loop has phis abort any merge attempt */
    nir_block *blk_after_lp = nir_cf_node_cf_tree_next(&loop->cf_node);
    nir_instr *instr_after_loop = nir_block_first_instr(blk_after_lp);
-   if (instr_after_loop && instr_after_loop->type == nir_instr_type_phi)
+   if (!allow_exit_phis && instr_after_loop &&
+       instr_after_loop->type == nir_instr_type_phi)
       return false;
 
    /* Check if we have two consecutive basic terminators */
@@ -680,6 +709,17 @@ opt_loop_merge_terminators(nir_builder *b, nir_if *nif, nir_loop *loop)
    bool break_in_then_s = nir_block_ends_in_break(nir_if_last_then_block(next_if));
    if (break_in_then_f != break_in_then_s)
       return false;
+
+   nir_block *break_f = break_in_then_f ? nir_if_last_then_block(nif)
+                                        : nir_if_last_else_block(nif);
+   nir_block *break_s = break_in_then_s ? nir_if_last_then_block(next_if)
+                                        : nir_if_last_else_block(next_if);
+   nir_foreach_phi(phi, blk_after_lp) {
+      nir_phi_src *src_f = nir_phi_get_src_from_block(phi, break_f);
+      nir_phi_src *src_s = nir_phi_get_src_from_block(phi, break_s);
+      if (!src_f || !src_s || src_f->src.ssa != src_s->src.ssa)
+         return false;
+   }
 
    /* Allow some instructions that are acceptable between the terminators
     * these are expected to simply be used by the condition in the second
@@ -731,7 +771,7 @@ opt_loop_cf_list(nir_builder *b, struct exec_list *cf_list,
          progress |= opt_loop_cf_list(b, &nif->else_list, current_loop);
          progress |= opt_loop_merge_break_continue(nif);
          progress |= opt_loop_terminator(nif);
-         progress |= opt_loop_merge_terminators(b, nif, current_loop);
+         progress |= opt_loop_merge_terminators(b, nif, current_loop, false);
          break;
       }
 
@@ -740,7 +780,7 @@ opt_loop_cf_list(nir_builder *b, struct exec_list *cf_list,
          assert(!nir_loop_has_continue_construct(loop));
          progress |= opt_loop_cf_list(b, &loop->body, loop);
          progress |= opt_loop_last_block(nir_loop_last_block(loop), true, false);
-         progress |= opt_loop_peel_initial_break(loop);
+         progress |= opt_loop_peel_initial_break(loop, false);
          break;
       }
 
@@ -774,6 +814,83 @@ nir_opt_loop(nir_shader *shader)
       } else {
          nir_no_progress(impl);
       }
+   }
+
+   return progress;
+}
+
+static bool
+opt_loop_rotate_cf_list(struct exec_list *cf_list, struct util_dynarray *rotated)
+{
+   bool progress = false;
+   foreach_list_typed_safe(nir_cf_node, cf_node, node, cf_list) {
+      switch (cf_node->type) {
+      case nir_cf_node_block:
+         break;
+
+      case nir_cf_node_if: {
+         nir_if *nif = nir_cf_node_as_if(cf_node);
+         progress |= opt_loop_rotate_cf_list(&nif->then_list, rotated);
+         progress |= opt_loop_rotate_cf_list(&nif->else_list, rotated);
+         break;
+      }
+
+      case nir_cf_node_loop: {
+         nir_loop *loop = nir_cf_node_as_loop(cf_node);
+         assert(!nir_loop_has_continue_construct(loop));
+         progress |= opt_loop_rotate_cf_list(&loop->body, rotated);
+         if (opt_loop_peel_initial_break(loop, true)) {
+            util_dynarray_append(rotated, loop);
+            progress = true;
+         }
+         break;
+      }
+
+      case nir_cf_node_function:
+         UNREACHABLE("Invalid cf type");
+      }
+   }
+
+   return progress;
+}
+
+static void
+opt_loop_merge_rotated_terminators(nir_builder *b, nir_loop *loop)
+{
+   foreach_list_typed(nir_cf_node, cf_node, node, &loop->body) {
+      if (cf_node->type == nir_cf_node_if &&
+          opt_loop_merge_terminators(b, nir_cf_node_as_if(cf_node), loop, true))
+         return;
+   }
+}
+
+bool
+nir_opt_loop_rotate(nir_shader *shader)
+{
+   bool progress = false;
+
+   nir_foreach_function_impl(impl, shader) {
+      struct util_dynarray rotated;
+      util_dynarray_init(&rotated, NULL);
+
+      bool rotated_any = false;
+      while (opt_loop_rotate_cf_list(&impl->body, &rotated))
+         rotated_any = true;
+
+      if (rotated_any) {
+         nir_progress(true, impl, nir_metadata_none);
+         nir_lower_reg_intrinsics_to_ssa_impl(impl);
+
+         nir_builder b = nir_builder_create(impl);
+         util_dynarray_foreach(&rotated, nir_loop *, loop)
+            opt_loop_merge_rotated_terminators(&b, *loop);
+         nir_progress(true, impl, nir_metadata_none);
+         progress = true;
+      } else {
+         nir_no_progress(impl);
+      }
+
+      util_dynarray_fini(&rotated);
    }
 
    return progress;

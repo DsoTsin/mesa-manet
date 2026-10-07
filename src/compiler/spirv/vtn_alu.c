@@ -467,6 +467,36 @@ vtn_handle_fp_fast_math(struct vtn_builder *b, struct vtn_value *dest_val, struc
       b->nb.fp_math_ctrl |= nir_fp_exact;
 }
 
+static void
+float8_rounding_mode_cb(struct vtn_builder *b, UNUSED struct vtn_value *val,
+                        UNUSED int member, const struct vtn_decoration *dec,
+                        void *data)
+{
+   if (dec->decoration != SpvDecorationFPRoundingMode)
+      return;
+
+   nir_rounding_mode *mode = data;
+   switch (dec->operands[0]) {
+   case SpvFPRoundingModeRTP:
+      *mode = nir_rounding_mode_ru;
+      break;
+   case SpvFPRoundingModeRTN:
+      *mode = nir_rounding_mode_rd;
+      break;
+   default:
+      *mode = vtn_rounding_mode_to_nir(b, dec->operands[0]);
+      break;
+   }
+}
+
+nir_rounding_mode
+vtn_float8_rounding_mode(struct vtn_builder *b, struct vtn_value *val)
+{
+   nir_rounding_mode mode = nir_rounding_mode_undef;
+   vtn_foreach_decoration(b, val, float8_rounding_mode_cb, &mode);
+   return mode;
+}
+
 nir_rounding_mode
 vtn_rounding_mode_to_nir(struct vtn_builder *b, SpvFPRoundingMode mode)
 {
@@ -666,42 +696,31 @@ vtn_handle_convert(struct vtn_builder *b, SpvOp opcode,
          src_as_float = vtn_handle_convert(b, opcode, dest_val, glsl_float_type(),
                                            glsl_src_type, src);
       return nir_f2bf(&b->nb, src_as_float);
-   } else if (glsl_type_is_e4m3fn(glsl_src_type)) {
-      nir_def *src_as_float = nir_e4m3fn2f(&b->nb, src);
+   } else if (glsl_type_is_e4m3fn(glsl_src_type) ||
+              glsl_type_is_e5m2(glsl_src_type)) {
+      nir_def *src_as_float = glsl_type_is_e4m3fn(glsl_src_type) ?
+                              nir_e4m3fn2f(&b->nb, src) :
+                              nir_e5m22f(&b->nb, src);
       if (glsl_type_is_float(glsl_dest_type))
          return src_as_float;
       return vtn_handle_convert(b, opcode, dest_val, glsl_dest_type,
                                 glsl_float_type(), src_as_float);
 
-   } else if (glsl_type_is_e4m3fn(glsl_dest_type)) {
-      nir_def *src_as_float;
-      if (glsl_type_is_float(glsl_src_type))
-         src_as_float = src;
-      else
-         src_as_float = vtn_handle_convert(b, opcode, dest_val, glsl_float_type(),
-                                           glsl_src_type, src);
-      if (vtn_has_decoration(b, dest_val, SpvDecorationSaturatedToLargestFloat8NormalConversionEXT))
-         return nir_f2e4m3fn_sat(&b->nb, src_as_float);
-      else
-         return nir_f2e4m3fn(&b->nb, src_as_float);
-   } else if (glsl_type_is_e5m2(glsl_src_type)) {
-      nir_def *src_as_float = nir_e5m22f(&b->nb, src);
-      if (glsl_type_is_float(glsl_dest_type))
-         return src_as_float;
-      return vtn_handle_convert(b, opcode, dest_val, glsl_dest_type,
-                                glsl_float_type(), src_as_float);
-
-   } else if (glsl_type_is_e5m2(glsl_dest_type)) {
-      nir_def *src_as_float;
-      if (glsl_type_is_float(glsl_src_type))
-         src_as_float = src;
-      else
-         src_as_float = vtn_handle_convert(b, opcode, dest_val, glsl_float_type(),
-                                           glsl_src_type, src);
-      if (vtn_has_decoration(b, dest_val, SpvDecorationSaturatedToLargestFloat8NormalConversionEXT))
-         return nir_f2e5m2_sat(&b->nb, src_as_float);
-      else
-         return nir_f2e5m2(&b->nb, src_as_float);
+   } else if (glsl_type_is_e4m3fn(glsl_dest_type) ||
+              glsl_type_is_e5m2(glsl_dest_type)) {
+      nir_def *src_as_float = src;
+      if (!glsl_type_is_float(glsl_src_type)) {
+         src_as_float = nir_type_convert(&b->nb, src,
+                                         vtn_convert_op_src_type(opcode) |
+                                         src->bit_size,
+                                         nir_type_float32,
+                                         nir_rounding_mode_undef);
+      }
+      nir_op op = nir_float8_conversion_op(
+         glsl_type_is_e4m3fn(glsl_dest_type),
+         vtn_has_decoration(b, dest_val, SpvDecorationSaturatedToLargestFloat8NormalConversionEXT),
+         vtn_float8_rounding_mode(b, dest_val));
+      return nir_build_alu1(&b->nb, op, src_as_float);
    }
 
    /* Use bit_size from NIR source instead of from the original src type,

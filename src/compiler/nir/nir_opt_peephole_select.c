@@ -465,7 +465,12 @@ nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader,
    if (!block_check_for_allowed_instrs(first, &count, &if_options))
       return false;
 
-   if (count > if_options.limit)
+   unsigned limit = if_options.limit;
+   if (options->collapse_limit &&
+       parent_if->control != nir_selection_control_flatten)
+      limit = MIN2(limit, options->collapse_limit);
+
+   if (count > limit)
       return false;
 
    /* trivialize succeeding phis */

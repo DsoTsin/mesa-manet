@@ -46,6 +46,9 @@ panvk_GetDeviceBufferMemoryRequirements(VkDevice _device,
    const uint64_t align =
       pInfo->pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT
          ? panvk_get_gpu_page_size(device)
+      : vk_buffer_usage_flags(pInfo->pCreateInfo) &
+            VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR
+         ? 256
          : 64;
    const uint64_t size = align64(pInfo->pCreateInfo->size, align);
 
@@ -85,6 +88,13 @@ panvk_BindBufferMemory2(VkDevice _device, uint32_t bindInfoCount,
       assert(buffer->vk.device_address == 0);
       assert(mem != NULL);
 
+      if (buffer->opaque_capture_address &&
+          buffer->opaque_capture_address != mem->addr.dev + pBindInfos[i].memoryOffset) {
+         if (bind_status)
+            *bind_status->pResult = VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS;
+         return panvk_error(device, VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS);
+      }
+
       if (bind_status)
          *bind_status->pResult = VK_SUCCESS;
 
@@ -111,6 +121,11 @@ panvk_CreateBuffer(VkDevice _device, const VkBufferCreateInfo *pCreateInfo,
       vk_buffer_create(&device->vk, pCreateInfo, pAllocator, sizeof(*buffer));
    if (buffer == NULL)
       return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   const VkBufferOpaqueCaptureAddressCreateInfo *capture =
+      vk_find_struct_const(pCreateInfo->pNext, BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO);
+   if (capture)
+      buffer->opaque_capture_address = capture->opaqueCaptureAddress;
 
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(device->vk.physical);

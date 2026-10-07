@@ -279,12 +279,28 @@ opt_non_uniform_tex_access(nir_tex_instr *tex)
 }
 
 static bool
+handle_is_divergent(nir_src *src)
+{
+   if (!nir_src_is_divergent(src))
+      return false;
+
+   nir_block *block = nir_src_get_block(src);
+   for (unsigned i = 0; i < nir_src_num_components(*src); i++) {
+      nir_scalar s = nir_scalar_chase_movs(nir_get_scalar(src->ssa, i));
+      if (s.def == src->ssa || nir_def_is_divergent_at_use_block(s.def, block))
+         return true;
+   }
+
+   return false;
+}
+
+static bool
 opt_non_uniform_access_intrin(nir_intrinsic_instr *intrin, unsigned handle_src)
 {
    if (!has_non_uniform_access_intrin(intrin))
       return false;
 
-   if (nir_src_is_divergent(&intrin->src[handle_src]))
+   if (handle_is_divergent(&intrin->src[handle_src]))
       return false;
 
    nir_intrinsic_set_access(intrin, nir_intrinsic_access(intrin) & ~ACCESS_NON_UNIFORM);

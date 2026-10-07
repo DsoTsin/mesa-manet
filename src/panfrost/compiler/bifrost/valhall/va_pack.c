@@ -531,6 +531,17 @@ va_pack_clamp_special_round_v15(const bi_instr *I)
       return I->clamp;
 }
 
+static unsigned
+va_pack_round(const bi_instr *I, unsigned arch)
+{
+   if (I->round == BI_ROUND_RTO) {
+      pack_assert(I, arch >= 15);
+      return VA_ROUND_MODE_RTO;
+   }
+
+   return I->round;
+}
+
 static uint64_t
 va_pack_alu(const bi_instr *I, unsigned arch)
 {
@@ -654,6 +665,13 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       hex |= ((uint64_t)I->inactive_result) << 22;
       hex |= ((uint64_t)I->lane_op) << 32;
       hex |= ((uint64_t)I->subgroup) << 36;
+      break;
+
+   case BI_OPCODE_MMUL_F32:
+   case BI_OPCODE_MMUL_V2F16:
+   case BI_OPCODE_MMUL_F16:
+      hex |= ((uint64_t)I->sub_a) << 28;
+      hex |= ((uint64_t)I->sub_b) << 26;
       break;
 
    case BI_OPCODE_LD_VAR:
@@ -874,7 +892,7 @@ va_pack_alu(const bi_instr *I, unsigned arch)
       if (info.clamp)
          hex |= (uint64_t)I->clamp << ((arch >= 15) ? 30 : 32);
       if (info.round_mode)
-         hex |= (uint64_t)I->round << ((arch >= 15) ? 32 : 30);
+         hex |= (uint64_t)va_pack_round(I, arch) << ((arch >= 15) ? 32 : 30);
    }
    if (info.condition)
       hex |= (uint64_t)I->cmpf << ((arch >= 15) ? 33 : 32);

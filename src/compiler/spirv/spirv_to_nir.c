@@ -188,6 +188,8 @@ static const struct spirv_capabilities implemented_capabilities = {
    .StorageInputOutput16 = true,
    .StoragePushConstant8 = true,
    .StoragePushConstant16 = true,
+   .StorageTensorArrayDynamicIndexingARM = true,
+   .StorageTensorArrayNonUniformIndexingARM = true,
    .StorageTexelBufferArrayDynamicIndexingEXT = true,
    .StorageTexelBufferArrayNonUniformIndexingEXT = true,
    .StorageUniform16 = true,
@@ -197,6 +199,7 @@ static const struct spirv_capabilities implemented_capabilities = {
    .SubgroupShuffleINTEL = true,
    .SubgroupVoteKHR = true,
    .TensorAddressingNV = true,
+   .TensorsARM = true,
    .Tessellation = true,
    .TessellationPointSize = true,
    .TextureBlockMatchQCOM = true,
@@ -463,6 +466,7 @@ vtn_base_type_to_string(enum vtn_base_type t)
    CASE(tensor_layout);
    CASE(tensor_view);
    CASE(buffer);
+   CASE(tensor);
    }
 #undef CASE
    UNREACHABLE("unknown base type");
@@ -1353,6 +1357,11 @@ vtn_types_compatible(struct vtn_builder *b,
    case vtn_base_type_ray_query:
       return true;
 
+   case vtn_base_type_tensor:
+      return t1->tensor_rank == t2->tensor_rank &&
+             vtn_types_compatible(b, t1->tensor_element_type,
+                                  t2->tensor_element_type);
+
    case vtn_base_type_function:
       /* This case shouldn't get hit since you can't copy around function
        * types.  Just require them to be identical.
@@ -1394,6 +1403,7 @@ vtn_type_copy(struct vtn_builder *b, struct vtn_type *src)
    case vtn_base_type_ray_query:
    case vtn_base_type_cooperative_matrix:
    case vtn_base_type_buffer:
+   case vtn_base_type_tensor:
       /* Nothing more to do */
       break;
 
@@ -2502,6 +2512,9 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
       val->type->type = glsl_uint64_t_type();
       break;
 
+   case SpvOpTypeTensorARM:
+      vtn_handle_tensor_type(b, val, w, count);
+      break;
 
    case SpvOpTypeOpaque: {
       val->type->base_type = vtn_base_type_struct;
@@ -6477,6 +6490,7 @@ vtn_handle_variable_or_type_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpTypeBufferEXT:
    case SpvOpTypeTensorLayoutNV:
    case SpvOpTypeTensorViewNV:
+   case SpvOpTypeTensorARM:
       vtn_handle_type(b, opcode, w, count);
       break;
 
@@ -7571,6 +7585,12 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpCooperativeMatrixLoadTensorNV:
    case SpvOpCooperativeMatrixStoreTensorNV:
       vtn_handle_cooperative_instruction(b, opcode, w, count);
+      break;
+
+   case SpvOpTensorReadARM:
+   case SpvOpTensorWriteARM:
+   case SpvOpTensorQuerySizeARM:
+      vtn_handle_tensor_instruction(b, opcode, w, count);
       break;
 
    default:

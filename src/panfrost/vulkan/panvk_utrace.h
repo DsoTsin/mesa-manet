@@ -15,16 +15,39 @@
 
 struct panvk_device;
 struct vk_sync;
+struct panvk_utrace_submission;
 
 struct panvk_utrace_flush_data {
    uint32_t subqueue;
+   struct panvk_utrace_submission *submission;
+   struct util_dynarray clone_cs_bufs;
+};
 
+struct panvk_utrace_submission {
    struct vk_sync *sync;
    uint64_t wait_value;
-
-   struct util_dynarray clone_cs_bufs;
-   bool free_self;
+   int refs;
+   bool owns_sync;
+   bool waited;
+   bool failed;
+   struct panvk_utrace_flush_data data[];
 };
+
+struct panvk_utrace_pass {
+   uint64_t command_buffer;
+   uint32_t pass;
+   uint8_t subqueue;
+   char label[128];
+};
+
+void panvk_utrace_submission_unref(struct panvk_device *dev,
+                                   struct panvk_utrace_submission *submission);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+   char *panvk_utrace_label(enum u_trace_backend_type backend,
+                            const char *label);
 
 struct panvk_utrace_buf {
    uint64_t dev;

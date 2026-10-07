@@ -75,6 +75,16 @@ impl Shader<'_> {
                 lower_blend_call(&mut b, *op, instr.flow);
                 b.into_mapped()
             }
+            Op::PilotJump(op) => {
+                let mut jump = Instr::from(OpJump {
+                    not: true,
+                    cond: 0u32.into(),
+                    combine_op: BranchCombineOp::None,
+                    address: op.pc,
+                });
+                jump.flow = instr.flow;
+                [jump].into()
+            }
             _ => [instr].into(),
         })
     }

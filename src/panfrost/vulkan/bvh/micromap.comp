@@ -1,0 +1,83 @@
+#version 460
+
+#include "panvk_micromap.h"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform CONSTS {
+   panvk_micromap_build_args args;
+};
+
+shared uint64_t data_offset;
+
+uint32_t
+opacity(VOID_REF source, uint32_t index, uint32_t bits)
+{
+   uint32_t bit = index * bits;
+   return (uint32_t(DEREF(INDEX(uint8_t, source, bit / 8))) >> (bit % 8)) & ((1u << bits) - 1u);
+}
+
+void
+main()
+{
+   uint32_t triangle_id = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+   if (triangle_id >= DEREF(REF(panvk_micromap_header)(args.dst)).triangle_count)
+      return;
+   uint32_t lane = gl_LocalInvocationID.x;
+   panvk_micromap_triangle triangle = DEREF(REF(panvk_micromap_triangle)(
+      args.triangles + uint64_t(triangle_id) * args.triangle_stride));
+   uint32_t level = triangle.level;
+   uint32_t bits = triangle.format;
+   uint32_t stored_level = max(level, 3u);
+   uint32_t stored_bits = level <= 3 ? 2 : bits;
+   uint32_t bucket_id = stored_level + 8 * stored_bits - 11;
+   panvk_micromap_bucket bucket = DEREF(INDEX(panvk_micromap_bucket, args.buckets, bucket_id));
+   VOID_REF source = args.src + triangle.data_offset;
+
+   if (lane == 0) {
+      uint32_t ordinal = atomicAdd(DEREF(INDEX(uint32_t, args.counters, bucket.counter)), 1);
+      data_offset = bucket.offset + uint64_t(ordinal) * bucket.stride;
+      if (level <= 3 && args.summary_offset != 0)
+         data_offset = args.summary_offset + uint64_t(triangle_id) * 16;
+      uint64_t entry = data_offset | (uint64_t(stored_level) << 48) | (uint64_t(stored_bits) << 56);
+      DEREF(INDEX(uint64_t, args.dst + PANVK_MICROMAP_HEADER_SIZE, triangle_id)) = entry;
+   }
+   barrier();
+
+   if (level > 3) {
+      uint32_t size = (bits << (2 * level)) / 8;
+      for (uint32_t byte = lane * 4; byte < bucket.stride; byte += 64 * 4) {
+         uint32_t word = 0;
+         if (byte < size)
+            for (uint32_t i = 0; i < 4; i++)
+               word |= uint32_t(DEREF(INDEX(uint8_t, source, byte + i))) << (8 * i);
+         DEREF(INDEX(uint32_t, args.dst + data_offset, byte / 4)) = word;
+      }
+   }
+
+   if (lane < 4 && (level <= 3 || args.summary_offset != 0)) {
+      uint32_t word = 0;
+      for (uint32_t i = 0; i < 16; i++) {
+         uint32_t microtriangle = lane * 16 + i;
+         uint32_t value;
+         if (level <= 3) {
+            value = opacity(source, microtriangle >> (2 * (3 - level)), bits);
+         } else {
+            uint32_t count = 1u << (2 * (level - 3));
+            uint32_t first = microtriangle * count;
+            value = opacity(source, first, bits);
+            for (uint32_t j = 1; j < count; j++) {
+               if (opacity(source, first + j, bits) != value) {
+                  value = 3;
+                  break;
+               }
+            }
+            if (value == 2)
+               value = 3;
+         }
+         word |= value << (2 * i);
+      }
+      uint64_t offset = level <= 3 ? data_offset : args.summary_offset + uint64_t(triangle_id) * 16;
+      DEREF(INDEX(uint32_t, args.dst + offset, lane)) = word;
+   }
+}

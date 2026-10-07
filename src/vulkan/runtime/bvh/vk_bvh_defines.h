@@ -182,6 +182,7 @@ struct vk_bvh_geometry_data {
    uint32_t stride;
    uint32_t vertex_format;
    uint32_t index_format;
+   uint64_t indirect_range;
 };
 
 struct key32_id_pair {
@@ -436,10 +437,13 @@ TYPE(vk_prefix_scan_partition, 4);
 #define VK_BUILD_FLAG_PROPAGATE_CULL_FLAGS (1 << 1)
 #define VK_BUILD_FLAG_64BIT_KEYS (1 << 2)
 #define VK_BUILD_FLAG_HAS_QUADS (1 << 3)
-#define VK_BUILD_FLAG_COUNT 4
+#define VK_BUILD_FLAG_EARLY_PAIRS (1 << 4)
+#define VK_BUILD_FLAG_SPLIT_INSTANCES (1 << 5)
+#define VK_BUILD_FLAG_COUNT 6
 
 #define VK_LEAF_BUILD_FLAGS (VK_BUILD_FLAG_ALWAYS_ACTIVE | VK_BUILD_FLAG_PROPAGATE_CULL_FLAGS | \
-                             VK_BUILD_FLAG_HAS_QUADS)
+                             VK_BUILD_FLAG_HAS_QUADS | VK_BUILD_FLAG_EARLY_PAIRS | \
+                             VK_BUILD_FLAG_SPLIT_INSTANCES)
 
 struct leaf_args {
    VOID_REF bvh;
@@ -447,6 +451,7 @@ struct leaf_args {
    VOID_REF ids;
 
    vk_bvh_geometry_data geom_data;
+   uint32_t primitive_count;
 };
 
 #define VK_MORTON_BUILD_FLAGS (VK_BUILD_FLAG_64BIT_KEYS)

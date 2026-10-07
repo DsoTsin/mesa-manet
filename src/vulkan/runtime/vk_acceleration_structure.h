@@ -102,6 +102,9 @@ struct vk_build_config {
    bool updateable;
    bool u64_keys;
    bool late_pair_compression;
+   bool early_pair_compression;
+   uint32_t leaf_count_multiplier;
+   uint32_t leaf_count_limit;
    uint32_t build_flags;
 };
 
@@ -127,6 +130,8 @@ struct vk_scratch_layout {
 struct vk_acceleration_structure_build_state {
    const VkAccelerationStructureBuildGeometryInfoKHR *build_info;
    const VkAccelerationStructureBuildRangeInfoKHR *build_range_infos;
+   VkDeviceAddress indirect_address;
+   uint32_t indirect_stride;
    uint32_t leaf_node_count;
    uint32_t internal_node_count;
    struct vk_scratch_layout scratch;
@@ -143,6 +148,8 @@ struct vk_acceleration_structure_build_state {
 };
 
 struct vk_acceleration_structure_build_args {
+   const VkDeviceAddress *indirect_addresses;
+   const uint32_t *indirect_strides;
    uint32_t subgroup_size;
    uint32_t bvh_bounds_offset;
    uint32_t root_flags_offset;
@@ -151,6 +158,7 @@ struct vk_acceleration_structure_build_args {
    bool propagate_cull_flags;
    bool emit_markers;
    bool has_update;
+   bool has_tlas_update;
 };
 
 struct vk_acceleration_structure_build_ops {

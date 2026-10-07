@@ -875,6 +875,37 @@ disk_cache_write_item_to_disk(struct disk_cache_put_job *dc_job,
    blob_finish(&cache_blob);
 }
 
+#if DETECT_OS_ANDROID
+static bool
+android_app_cache_dir(char *dir, size_t size)
+{
+   char name[256];
+   int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+   if (fd < 0)
+      return false;
+
+   ssize_t len = read(fd, name, sizeof(name) - 1);
+   close(fd);
+   if (len <= 0)
+      return false;
+
+   name[len] = '\0';
+   char *colon = strchr(name, ':');
+   if (colon)
+      *colon = '\0';
+
+   if (!strchr(name, '.') || strchr(name, '/'))
+      return false;
+
+   int n = snprintf(dir, size, "/data/user/%u/%s/cache",
+                    (unsigned)(getuid() / 100000), name);
+   if (n <= 0 || (size_t)n >= size)
+      return false;
+
+   return access(dir, W_OK) == 0;
+}
+#endif
+
 /* Determine path for cache based on the first defined name as follows:
  *
  *   $MESA_SHADER_CACHE_DIR/mesa_shader_cache*
@@ -925,6 +956,18 @@ disk_cache_generate_cache_dir(void *mem_ctx, const char *gpu_name,
       if (!path)
          return NULL;
    }
+
+#if DETECT_OS_ANDROID
+   if (path == NULL) {
+      char app_dir[512];
+
+      if (android_app_cache_dir(app_dir, sizeof(app_dir))) {
+         path = concatenate_and_mkdir(mem_ctx, app_dir, cache_dir_name, mkdir);
+         if (!path)
+            return NULL;
+      }
+   }
+#endif
 
    if (path == NULL) {
       const char *xdg_cache_home = os_get_option_secure("XDG_CACHE_HOME");
@@ -1006,16 +1049,12 @@ disk_cache_enabled()
    if (!__normal_user())
       return false;
 
-   /* At user request, disable shader cache entirely.
-    * Disk cache is not enabled by default for android, for most
-    * applications the EGL layer uses EGL_ANDROID_blob_cache to manage
-    * the cache itself, however those that wish to use the cache directly
-    * can set `mesa.shader.cache.disable=false` property.
-    * Don't forget to also set the shader cache path to something readable
-    * and writable by the application via `mesa.shader.cache.dir`.
-    */
-#if defined(SHADER_CACHE_DISABLE_BY_DEFAULT) || DETECT_OS_ANDROID
+   /* At user request, disable shader cache entirely. */
+#if defined(SHADER_CACHE_DISABLE_BY_DEFAULT)
    bool disable_by_default = true;
+#elif DETECT_OS_ANDROID
+   char app_dir[512];
+   bool disable_by_default = !android_app_cache_dir(app_dir, sizeof(app_dir));
 #else
    bool disable_by_default = false;
 #endif

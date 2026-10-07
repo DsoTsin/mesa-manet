@@ -739,12 +739,16 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf,
        */
       cfg.flags_0.allow_forward_pixel_to_kill =
          key->type == PANVK_META_OBJECT_KEY_FB_COLOR_PRELOAD_SHADER;
-      cfg.flags_0.allow_forward_pixel_to_be_killed = true;
+      cfg.flags_0.allow_forward_pixel_to_be_killed =
+         !cmdbuf->state.gfx.render.merged_subpasses;
       cfg.depth_stencil = zsd.gpu;
       cfg.flags_1.sample_mask = 0xFFFF;
       cfg.flags_0.multisample_enable = fb->sample_count > 1;
       cfg.flags_0.evaluate_per_sample = shader->info.fs.sample_shading;
       cfg.flags_0.clean_fragment_write = true;
+#if PAN_ARCH >= 12
+      cfg.flags_0.disable_vrs_clamp_2x2 = true;
+#endif
 
 #if PAN_ARCH >= 12
       cfg.fragment_resources = res_table.gpu | res_table_size;
@@ -821,8 +825,16 @@ cmd_preload_zs_attachments(struct panvk_cmd_buffer *cmdbuf,
     *
     * On v13+, we don't have EARLY_ZS_ALWAYS instead we use PREPASS_ALWAYS.
     */
-#if PAN_ARCH >= 13
+#if PAN_ARCH >= 14
+   fs->modes[dcd_idx] = always_load(load, &key)
+                           ? MALI_PRE_POST_FRAME_SHADER_MODE_PREPASS_ALWAYS
+                           : MALI_PRE_POST_FRAME_SHADER_MODE_PREPASS_INTERSECT;
+#elif PAN_ARCH >= 13
    fs->modes[dcd_idx] = MALI_PRE_POST_FRAME_SHADER_MODE_PREPASS_ALWAYS;
+#elif PAN_ARCH == 10
+   fs->modes[dcd_idx] = always_load(load, &key)
+                           ? MALI_PRE_POST_FRAME_SHADER_MODE_EARLY_ZS_ALWAYS
+                           : MALI_PRE_POST_FRAME_SHADER_MODE_INTERSECT;
 #elif PAN_ARCH >= 9
    fs->modes[dcd_idx] = MALI_PRE_POST_FRAME_SHADER_MODE_EARLY_ZS_ALWAYS;
 #else

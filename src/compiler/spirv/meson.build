@@ -42,6 +42,7 @@ files_libvtn = files(
   'vtn_private.h',
   'vtn_structured_cfg.c',
   'vtn_subgroup.c',
+  'vtn_tensor.c',
   'vtn_variables.c',
 )
 

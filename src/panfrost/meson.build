@@ -36,12 +36,14 @@ subdir('model')
 
 if with_gallium_panfrost or with_panfrost_vk or with_tools.contains('panfrost')
    subdir('genxml')
+endif
+if with_gallium_panfrost or with_panfrost_vk or (with_tools.contains('panfrost') and host_machine.system() != 'windows')
    subdir('lib')
 endif
 
 subdir('compiler')
 
-if with_gallium_panfrost or with_panfrost_vk or with_tools.contains('panfrost')
+if with_gallium_panfrost or with_panfrost_vk or (with_tools.contains('panfrost') and host_machine.system() != 'windows')
   subdir('clc')
 endif
 

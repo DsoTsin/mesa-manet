@@ -105,6 +105,14 @@ panvk_AllocateMemory(VkDevice _device,
    if (fd_info && !fd_info->handleType)
       fd_info = NULL;
 
+   const VkMemoryOpaqueCaptureAddressAllocateInfo *capture_info =
+      vk_find_struct_const(pAllocateInfo->pNext,
+                           MEMORY_OPAQUE_CAPTURE_ADDRESS_ALLOCATE_INFO);
+   const uint64_t capture_address = capture_info ? capture_info->opaqueCaptureAddress : 0;
+   const bool auto_capture =
+      (device->kmod.vm->flags & PAN_KMOD_VM_FLAG_AUTO_VA) &&
+      (mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT);
+
    if (fd_info) {
       assert(
          fd_info->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
@@ -126,11 +134,15 @@ panvk_AllocateMemory(VkDevice _device,
          bo_flags |= PAN_KMOD_BO_FLAG_WB_MMAP;
 
       bo_flags = panvk_device_adjust_bo_flags(device, bo_flags);
-      mem->bo = pan_kmod_bo_alloc(device->kmod.dev,
-                                  can_be_exported ? NULL : device->kmod.vm,
-                                  pAllocateInfo->allocationSize, bo_flags);
+      if (auto_capture)
+         bo_flags |= PAN_KMOD_BO_FLAG_CAPTURE_REPLAY;
+      mem->bo = pan_kmod_bo_alloc_at(
+         device->kmod.dev, can_be_exported ? NULL : device->kmod.vm,
+         pAllocateInfo->allocationSize, bo_flags,
+         auto_capture ? capture_address : 0);
       if (!mem->bo) {
-         result = panvk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         result = panvk_error(device, auto_capture && capture_address ?
+            VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY);
          goto err_destroy_mem;
       }
    }
@@ -147,6 +159,9 @@ panvk_AllocateMemory(VkDevice _device,
          .bo_offset = 0,
       },
    };
+
+   if (auto_capture && capture_address)
+      op.va.start = capture_address;
 
    if (!(device->kmod.vm->flags & PAN_KMOD_VM_FLAG_AUTO_VA)) {
       uint64_t alignment =
@@ -176,7 +191,8 @@ panvk_AllocateMemory(VkDevice _device,
       }
 
       if (!op.va.start) {
-         result = panvk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         result = panvk_error(device, capture_address ?
+            VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY);
          goto err_put_bo;
       }
    }
@@ -184,7 +200,8 @@ panvk_AllocateMemory(VkDevice _device,
    int ret =
       pan_kmod_vm_bind(device->kmod.vm, PAN_KMOD_VM_OP_MODE_IMMEDIATE, &op, 1);
    if (ret) {
-      result = panvk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      result = panvk_error(device, capture_address ?
+         VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS : VK_ERROR_OUT_OF_DEVICE_MEMORY);
       goto err_return_va;
    }
 
@@ -268,11 +285,13 @@ panvk_FreeMemory(VkDevice _device, VkDeviceMemory _mem,
                             pan_kmod_bo_size(mem->bo));
 
       if (mem->debug.host_mapping)
-         os_munmap(mem->debug.host_mapping, pan_kmod_bo_size(mem->bo));
+         pan_kmod_bo_munmap(mem->bo, mem->debug.host_mapping,
+                            pan_kmod_bo_size(mem->bo));
    }
 
    if (mem->addr.host) {
-      ASSERTED int ret = os_munmap(mem->addr.host, pan_kmod_bo_size(mem->bo));
+      ASSERTED int ret = pan_kmod_bo_munmap(mem->bo, mem->addr.host,
+                                            pan_kmod_bo_size(mem->bo));
       assert(!ret);
    }
 
@@ -382,7 +401,8 @@ panvk_UnmapMemory2KHR(VkDevice _device,
          return panvk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
                              "Failed to reserve VA on unmap.");
    } else {
-      ASSERTED int ret = os_munmap(mem->addr.host, pan_kmod_bo_size(mem->bo));
+      ASSERTED int ret = pan_kmod_bo_munmap(mem->bo, mem->addr.host,
+                                            pan_kmod_bo_size(mem->bo));
       assert(!ret);
    }
 

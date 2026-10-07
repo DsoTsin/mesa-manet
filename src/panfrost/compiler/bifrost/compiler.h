@@ -296,27 +296,27 @@ typedef struct {
    /* modifiers, should only be set if applicable for a given instruction.
     * For *IDP.v4i8, abs plays the role of sign. For bitwise ops where
     * applicable, neg plays the role of not */
-   bool abs : 1;
-   bool neg : 1;
+   unsigned abs : 1;
+   unsigned neg : 1;
 
    /* The last use of a value, should be purged from the register cache.
     * Set by liveness analysis. */
-   bool discard : 1;
+   unsigned discard : 1;
 
    /* For a source, the swizzle. For a destination, acts a bit like a
     * write mask. Identity for the full 32-bit, H00 for only caring about
     * the lower half, other values unused. */
-   enum bi_swizzle swizzle : 5;
+   unsigned swizzle : 5;
    uint32_t offset         : 3;
-   enum bi_index_type type : 3;
+   unsigned type : 3;
 
    /* Last use of an SSA value; similar to discard, but applies to the
     * SSA analysis and does not have any HW restrictions (discard gets
     * sent to the hardware eventually. */
-   bool kill_ssa : 1;
+   unsigned kill_ssa : 1;
 
    /* Register class */
-   bool memory : 1;
+   unsigned memory : 1;
 
    /* Must be zeroed so we can hash the whole 64-bits at a time */
    unsigned padding : (32 - 16);
@@ -427,7 +427,7 @@ static inline bi_index
 bi_byte(bi_index idx, unsigned lane)
 {
    unsigned bytes[4];
-   bi_swizzle_to_byte_channels(idx.swizzle, bytes);
+   bi_swizzle_to_byte_channels((enum bi_swizzle)idx.swizzle, bytes);
 
    assert(lane < 4);
    idx.swizzle = (enum bi_swizzle)(BI_SWIZZLE_B0 + bytes[lane]);
@@ -563,8 +563,8 @@ static inline bool
 bi_is_value_equiv(bi_index left, bi_index right)
 {
    if (left.type == BI_INDEX_CONSTANT && right.type == BI_INDEX_CONSTANT) {
-      return (bi_apply_swizzle(left.value, left.swizzle) ==
-              bi_apply_swizzle(right.value, right.swizzle)) &&
+      return (bi_apply_swizzle(left.value, (enum bi_swizzle)left.swizzle) ==
+              bi_apply_swizzle(right.value, (enum bi_swizzle)right.swizzle)) &&
              (left.abs == right.abs) && (left.neg == right.neg);
    } else {
       return (left.value == right.value) && (left.abs == right.abs) &&
@@ -757,6 +757,11 @@ typedef struct {
       };
 
       struct {
+         enum bi_sub_a sub_a;
+         enum bi_sub_b sub_b;
+      };
+
+      struct {
          bool z;       /* ZS_EMIT */
          bool stencil; /* ZS_EMIT */
       };
@@ -811,6 +816,27 @@ static inline bool
 bi_is_staging_src(const bi_instr *I, unsigned s)
 {
    return (s == 0 || s == 4) && bi_get_opcode_props(I)->sr_read;
+}
+
+static inline bool
+bi_is_mmul(enum bi_opcode op)
+{
+   switch (op) {
+   case BI_OPCODE_MMUL_F32:
+   case BI_OPCODE_MMUL_V2F16:
+   case BI_OPCODE_MMUL_F16:
+   case BI_OPCODE_MMUL_V4S8:
+   case BI_OPCODE_MMUL_V4U8:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static inline bool
+bi_is_register_only_src(const bi_instr *I, unsigned s)
+{
+   return bi_is_staging_src(I, s) || bi_is_mmul(I->op);
 }
 
 static inline bool
@@ -1325,6 +1351,15 @@ typedef struct {
 
    /* Beginning of stack allocation used for parallel copy lowering */
    bool has_spill_pcopy_reserved;
+
+   /* Registers the SSA spiller leaves free for LCRA */
+   unsigned spill_headroom;
+
+   /* LCRA had to spill on its own after the SSA spiller */
+   bool lcra_spilled;
+
+   /* TLS accesses, each weighted by bi_loop_weight() of its block */
+   uint64_t spill_weight;
    unsigned spill_pcopy_base;
 
    /* Stats for shader-db */
@@ -2019,6 +2054,21 @@ bool bi_lower_divergent_indirects(nir_shader *shader, unsigned lanes);
 
 void bi_find_loop_blocks(const bi_context *ctx, bi_block *header,
                          BITSET_WORD *out);
+uint8_t *bi_loop_depths(bi_context *ctx);
+
+/* A block in a loop counts as running 16 times per level of nesting */
+static inline uint32_t
+bi_loop_weight(unsigned depth)
+{
+   return pan_loop_weight(depth);
+}
+
+/* LCRA colours first-fit and needs pair-aligned windows for vector writes,
+ * so a program whose SSA demand equals the register file may not colour and
+ * then spills by reloading before every use. A second compile spills this
+ * far below the file instead (bi_compile_variant).
+ */
+#define BI_SPILL_LCRA_HEADROOM 8
 
 #ifdef __cplusplus
 } /* extern C */
