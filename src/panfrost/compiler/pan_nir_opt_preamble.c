@@ -652,7 +652,7 @@ collect_buffer_bases(nir_function_impl *impl, struct util_dynarray *bases)
 
 static nir_def *
 buffer_address(nir_builder *b, nir_def *base, nir_def *offset, unsigned shift,
-               unsigned align_offset)
+               unsigned align_offset, bool fold_imm)
 {
    nir_scalar s = nir_scalar_chase_movs(nir_get_scalar(offset, 0));
    if (nir_scalar_is_const(s)) {
@@ -662,17 +662,22 @@ buffer_address(nir_builder *b, nir_def *base, nir_def *offset, unsigned shift,
 
    nir_def *rest = shift ? nir_ishl_imm(b, offset, shift) : offset;
    unsigned fold = 0;
-   if (!shift && align_offset > 0 && align_offset <= INT16_MAX &&
-       nir_scalar_is_alu(s) && nir_scalar_alu_op(s) == nir_op_iadd) {
+   if (!shift && nir_scalar_is_alu(s) && nir_scalar_alu_op(s) == nir_op_iadd) {
       for (unsigned i = 0; i < 2; i++) {
          nir_scalar c = nir_scalar_chase_alu_src(s, i);
          if (!nir_scalar_is_const(c))
             continue;
          nir_scalar x = nir_scalar_chase_alu_src(s, 1 - i);
-         uint32_t delta = (uint32_t)nir_scalar_as_uint(c) - align_offset;
+         uint32_t imm = (uint32_t)nir_scalar_as_uint(c);
          nir_def *xd = nir_channel(b, x.def, x.comp);
-         rest = delta ? nir_iadd_imm(b, xd, delta) : xd;
-         fold = align_offset;
+         if (fold_imm && imm <= INT16_MAX) {
+            rest = xd;
+            fold = imm;
+         } else if (align_offset > 0 && align_offset <= INT16_MAX) {
+            uint32_t delta = imm - align_offset;
+            rest = delta ? nir_iadd_imm(b, xd, delta) : xd;
+            fold = align_offset;
+         }
          break;
       }
    }
@@ -702,6 +707,29 @@ address_user_align_offset(nir_def *def)
       return use == &user->src[1] ? nir_intrinsic_align_offset(user) : 0;
    default:
       return 0;
+   }
+}
+
+static bool
+address_user_folds_offset(nir_def *def)
+{
+   if (!list_is_singular(&def->uses))
+      return false;
+
+   nir_src *use = list_first_entry(&def->uses, nir_src, use_link);
+   if (nir_src_is_if(use) ||
+       nir_src_use_instr(use)->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *user = nir_instr_as_intrinsic(nir_src_use_instr(use));
+   switch (user->intrinsic) {
+   case nir_intrinsic_load_global:
+   case nir_intrinsic_load_global_constant:
+      return use == &user->src[0];
+   case nir_intrinsic_store_global:
+      return use == &user->src[1];
+   default:
+      return false;
    }
 }
 
@@ -784,13 +812,14 @@ rewrite_buffer_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    if (intr->intrinsic == nir_intrinsic_load_ssbo_address) {
       nir_def_replace(&intr->def,
                       buffer_address(b, base, intr->src[1].ssa, 0,
-                                     address_user_align_offset(&intr->def)));
+                                     address_user_align_offset(&intr->def),
+                                     address_user_folds_offset(&intr->def)));
       return true;
    }
 
    nir_def *addr = buffer_address(b, base, intr->src[1].ssa,
                                   nir_intrinsic_offset_shift(intr),
-                                  nir_intrinsic_align_offset(intr));
+                                  nir_intrinsic_align_offset(intr), true);
    nir_def *value = nir_load_global(
       b, intr->def.num_components, intr->def.bit_size, addr,
       .access = nir_intrinsic_access(intr),

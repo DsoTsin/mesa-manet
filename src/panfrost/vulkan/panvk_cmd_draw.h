@@ -62,6 +62,8 @@ struct panvk_rendering_state {
    enum u_tristate first_provoking_vertex;
 
    enum vk_rp_attachment_flags bound_attachments;
+   bool merged_subpasses;
+   bool merged_subpass_barrier;
    struct {
       struct panvk_image_view *iviews[MAX_RTS];
       /* If non-null, preload_iviews[i] overrides iviews[i] for preloads. */

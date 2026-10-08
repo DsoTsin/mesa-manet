@@ -39,7 +39,10 @@
 
 #if PAN_ARCH >= 15
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_inferred_axis,
-                           "PANVK_CSF_OPT_INFERRED_AXIS", false)
+                           "PANVK_CSF_OPT_INFERRED_AXIS", true)
+#define APP_DISPATCH_BARRIER PANVK_CSF_BARRIER_NONE
+#else
+#define APP_DISPATCH_BARRIER PANVK_CSF_BARRIER_SYNC
 #endif
 
 void panvk_per_arch(cmd_signal_barrier)(
@@ -106,6 +109,9 @@ void panvk_per_arch(cmd_signal_barrier)(
       break;
    }
 
+   case PANVK_CSF_BARRIER_NONE:
+      break;
+
    default:
       UNREACHABLE("invalid CSF barrier type");
    }
@@ -124,7 +130,8 @@ prepare_driver_set(struct panvk_cmd_buffer *cmdbuf)
       &cmdbuf->state.compute.desc_state;
    struct panvk_shader_desc_state *cs_desc_state =
       &cmdbuf->state.compute.cs.desc;
-   uint32_t desc_count = cs_desc_info->dyn_bufs.count + 1;
+   uint32_t desc_count =
+      (PANVK_DRIVER_SET_HAS_DYN_BUFS ? cs_desc_info->dyn_bufs.count : 0) + 1;
    struct pan_ptr driver_set = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, desc_count * PANVK_DESCRIPTOR_SIZE, PANVK_DESCRIPTOR_SIZE);
    struct panvk_opaque_desc *descs = driver_set.cpu;
@@ -137,8 +144,9 @@ prepare_driver_set(struct panvk_cmd_buffer *cmdbuf)
       cfg.clamp_integer_array_indices = false;
    }
 
-   panvk_per_arch(cmd_fill_dyn_bufs)(desc_state, cs_desc_info,
-                                     (struct mali_buffer_packed *)(&descs[1]));
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+      panvk_per_arch(cmd_fill_dyn_bufs)(
+         desc_state, cs_desc_info, (struct mali_buffer_packed *)(&descs[1]));
 
    cs_desc_state->driver_set.dev_addr = driver_set.gpu;
    cs_desc_state->driver_set.size = desc_count * PANVK_DESCRIPTOR_SIZE;
@@ -488,6 +496,9 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
                                       info->direct.wg_count.z);
    if (indirect && cs->preamble)
       panvk_per_arch(cmd_pilot_close)(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   if (to_panvk_device(cmdbuf->vk.base.device)->dynamic_cache)
+      panvk_per_arch(cmd_pilot_close)(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   panvk_per_arch(cmd_cache_begin)(cmdbuf, true);
    dispatch.pilot_queued =
       cs->preamble && has_work &&
       panvk_per_arch(cmd_pilot_queue)(cmdbuf, PANVK_SUBQUEUE_COMPUTE, cs,
@@ -498,6 +509,7 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
    panvk_per_arch(cmd_dispatch_shader)(cmdbuf, cs, cs_desc_state,
                                        cmdbuf->state.compute.push_uniforms,
                                        tsd, &dispatch);
+   panvk_per_arch(cmd_cache_end)(cmdbuf, true);
 }
 
 #if PAN_ARCH >= 15
@@ -600,7 +612,7 @@ panvk_per_arch(CmdDispatchBase)(VkCommandBuffer commandBuffer,
    const struct panvk_dispatch_info info = {
       .wg_base = {baseGroupX, baseGroupY, baseGroupZ},
       .direct.wg_count = {groupCountX, groupCountY, groupCountZ},
-      .barrier = PANVK_CSF_BARRIER_SYNC,
+      .barrier = APP_DISPATCH_BARRIER,
    };
 
    cmd_dispatch_direct(cmdbuf, &info);
@@ -626,7 +638,7 @@ panvk_per_arch(cmd_dispatch_unaligned)(VkCommandBuffer commandBuffer,
    if (full_wgs) {
       const struct panvk_dispatch_info info = {
          .direct.wg_count = {full_wgs, 1, 1},
-         .barrier = PANVK_CSF_BARRIER_SYNC,
+         .barrier = APP_DISPATCH_BARRIER,
       };
 
       cmd_dispatch_direct(cmdbuf, &info);
@@ -637,7 +649,7 @@ panvk_per_arch(cmd_dispatch_unaligned)(VkCommandBuffer commandBuffer,
          .wg_base = {full_wgs, 0, 0},
          .direct.wg_count = {1, 1, 1},
          .wg_size_x = partial_wg_size,
-         .barrier = PANVK_CSF_BARRIER_SYNC,
+         .barrier = APP_DISPATCH_BARRIER,
       };
 
       cmd_dispatch_direct(cmdbuf, &info);
@@ -653,7 +665,7 @@ panvk_per_arch(CmdDispatchIndirect)(VkCommandBuffer commandBuffer,
    uint64_t buffer_gpu = panvk_buffer_gpu_ptr(buffer, offset);
    struct panvk_dispatch_info info = {
       .indirect.buffer_dev_addr = buffer_gpu,
-      .barrier = PANVK_CSF_BARRIER_SYNC,
+      .barrier = APP_DISPATCH_BARRIER,
 #if PAN_ARCH >= 15
       .infer_task_axis = debug_get_option_panvk_csf_opt_inferred_axis(),
 #endif

@@ -170,6 +170,30 @@ SHIFTS = [
     ('ishr', 'arshift'),
 ]
 
+algebraic_late += [
+    ((op, ('ishl@32', a, s), ('ushr@32', a, 32 - s)), ('urol', a, s),
+     'is_kraid && gpu_arch >= 15')
+    for op in ['ior', 'ixor', 'iadd'] for s in range(1, 32)
+]
+
+for lop in LOPS:
+    nl = f'i{lop}'
+    psl = f'rshift_{lop}_pan'
+    algebraic_late += [
+        ((nl, ('extract_u16(is_used_once)', 'a@32', 1), b),
+         (psl, a, 16, b), 'is_kraid && gpu_arch >= 15'),
+        ((nl, ('extract_u8(is_used_once)', 'a@32', 3), b),
+         (psl, a, 24, b), 'is_kraid && gpu_arch >= 15'),
+    ]
+
+for (ns, ps), lop in itertools.product(SHIFTS, LOPS):
+    nl = f'i{lop}'
+    algebraic_late += [
+        ((ns, (f'{nl}(is_used_once)', 'a(is_not_uniform_expr)',
+               'b(is_uniform_expr)'), 'c(is_uniform_expr)'),
+         (nl, (ns, a, c), (ns, b, c)), 'is_kraid'),
+    ]
+
 for (ns, ps), lop in itertools.product(SHIFTS, LOPS):
     nl = f'i{lop}'
     psl = f'{ps}_{lop}_pan'

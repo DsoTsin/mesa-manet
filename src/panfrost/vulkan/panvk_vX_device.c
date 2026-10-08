@@ -23,6 +23,7 @@
 #include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_device.h"
+#include "panvk_dynamic_cache.h"
 #include "panvk_cmd_draw.h"
 #include "panvk_entrypoints.h"
 #include "panvk_instance.h"
@@ -464,7 +465,12 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
 
 
 
-   if (PAN_ARCH <= 9) {
+   bool dynamic_cache = false;
+   for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++)
+      dynamic_cache |= strcmp(pCreateInfo->ppEnabledExtensionNames[i],
+                              VK_MTK_DYNAMIC_CACHE_MEMORY_EXTENSION_NAME) == 0;
+
+   if (PAN_ARCH <= 9 || dynamic_cache) {
       /* For secondary command buffer support, overwrite any command entrypoints
        * in the main device-level dispatch table with
        * vk_cmd_enqueue_unless_primary_Cmd*.
@@ -484,7 +490,8 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    }
 
    vk_device_dispatch_table_from_entrypoints(
-      &dispatch_table, &panvk_per_arch(device_entrypoints), PAN_ARCH > 9);
+      &dispatch_table, &panvk_per_arch(device_entrypoints),
+      PAN_ARCH > 9 && !dynamic_cache);
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
                                              &panvk_device_entrypoints, false);
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
@@ -503,6 +510,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    device->vk.shader_ops = &panvk_per_arch(device_shader_ops);
    device->vk.check_status = panvk_device_check_status;
    device->vk.get_timestamp = panvk_device_get_timestamp;
+   device->vk.merge_subpasses = PAN_ARCH >= 15;
    if (vk_sync_type_is_drm_syncobj(&physical_device->drm_syncobj_type))
       device->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
 
@@ -663,6 +671,22 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    u_printf_init(&device->printf.ctx, device->printf.bo,
                  device->printf.bo->addr.host);
 
+   if (device->vk.enabled_extensions.MTK_dynamic_cache_memory) {
+      device->dynamic_cache = calloc(1, sizeof(*device->dynamic_cache));
+      if (!device->dynamic_cache) {
+         result = VK_ERROR_OUT_OF_HOST_MEMORY;
+         goto err_free_priv_bos;
+      }
+      if (panvk_dynamic_cache_init(device->dynamic_cache,
+                                    device->kmod.dev->fd, NULL)) {
+         free(device->dynamic_cache);
+         device->dynamic_cache = NULL;
+         mesa_logw("MTK dynamic cache unavailable; continuing without cache hints");
+      }
+      if (device->dynamic_cache)
+         simple_mtx_init(&device->dynamic_cache->lock, mtx_plain);
+   }
+
    device->drm_fd = device->kmod.dev->fd;
    vk_device_set_drm_fd(&device->vk, device->kmod.dev->fd);
 
@@ -749,6 +773,11 @@ err_free_priv_bos:
    simple_mtx_destroy(&device->as.lock);
 
 err_destroy_kdev:
+   if (device->dynamic_cache) {
+      panvk_dynamic_cache_finish(device->dynamic_cache);
+      simple_mtx_destroy(&device->dynamic_cache->lock);
+      free(device->dynamic_cache);
+   }
    if (device->debug.decode_ctx)
       pandecode_destroy_context(device->debug.decode_ctx);
 
@@ -802,6 +831,11 @@ panvk_per_arch(destroy_device)(struct panvk_device *device,
    if (device->debug.decode_ctx)
       pandecode_destroy_context(device->debug.decode_ctx);
 
+   if (device->dynamic_cache) {
+      panvk_dynamic_cache_finish(device->dynamic_cache);
+      simple_mtx_destroy(&device->dynamic_cache->lock);
+      free(device->dynamic_cache);
+   }
    pan_kmod_dev_destroy(device->kmod.dev);
    util_dynarray_fini(&device->ray_query.retired);
    simple_mtx_destroy(&device->ray_query.lock);

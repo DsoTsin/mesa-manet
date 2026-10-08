@@ -41,6 +41,8 @@
  * of 16 sets, but we reserve 9 for our internal use, so we have 7 left. */
 #define MAX_SETS 7
 
+#define PANVK_DYN_BUF_TABLE (MAX_SETS + 1)
+
 #if PAN_ARCH < 9
 
 /* MALI_RENDERER_STATE::sampler_count is 16-bit. */

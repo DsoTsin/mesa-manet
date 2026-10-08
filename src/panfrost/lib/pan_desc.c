@@ -111,10 +111,10 @@ GENX(pan_image_view_can_crc)(const struct pan_image_view *view,
    if (!drm_is_afbc(mod))
       return true;
 
-   /* TODO: Temporarily disallow CRC on v14+ with AFBC, re-enable after fix. */
-   if (PAN_ARCH >= 14)
+   const struct pan_image *image =
+      pan_image_view_get_first_plane(view).image;
+   if (PAN_ARCH >= 14 && !(PAN_ARCH == 15 && image->props.afbc_crc))
       return false;
-   
    /* Only sparse AFBC can be render targets. */
    assert(mod & AFBC_FORMAT_MOD_SPARSE);
 

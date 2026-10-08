@@ -187,6 +187,7 @@ struct panvk_device {
    } csstats;
 
    bool dvs_enabled;
+   struct panvk_dynamic_cache *dynamic_cache;
 
    int drm_fd;
 };

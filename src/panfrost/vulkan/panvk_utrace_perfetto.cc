@@ -138,15 +138,16 @@ begin_event(struct panvk_device *dev,
 {
    struct panvk_utrace_perfetto *utp = &dev->utrace.utp;
    struct panvk_utrace_perfetto_queue *queue = &utp->queues[data->subqueue];
-   struct panvk_utrace_perfetto_event *ev = &queue->stack[queue->stack_depth++];
+   const uint32_t depth = queue->stack_depth++;
 
    assert(data->subqueue < PANVK_UTRACE_PERFETTO_QUEUE_COUNT);
 
-   if (queue->stack_depth > PANVK_UTRACE_PERFETTO_STACK_DEPTH) {
+   if (depth >= PANVK_UTRACE_PERFETTO_STACK_DEPTH) {
       PERFETTO_ELOG("queue %d stage %d too deep", data->subqueue, stage);
       return NULL;
    }
 
+   struct panvk_utrace_perfetto_event *ev = &queue->stack[depth];
    ev->stage = stage;
    return ev;
 }
@@ -163,9 +164,9 @@ end_event(struct panvk_device *dev, const struct panvk_utrace_flush_data *data,
    if (!queue->stack_depth)
       return NULL;
 
-   struct panvk_utrace_perfetto_event *ev = &queue->stack[--queue->stack_depth];
-   if (queue->stack_depth >= PANVK_UTRACE_PERFETTO_STACK_DEPTH)
+   if (--queue->stack_depth >= PANVK_UTRACE_PERFETTO_STACK_DEPTH)
       return NULL;
+   struct panvk_utrace_perfetto_event *ev = &queue->stack[queue->stack_depth];
 
    assert(ev->stage == stage);
    return ev;
@@ -192,7 +193,7 @@ panvk_utrace_perfetto_begin_event(struct panvk_device *dev,
 static void
 panvk_utrace_perfetto_end_event(
    struct panvk_device *dev, const struct panvk_utrace_flush_data *data,
-   enum panvk_utrace_perfetto_stage stage, uint64_t ts_ns,
+   enum panvk_utrace_perfetto_stage stage, uint64_t ts_ns, const char *label,
    std::function<void(perfetto::protos::pbzero::GpuRenderStageEvent *)>
       emit_event_extra)
 {
@@ -221,6 +222,10 @@ panvk_utrace_perfetto_end_event(
 
          emit_setup_packets(dev, ctx);
 
+         const uint64_t stage_iid =
+            label && label[0]
+               ? ctx.GetDataSourceLocked()->debug_marker_stage(ctx, label)
+               : utp->stage_iids[stage];
          auto packet = ctx.NewTracePacket();
          packet->set_timestamp(ev->begin_ns);
          packet->set_timestamp_clock_id(utp->gpu_clock_id);
@@ -229,20 +234,19 @@ panvk_utrace_perfetto_end_event(
          event->set_event_id(utp->event_id++);
          event->set_duration(ts_ns - ev->begin_ns);
          event->set_hw_queue_iid(utp->queue_iids[data->subqueue]);
-         event->set_stage_iid(utp->stage_iids[stage]);
+         event->set_stage_iid(stage_iid);
          event->set_context(utp->device_id);
 
          emit_event_extra(event);
       });
 }
 
-#define PANVK_UTRACE_PERFETTO_PROCESS_EVENT(tp, stage)                         \
+#define PANVK_UTRACE_PERFETTO_PROCESS_EVENT(tp, stage, label)                  \
    void panvk_utrace_perfetto_begin_##tp(                                      \
       struct panvk_device *dev, uint64_t ts_ns, uint16_t tp_idx,               \
       const void *flush_data, const struct trace_begin_##tp *payload,          \
       const void *indirect_data)                                               \
    {                                                                           \
-      assert(!payload);                                                        \
       /* Contains at most a dummy uint8_t. */                                  \
       static_assert(sizeof(struct trace_begin_##tp) == 1);                     \
       panvk_utrace_perfetto_begin_event(                                       \
@@ -261,23 +265,23 @@ panvk_utrace_perfetto_end_event(
          };                                                                    \
       panvk_utrace_perfetto_end_event(                                         \
          dev, (const struct panvk_utrace_flush_data *)flush_data,              \
-         PANVK_UTRACE_PERFETTO_STAGE_##stage, ts_ns, emit_event_extra);        \
+         PANVK_UTRACE_PERFETTO_STAGE_##stage, ts_ns, label, emit_event_extra); \
    }
 
 /* u_trace_context_process dispatches trace events to a background thread
  * (traceq) for processing.  These callbacks are called from traceq.
  */
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(cmdbuf, CMDBUF)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(meta, META)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(render, RENDER)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(dispatch, DISPATCH)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(dispatch_indirect, DISPATCH)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(barrier, BARRIER)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(flush_cache, FLUSH_CACHE)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync32_add, SYNC_ADD)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync64_add, SYNC_ADD)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync32_wait, SYNC_WAIT)
-PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync64_wait, SYNC_WAIT)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(cmdbuf, CMDBUF, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(meta, META, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(render, RENDER, payload->label)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(dispatch, DISPATCH, payload->label)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(dispatch_indirect, DISPATCH, payload->label)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(barrier, BARRIER, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(flush_cache, FLUSH_CACHE, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync32_add, SYNC_ADD, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync64_add, SYNC_ADD, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync32_wait, SYNC_WAIT, NULL)
+PANVK_UTRACE_PERFETTO_PROCESS_EVENT(sync64_wait, SYNC_WAIT, NULL)
 
 static uint32_t
 get_gpu_clock_id(void)

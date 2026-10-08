@@ -139,6 +139,8 @@ panvk_utrace_record_ts(struct u_trace *ut, void *cs, void *timestamps,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct cs_builder *b = get_builder(cmdbuf, ut);
    const struct panvk_utrace_buf *buf = timestamps;
+   if (!buf)
+      return false;
    const uint64_t addr = buf->dev + offset_B;
 
    cmd_write_timestamp(dev, b, addr, *cs_info->ts_async_op);
@@ -156,6 +158,8 @@ panvk_utrace_capture_data(struct u_trace *ut, void *cs, void *dst_buffer,
    struct panvk_utrace_cs_info *cs_info = cs;
    struct cs_builder *b = get_builder(cs_info->cmdbuf, ut);
    const struct panvk_utrace_buf *dst_buf = dst_buffer;
+   if (!dst_buf)
+      return;
    const uint64_t dst_addr = dst_buf->dev + dst_offset_B;
    const uint64_t src_addr = src_offset_B;
 
@@ -209,6 +213,8 @@ panvk_per_arch(utrace_context_init)(struct panvk_device *dev)
 void
 panvk_per_arch(utrace_context_fini)(struct panvk_device *dev)
 {
+   if (dev->utrace.utctx.queue.jobs)
+      util_queue_finish(&dev->utrace.utctx.queue);
    u_trace_context_fini(&dev->utrace.utctx);
 
    simple_mtx_lock(&dev->utrace.copy_buf_heap_lock);

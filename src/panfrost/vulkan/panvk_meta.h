@@ -27,6 +27,7 @@ enum panvk_meta_object_key_type {
    PANVK_META_OBJECT_KEY_BVH_COPY,
    PANVK_META_OBJECT_KEY_BVH_UPDATE,
    PANVK_META_OBJECT_KEY_BC_DECODE,
+   PANVK_META_OBJECT_KEY_COPY_BLOCKS,
 };
 
 static inline VkFormat

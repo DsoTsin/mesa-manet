@@ -12187,6 +12187,20 @@ typedef void* <name>MTLSharedEvent_id</name>;
             <member limittype="noauto"><type>uint32_t</type>               <name>deviceIpVersionRelease</name></member>
             <member limittype="noauto"><type>uint32_t</type>               <name>deviceIpVersionRevision</name></member>
         </type>
+        <type category="struct" name="VkDynamicCacheMemoryRegionMTK">
+            <member><type>VkStructureType</type> <name>sType</name></member>
+            <member optional="true">const <type>void</type>* <name>pNext</name></member>
+            <member><type>uint32_t</type> <name>cacheKind</name></member>
+            <member><type>uint64_t</type> <name>reserved</name>[2]</member>
+            <member><type>VkFlags</type> <name>groupMask</name></member>
+            <member><type>uint32_t</type> <name>policy</name></member>
+        </type>
+        <type category="struct" name="VkDynamicCacheMemoryInfoMTK">
+            <member><type>VkStructureType</type> <name>sType</name></member>
+            <member optional="true">const <type>void</type>* <name>pNext</name></member>
+            <member><type>uint32_t</type> <name>cacheCount</name></member>
+            <member len="cacheCount">const <type>VkDynamicCacheMemoryRegionMTK</type>* <name>pCaches</name></member>
+        </type>
     </types>
 
 
@@ -19759,6 +19773,15 @@ endif::VK_KHR_internally_synchronized_queues[]
             <param>const <type>VkDataGraphOpticalFlowImageFormatInfoARM</type>* <name>pOpticalFlowImageFormatInfo</name></param>
             <param optional="false,true"><type>uint32_t</type>*                 <name>pFormatCount</name></param>
             <param optional="true" len="pFormatCount"><type>VkDataGraphOpticalFlowImageFormatPropertiesARM</type>* <name>pImageFormatProperties</name></param>
+        </command>
+        <command queues="graphics,compute" renderpass="both" cmdbufferlevel="primary,secondary">
+            <proto><type>void</type> <name>vkCmdSetDynamicCacheMemoryMTK</name></proto>
+            <param><type>VkCommandBuffer</type> <name>commandBuffer</name></param>
+            <param>const <type>VkDynamicCacheMemoryInfoMTK</type>* <name>pInfo</name></param>
+        </command>
+        <command queues="graphics,compute" renderpass="both" cmdbufferlevel="primary,secondary">
+            <proto><type>void</type> <name>vkCmdSetDynamicCacheAccessMTK</name></proto>
+            <param><type>VkCommandBuffer</type> <name>commandBuffer</name></param>
         </command>
     </commands>
 
@@ -32611,6 +32634,16 @@ endif::VK_KHR_internally_synchronized_queues[]
             <require>
                 <enum value="0" name="VK_KHR_EXTENSION_716_SPEC_VERSION" />
                 <enum value="&quot;VK_KHR_extension_716&quot;" name="VK_KHR_EXTENSION_716_EXTENSION_NAME" />
+            </require>
+        </extension>
+        <extension name="VK_MTK_dynamic_cache_memory" number="0" type="device" author="MTK" supported="vulkan">
+            <require>
+                <enum value="1" name="VK_MTK_DYNAMIC_CACHE_MEMORY_SPEC_VERSION"/>
+                <enum value='"VK_MTK_dynamic_cache_memory"' name="VK_MTK_DYNAMIC_CACHE_MEMORY_EXTENSION_NAME"/>
+                <type name="VkDynamicCacheMemoryRegionMTK"/>
+                <type name="VkDynamicCacheMemoryInfoMTK"/>
+                <command name="vkCmdSetDynamicCacheMemoryMTK"/>
+                <command name="vkCmdSetDynamicCacheAccessMTK"/>
             </require>
         </extension>
     </extensions>

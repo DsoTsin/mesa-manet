@@ -221,7 +221,10 @@ shader_desc_idx(uint32_t set, uint32_t binding,
 #else
    /* Dynamic buffers are pushed directly in the resource tables, after all
     * sets. */
-   idx = pan_res_handle(0, ctx->desc_info.dyn_bufs_start + idx);
+   if (PAN_ARCH >= 15)
+      idx = pan_res_handle(PANVK_DYN_BUF_TABLE, idx);
+   else
+      idx = pan_res_handle(0, ctx->desc_info.dyn_bufs_start + idx);
 #endif
 
    return idx;

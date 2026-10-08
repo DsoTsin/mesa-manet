@@ -356,7 +356,12 @@ impl Foldable for OpBitRev {
 /// Performs blending
 #[repr(C)]
 #[derive(Clone, Opcode)]
-#[variants(color_type in [V4F16, V4F32, V4S16, V4S32, V4U16, V4U32, V4A32])]
+#[variants(color_type in [
+    F16, V2F16, V3F16, V4F16, F32, V2F32, V3F32, V4F32,
+    S16, V2S16, V3S16, V4S16, S32, V2S32, V3S32, V4S32,
+    U16, V2U16, V3U16, V4U16, U32, V2U32, V3U32, V4U32,
+    A32, V2A32, V3A32, V4A32,
+])]
 pub struct OpBlend {
     pub color_type: DataType,
 

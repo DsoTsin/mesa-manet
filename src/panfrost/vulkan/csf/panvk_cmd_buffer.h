@@ -17,11 +17,13 @@
 #include "genxml/cs_builder.h"
 
 #include "panvk_cmd_desc_state.h"
+#include "panvk_dynamic_cache.h"
 #include "panvk_cmd_dispatch.h"
 #include "panvk_cmd_draw.h"
 #include "panvk_cmd_push_constant.h"
 #include "panvk_cmd_ray_tracing.h"
 #include "panvk_queue.h"
+#include "panvk_utrace.h"
 
 #include "vk_command_buffer.h"
 #include "vk_synchronization.h"
@@ -622,6 +624,13 @@ struct panvk_cond_render_state {
    enum mali_cs_condition exec_cond;
 };
 
+struct panvk_cache_pass {
+   struct list_head link;
+   struct panvk_cache_policy policy;
+   uint16_t id;
+   bool compute;
+};
+
 struct panvk_cmd_buffer {
    struct vk_command_buffer vk;
    VkCommandBufferUsageFlags flags;
@@ -637,6 +646,9 @@ struct panvk_cmd_buffer {
 
    struct list_head push_sets;
    struct list_head dgc_records;
+   struct list_head cache_passes;
+   struct panvk_cache_policy cache_pending;
+   uint32_t cache_pass_count;
 
    struct {
       struct panvk_pilot_batch vt;
@@ -647,6 +659,9 @@ struct panvk_cmd_buffer {
 
    struct {
       struct u_trace uts[PANVK_SUBQUEUE_COUNT];
+      uint32_t pass_index[PANVK_SUBQUEUE_COUNT];
+      uint32_t pass_depth[PANVK_SUBQUEUE_COUNT];
+      struct panvk_utrace_pass passes[PANVK_SUBQUEUE_COUNT][8];
    } utrace;
 
    struct {
@@ -768,6 +783,10 @@ panvk_cache_flush_is_nop(const struct panvk_cache_flush_info *cache_flush)
 }
 
 extern const struct vk_command_buffer_ops panvk_per_arch(cmd_buffer_ops);
+
+void panvk_per_arch(cmd_cache_reset)(struct panvk_cmd_buffer *cmdbuf);
+void panvk_per_arch(cmd_cache_begin)(struct panvk_cmd_buffer *cmdbuf, bool compute);
+void panvk_per_arch(cmd_cache_end)(struct panvk_cmd_buffer *cmdbuf, bool compute);
 
 void panvk_per_arch(cmd_fb_barrier)(struct panvk_cmd_buffer *cmdbuf);
 

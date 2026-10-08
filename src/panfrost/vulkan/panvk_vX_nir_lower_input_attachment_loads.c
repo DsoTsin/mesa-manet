@@ -70,12 +70,14 @@ readonly_color_mask(nir_shader *nir,
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, collect_frag_writes,
             nir_metadata_all, &out_mask);
 
+   uint32_t written_rt_mask = 0;
    for (uint32_t i = 0; i < ARRAY_SIZE(state->cal->color_map); i++) {
-      if (state->ial->color_map[i] == MESA_VK_ATTACHMENT_UNUSED)
-         out_mask &= ~BITFIELD_BIT(i);
+      const uint8_t loc = state->cal->color_map[i];
+      if (loc != MESA_VK_ATTACHMENT_UNUSED && (out_mask & BITFIELD_BIT(loc)))
+         written_rt_mask |= BITFIELD_BIT(i);
    }
 
-   return in_mask & ~out_mask;
+   return in_mask & ~written_rt_mask;
 }
 
 static bool

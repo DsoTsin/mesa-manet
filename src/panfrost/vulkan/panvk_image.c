@@ -183,6 +183,10 @@ panvk_image_can_use_mod(struct panvk_image *image,
    if (forced_linear || image->bc_emu_format != VK_FORMAT_UNDEFINED)
       return mod == DRM_FORMAT_MOD_LINEAR;
 
+   if (image->block_copies && mod != DRM_FORMAT_MOD_LINEAR &&
+       mod != DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED)
+      return false;
+
    assert(image->vk.tiling == VK_IMAGE_TILING_OPTIMAL ||
           image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT);
 
@@ -387,7 +391,7 @@ strict_import(struct panvk_image *image)
 
 static struct pan_image_props
 get_pan_image_props(const struct vk_image *image, enum pipe_format pfmt,
-                    uint32_t plane, bool has_crc)
+                    uint32_t plane, bool has_crc, bool has_afbc_crc)
 {
    return (struct pan_image_props){
       .modifier = image->drm_format_mod,
@@ -405,6 +409,7 @@ get_pan_image_props(const struct vk_image *image, enum pipe_format pfmt,
       .nr_samples = image->samples,
       .nr_slices = image->mip_levels,
       .crc = plane == 0 && has_crc,
+      .afbc_crc = plane == 0 && has_crc && has_afbc_crc,
    };
 }
 
@@ -481,13 +486,15 @@ panvk_image_init_layouts(struct panvk_image *image,
       pan_mod_get_handler(arch, image->vk.drm_format_mod);
    const bool should_checksum =
       arch >= 10 && panvk_should_checksum(image, pCreateInfo);
+   const bool has_afbc_crc = arch == 15 && phys_dev->kbase_node_path[0];
    image->crc_safe_external = should_checksum && wsi_info != NULL;
 
    /* initialize pan_image props and mod_handler */
    if (panvk_image_use_yuv_tex(arch, image->vk.format)) {
       const enum pipe_format pfmt = vk_format_to_pipe_format(image->vk.format);
       image->planes[0].image = (struct pan_image){
-         .props = get_pan_image_props(&image->vk, pfmt, 0, should_checksum),
+         .props = get_pan_image_props(&image->vk, pfmt, 0, should_checksum,
+                                      has_afbc_crc),
          .mod_handler = mod_handler,
       };
    } else {
@@ -496,7 +503,8 @@ panvk_image_init_layouts(struct panvk_image *image,
             select_plane_pfmt(image, image->vk.drm_format_mod, plane);
          image->planes[plane].image = (struct pan_image){
             .props =
-               get_pan_image_props(&image->vk, pfmt, plane, should_checksum),
+               get_pan_image_props(&image->vk, pfmt, plane, should_checksum,
+                                    has_afbc_crc),
             .mod_handler = mod_handler,
          };
       }
@@ -511,6 +519,7 @@ panvk_image_init_layouts(struct panvk_image *image,
       };
 
       props->crc = false;
+      props->afbc_crc = false;
       props->modifier = DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED;
       if (pan_image_test_props(&phys_dev->kmod.dev->props, props, &emu_usage) ==
           PAN_MOD_NOT_SUPPORTED)
@@ -601,7 +610,7 @@ panvk_image_pre_mod_select_meta_adjustments(struct panvk_image *image)
 
    if ((image->vk.usage &
         (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) &&
-       vk_format_is_compressed(image->vk.format)) {
+       vk_format_is_compressed(image->vk.format) && !image->block_copies) {
       /* We need to be able to create RGBA views of compressed formats for
        * vk_meta copies.
        *
@@ -623,7 +632,7 @@ panvk_image_post_mod_select_meta_adjustments(struct panvk_image *image)
     * to allow vkmeta to take the compute based copying path. */
    if ((image->vk.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) &&
        (aspects & VK_IMAGE_ASPECT_COLOR_BIT) &&
-       !drm_is_afbc(image->vk.drm_format_mod)) {
+       !drm_is_afbc(image->vk.drm_format_mod) && !image->block_copies) {
       image->vk.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
    }
 }
@@ -677,6 +686,27 @@ panvk_image_get_sparse_size(const struct panvk_image *image)
    return ALIGN_POT(image_size, page_size);
 }
 
+static bool
+panvk_image_use_block_copies(const struct panvk_physical_device *phys_dev,
+                             const struct panvk_image *image)
+{
+   const VkImageUsageFlags transfer =
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+   const VkImageCreateFlags incompatible =
+      VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT |
+      VK_IMAGE_CREATE_SPARSE_BINDING_BIT;
+
+   return pan_arch(phys_dev->kmod.dev->props.gpu_id) >= 10 &&
+          image->bc_emu_format == VK_FORMAT_UNDEFINED &&
+          vk_format_is_compressed(image->vk.format) &&
+          util_format_get_blockdepth(
+             vk_format_to_pipe_format(image->vk.format)) == 1 &&
+          image->vk.image_type == VK_IMAGE_TYPE_2D &&
+          image->vk.tiling == VK_IMAGE_TILING_OPTIMAL &&
+          (image->vk.usage & transfer) &&
+          !(image->vk.create_flags & incompatible);
+}
+
 VkResult
 panvk_image_init(struct panvk_image *image,
                  const VkImageCreateInfo *pCreateInfo)
@@ -687,6 +717,7 @@ panvk_image_init(struct panvk_image *image,
    image->bc_emu_format = panvk_bc_emulated(phys_dev, image->vk.format)
                              ? panvk_bc_emu_format(image->vk.format)
                              : VK_FORMAT_UNDEFINED;
+   image->block_copies = panvk_image_use_block_copies(phys_dev, image);
 
    /* Needs to happen early for some panvk_image_ helpers to work. */
    image->plane_count = get_plane_count(image);

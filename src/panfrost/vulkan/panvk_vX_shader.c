@@ -1058,6 +1058,15 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
    pan_preprocess_nir(nir, pdev->kmod.dev->props.gpu_id);
 }
 
+static bool
+fs_alpha_to_coverage_disabled(const struct vk_graphics_pipeline_state *state)
+{
+   return state != NULL && state->ms != NULL &&
+          !BITSET_TEST(state->dynamic,
+                       MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE) &&
+          !state->ms->alpha_to_coverage_enable;
+}
+
 #if PAN_ARCH >= 14
 static bool
 fs_may_use_vrs(const struct vk_features *features,
@@ -1122,10 +1131,15 @@ panvk_hash_state(struct vk_physical_device *device,
       if (state->ial)
          _mesa_blake3_update(&blake3_ctx, state->ial, sizeof(*state->ial));
 
+      if (state->ial && state->cal)
+         _mesa_blake3_update(&blake3_ctx, state->cal, sizeof(*state->cal));
+
       if (stages & VK_SHADER_STAGE_FRAGMENT_BIT) {
          struct panvk_blend_static_key blend_key;
          panvk_per_arch(blend_static_key_init)(&blend_key, state);
          _mesa_blake3_update(&blake3_ctx, &blend_key, sizeof(blend_key));
+         bool a2c_off = fs_alpha_to_coverage_disabled(state);
+         _mesa_blake3_update(&blake3_ctx, &a2c_off, sizeof(a2c_off));
 #if PAN_ARCH >= 14
          bool vrs = fs_may_use_vrs(enabled_features, state);
          _mesa_blake3_update(&blake3_ctx, &vrs, sizeof(vrs));
@@ -2913,8 +2927,17 @@ panvk_compile_shader_impl(struct panvk_device *dev,
        * to a driver-provided FAU instead of using the blend descriptors
        * uploaded by the hardware.  See panvk_vX_blend.c for details.
        */
-      NIR_PASS(_, nir, pan_nir_lower_fs_outputs, false,
-               0 /* fragcolor_nr_cbufs */);
+      nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+      const uint64_t atest_outputs = BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK) |
+                                     BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
+                                     BITFIELD64_BIT(FRAG_RESULT_STENCIL);
+      const bool skip_atest = fs_alpha_to_coverage_disabled(state) &&
+                              !nir->info.fs.uses_discard &&
+                              !(nir->info.outputs_written & atest_outputs);
+      NIR_PASS(_, nir, pan_nir_lower_fs_outputs, skip_atest,
+               0 /* fragcolor_nr_cbufs */,
+               PAN_ARCH >= 15 ? inputs.fixed_function_blend : 0,
+               PAN_ARCH >= 15 && fs_alpha_to_coverage_disabled(state));
 
       variant->own_bin = true;
 
@@ -3446,6 +3469,13 @@ compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
       }
    }
 
+   if (shader_count == 2 && infos[0].stage == MESA_SHADER_VERTEX &&
+       infos[1].stage == MESA_SHADER_FRAGMENT &&
+       infos[0].next_stage_mask == VK_SHADER_STAGE_FRAGMENT_BIT &&
+       (infos[0].flags & VK_SHADER_CREATE_LINK_STAGE_BIT_EXT) &&
+       (infos[1].flags & VK_SHADER_CREATE_LINK_STAGE_BIT_EXT))
+      pan_nir_link_varyings(infos[0].nir, infos[1].nir);
+
    /* If we are linking VS and FS, we can use the static interpolation
     * qualifiers from the FS in the VS.  Vulkan runtime passes us shaders in
     * stage order, so the FS will always be last if it exists.
@@ -3505,9 +3535,6 @@ compile_shaders(struct vk_device *vk_dev, uint32_t shader_count,
       /* Clean up NIR for the current shader */
       ralloc_free(infos[i].nir);
    }
-
-   /* TODO: If we get multiple shaders here, we can perform part of the link
-    * logic at compile time. */
 
    return VK_SUCCESS;
 

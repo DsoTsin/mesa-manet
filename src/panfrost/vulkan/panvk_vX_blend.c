@@ -262,13 +262,16 @@ panvk_per_arch(blend_emit_descs)(struct panvk_cmd_buffer *cmdbuf,
       rt_loc[i] = loc;
       loc_rt[loc] = i;
 
+      const uint8_t cb_idx = render->merged_subpasses ? loc : i;
+
       if (panvk_per_arch(blend_skips_rt)(
-             bs.logicop_enable, bs.logicop_func, cb->color_write_enables, i,
-             color_attachment_formats[i], cb->attachments[i].write_mask))
+             bs.logicop_enable, bs.logicop_func, cb->color_write_enables,
+             cb_idx, color_attachment_formats[i],
+             cb->attachments[cb_idx].write_mask))
          continue;
 
       panvk_per_arch(blend_fill_rt)(
-         rt, &cb->attachments[i],
+         rt, &cb->attachments[cb_idx],
          vk_format_to_pipe_format(color_attachment_formats[i]),
          color_attachment_samples[i], bs.constants);
 

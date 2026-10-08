@@ -135,7 +135,6 @@ panvk_per_arch(blend_static_key_init)(
       MESA_VK_DYNAMIC_CB_BLEND_ENABLES,
       MESA_VK_DYNAMIC_CB_BLEND_EQUATIONS,
       MESA_VK_DYNAMIC_CB_WRITE_MASKS,
-      MESA_VK_DYNAMIC_CB_BLEND_ADVANCED,
       MESA_VK_DYNAMIC_MS_ALPHA_TO_ONE_ENABLE,
       MESA_VK_DYNAMIC_COLOR_ATTACHMENT_MAP,
    };
@@ -145,17 +144,28 @@ panvk_per_arch(blend_static_key_init)(
    }
 
    const struct vk_color_blend_state *cb = state->cb;
+   const bool by_location = state->rp->merged_subpass;
    key->valid = true;
    key->alpha_to_one = state->ms->alpha_to_one_enable;
    key->logic_op_enable = cb->logic_op_enable;
    key->logic_op = cb->logic_op_enable ? cb->logic_op : 0;
    key->rt_count = MIN2(state->rp->color_attachment_count, MESA_VK_MAX_COLOR_ATTACHMENTS);
-   key->color_write_enables = cb->color_write_enables;
+   key->color_write_enables = by_location ? 0 : cb->color_write_enables;
 
    for (uint8_t i = 0; i < key->rt_count; i++) {
-      const struct vk_color_blend_attachment_state *att = &cb->attachments[i];
-      key->color_map[i] = state->cal->color_map[i];
+      const uint8_t loc = state->cal->color_map[i];
+      key->color_map[i] = loc;
       key->formats[i] = state->rp->color_attachment_formats[i];
+
+      if (by_location) {
+         if (loc >= MESA_VK_MAX_COLOR_ATTACHMENTS)
+            continue;
+         if (cb->color_write_enables & BITFIELD_BIT(loc))
+            key->color_write_enables |= BITFIELD_BIT(i);
+      }
+
+      const struct vk_color_blend_attachment_state *att =
+         &cb->attachments[by_location ? loc : i];
       key->attachments[i].blend_enable = att->blend_enable;
       key->attachments[i].src_color_blend_factor = att->src_color_blend_factor;
       key->attachments[i].dst_color_blend_factor = att->dst_color_blend_factor;

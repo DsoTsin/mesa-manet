@@ -40,6 +40,7 @@ struct vk_command_pool;
 struct vk_framebuffer;
 struct vk_image_view;
 struct vk_render_pass;
+struct vk_subpass;
 
 struct vk_attachment_view_state {
    VkImageLayout layout;
@@ -183,6 +184,10 @@ struct vk_command_buffer {
    VkRenderPassSampleLocationsBeginInfoEXT *pass_sample_locations;
 
    VkRenderPassPerformanceCountersByRegionBeginInfoARM *pass_perf_counters;
+
+   const struct vk_subpass *merged_subpass;
+   uint32_t merged_rendering_first;
+   uint32_t merged_rendering_last;
 
    /**
     * Bitmask of shader stages bound via a vk_pipeline since the last call to

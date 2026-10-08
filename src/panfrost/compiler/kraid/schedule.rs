@@ -205,6 +205,18 @@ pub(crate) fn pressure_schedule(
     b: &BasicBlock,
     live_out: &BitSet<u32>,
 ) -> (Vec<usize>, u32) {
+    let breadth = pressure_schedule_order(model, ssa_alloc, b, live_out, false);
+    let depth = pressure_schedule_order(model, ssa_alloc, b, live_out, true);
+    if depth.1 < breadth.1 { depth } else { breadth }
+}
+
+fn pressure_schedule_order(
+    model: &dyn Model,
+    ssa_alloc: &SSAValueAllocator,
+    b: &BasicBlock,
+    live_out: &BitSet<u32>,
+    depth_first: bool,
+) -> (Vec<usize>, u32) {
     let body_range = b.body_ip_range();
 
     let mut deps = DepTracker::for_block(b, body_range.clone());
@@ -233,24 +245,35 @@ pub(crate) fn pressure_schedule(
         })
         .collect();
 
+    let mut live_since: FxHashMap<SSAValue, usize> = Default::default();
     loop {
         let mut best_ip = usize::MAX;
         let mut best_pressure = i32::MAX;
+        let mut best_since = 0;
         for ip in deps.ready() {
             let mut rel_pressure = 0_i32;
+            let mut since = 0;
             for ssa in b.instrs[ip].iter_ssa_defs() {
                 if live.contains(ssa) {
                     rel_pressure -= i32::from(ssa.bytes());
                 }
+                since = since.max(live_since.get(ssa).copied().unwrap_or(0));
             }
             for ssa in b.instrs[ip].iter_ssa_uses() {
                 if !live.contains(ssa) {
                     rel_pressure += i32::from(ssa.bytes());
                 }
             }
-            if rel_pressure <= best_pressure {
+            let better = if depth_first {
+                rel_pressure < best_pressure
+                    || (rel_pressure == best_pressure && since >= best_since)
+            } else {
+                rel_pressure <= best_pressure
+            };
+            if better {
                 best_ip = ip;
                 best_pressure = rel_pressure;
+                best_since = since;
             }
         }
 
@@ -262,6 +285,14 @@ pub(crate) fn pressure_schedule(
         assert!(schedule[best_ip] == usize::MAX);
         end_ip -= 1;
         schedule[best_ip] = end_ip;
+
+        if depth_first {
+            for ssa in b.instrs[best_ip].iter_ssa_uses() {
+                if !live.contains(ssa) {
+                    live_since.insert(*ssa, body_range.end - end_ip);
+                }
+            }
+        }
 
         let bytes = live.insert_instr_bottom_up(model, &b.instrs[best_ip]);
         max_live = max_live.max(bytes);

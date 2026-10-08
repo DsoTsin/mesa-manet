@@ -47,6 +47,13 @@ int kbase_kmod_csf_group_create(struct pan_kmod_dev *dev,
                                 uint64_t dvs_buf,
                                 bool compute_priority,
                                 uint32_t *group_handle);
+int kbase_kmod_csf_group_create_with_uid(struct pan_kmod_dev *dev,
+                                uint32_t cs_queue_count,
+                                bool tiler_oom_handler,
+                                uint32_t max_cores,
+                                uint64_t dvs_buf,
+                                bool compute_priority,
+                                uint32_t *group_handle, uint32_t *group_uid);
 void kbase_kmod_csf_group_destroy(struct pan_kmod_dev *dev,
                                   uint32_t group_handle);
 

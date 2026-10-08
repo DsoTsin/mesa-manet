@@ -233,8 +233,12 @@ lower_image_store(nir_builder *b, nir_intrinsic_instr *intr,
       }
    }
 
+   enum gl_access_qualifier access =
+      pan_arch(ctx->gpu_id) >= 9 ? ACCESS_ESTREAM_PAN : 0;
+
    nir_instr_remove(&intr->instr);
-   nir_store_global_cvt_pan(b, data, addr, cvt, .src_type = src_type);
+   nir_store_global_cvt_pan(b, data, addr, cvt, .src_type = src_type,
+                            .access = access);
    return true;
 }
 

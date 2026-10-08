@@ -13,6 +13,7 @@ struct pan_nir_fs_outputs {
    nir_variable *coverage;
    nir_variable *color[2];
    nir_variable *data[8][2];
+   nir_component_mask_t data_written[8];
 };
 
 static bool
@@ -61,6 +62,9 @@ gather_output_intrin(nir_builder *b, nir_intrinsic_instr *intrin, void *_data)
       assert(io.location <= FRAG_RESULT_DATA7);
       unsigned slot = io.location - FRAG_RESULT_DATA0;
       var = &out->data[slot][io.dual_source_blend_index];
+      if (!io.dual_source_blend_index)
+         out->data_written[slot] |= nir_intrinsic_write_mask(intrin)
+                                    << nir_intrinsic_component(intrin);
       num_components = 4;
       name = "data_tmp";
       break;
@@ -87,9 +91,63 @@ gather_output_intrin(nir_builder *b, nir_intrinsic_instr *intrin, void *_data)
    return true;
 }
 
+static bool
+is_discard(nir_instr *instr)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   switch (nir_instr_as_intrinsic(instr)->intrinsic) {
+   case nir_intrinsic_demote:
+   case nir_intrinsic_demote_if:
+   case nir_intrinsic_demote_samples:
+   case nir_intrinsic_terminate:
+   case nir_intrinsic_terminate_if:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static bool
+cf_node_has_discard(nir_cf_node *node)
+{
+   nir_foreach_block_in_cf_node(block, node) {
+      nir_foreach_instr(instr, block) {
+         if (is_discard(instr))
+            return true;
+      }
+   }
+   return false;
+}
+
+static nir_cursor
+cursor_after_discards(nir_function_impl *impl)
+{
+   nir_cf_node *last = NULL;
+   foreach_list_typed(nir_cf_node, node, node, &impl->body) {
+      if (cf_node_has_discard(node))
+         last = node;
+   }
+
+   if (!last)
+      return nir_before_impl(impl);
+
+   if (last->type != nir_cf_node_block)
+      return nir_after_cf_node_and_phis(last);
+
+   nir_instr *last_discard = NULL;
+   nir_foreach_instr(instr, nir_cf_node_as_block(last)) {
+      if (is_discard(instr))
+         last_discard = instr;
+   }
+   return nir_after_instr(last_discard);
+}
+
 bool
 pan_nir_lower_fs_outputs(nir_shader *shader, bool skip_atest,
-                         unsigned fragcolor_nr_cbufs)
+                         unsigned fragcolor_nr_cbufs, uint8_t trim_color_locs,
+                         bool early_atest)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
 
@@ -137,7 +195,9 @@ pan_nir_lower_fs_outputs(nir_shader *shader, bool skip_atest,
     *    zero"
     */
    nir_def *alpha;
-   if (color0 && glsl_type_is_float_16_32(color0->type))
+   if (early_atest)
+      alpha = nir_imm_float(b, 0.0f);
+   else if (color0 && glsl_type_is_float_16_32(color0->type))
       alpha = nir_channel(b, nir_load_var(b, color0), 3);
    else
       alpha = nir_imm_float(b, 1.0f);
@@ -210,10 +270,65 @@ pan_nir_lower_fs_outputs(nir_shader *shader, bool skip_atest,
          if (out.color[0])
             break;
       } else {
+         if (!out.color[0] && (trim_color_locs & BITFIELD_BIT(i)) &&
+             out.data_written[i]) {
+            unsigned comps = util_last_bit(out.data_written[i]);
+            if (color0->bit_size == 16)
+               comps = MAX2(comps, 2);
+            color0 = nir_trim_vector(b, color0, comps);
+         }
+
          nir_blend_pan(b, coverage, desc, color0, .src_type = color0_type,
                        .io_semantics.location = FRAG_RESULT_DATA0 + i);
       }
    }
+
+   return nir_progress(true, impl, nir_metadata_control_flow);
+}
+
+bool
+pan_nir_move_atest_after_discards(nir_shader *shader)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   nir_intrinsic_instr *atest = NULL;
+
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic == nir_intrinsic_zs_emit_pan)
+            return false;
+         if (intr->intrinsic != nir_intrinsic_atest_pan)
+            continue;
+         if (atest)
+            return false;
+         atest = intr;
+      }
+   }
+
+   if (!atest || !nir_src_is_const(atest->src[1]))
+      return false;
+
+   nir_instr *cov = nir_def_instr(atest->src[0].ssa);
+   if (cov->type != nir_instr_type_intrinsic ||
+       nir_instr_as_intrinsic(cov)->intrinsic !=
+          nir_intrinsic_load_cumulative_coverage_pan)
+      return false;
+
+   nir_cursor cursor = cursor_after_discards(impl);
+   if (cursor.option == nir_cursor_after_instr &&
+       (cursor.instr == &atest->instr ||
+        nir_instr_next(cursor.instr) == cov))
+      return false;
+
+   float alpha = nir_src_as_float(atest->src[1]);
+   nir_builder b = nir_builder_at(cursor);
+   nir_def *moved = nir_atest_pan(&b, nir_load_cumulative_coverage_pan(&b),
+                                  nir_imm_float(&b, alpha));
+   nir_def_rewrite_uses(&atest->def, moved);
+   nir_instr_remove(&atest->instr);
 
    return nir_progress(true, impl, nir_metadata_control_flow);
 }

@@ -167,6 +167,21 @@ pub extern "C" fn kbase_kmod_csf_group_create(
     compute_priority: bool,
     group_handle: *mut u32,
 ) -> c_int {
+    kbase_kmod_csf_group_create_with_uid(dev, cs_queue_count, tiler_oom_handler,
+        max_cores, dvs_buf, compute_priority, group_handle, std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kbase_kmod_csf_group_create_with_uid(
+    dev: *mut KmodDev,
+    cs_queue_count: u32,
+    tiler_oom_handler: bool,
+    max_cores: u32,
+    dvs_buf: u64,
+    compute_priority: bool,
+    group_handle: *mut u32,
+    group_uid: *mut u32,
+) -> c_int {
     let d = unsafe { Dev::get(dev) };
     let cores = if max_cores == 0 {
         64
@@ -220,15 +235,21 @@ pub extern "C" fn kbase_kmod_csf_group_create(
     }
 
     for (req, create) in attempts {
-        match d.inout::<_, u8>(req, create) {
-            Ok(handle) => {
+        match d.inout::<_, GroupCreateOutput>(req, create) {
+            Ok(output) => {
+                let handle = output.handle;
                 logd!(
                     "created CSF group {handle}, DVS buffer {dvs_buf:#x}, \
                      compute priority {}/{}",
                     create.comp_pri_threshold,
                     create.comp_pri_ratio
                 );
-                unsafe { group_handle.write(handle.into()) };
+                unsafe {
+                    group_handle.write(handle.into());
+                    if !group_uid.is_null() {
+                        group_uid.write(output.uid);
+                    }
+                };
                 return 0;
             }
             Err(e) => logw!("CS_QUEUE_GROUP_CREATE ({req:#x}) failed: {e}"),

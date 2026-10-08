@@ -77,6 +77,9 @@ panvk_per_arch(get_physical_device_extensions)(
    bool has_gralloc = vk_android_get_ugralloc() != NULL;
 
    *ext = (struct vk_device_extension_table){
+      .MTK_dynamic_cache_memory = PAN_ARCH == 15 &&
+         device->kbase_node_path[0] && sizeof(void *) == 8 &&
+         access("/dev/gpu_pdma", R_OK | W_OK) == 0,
       .KHR_8bit_storage = true,
       .KHR_16bit_storage = true,
       .KHR_acceleration_structure = PAN_ARCH >= 15,

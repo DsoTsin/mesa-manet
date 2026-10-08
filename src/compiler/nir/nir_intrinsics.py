@@ -1976,7 +1976,7 @@ intrinsic("atest_pan", [1, 1], dest_comp=1, bit_sizes=[32])
 intrinsic("zs_emit_pan", [1, 1, 1], dest_comp=1,
           indices=[FLAGS], bit_sizes=[32])
 # src[] = { coverage, desc, color }
-intrinsic("blend_pan", [1, 1, 4], indices=[IO_SEMANTICS, SRC_TYPE])
+intrinsic("blend_pan", [1, 1, 0], indices=[IO_SEMANTICS, SRC_TYPE])
 # src[] = { coverage, desc, color1, color2 }
 intrinsic("blend2_pan", [1, 1, 4, 4],
           indices=[IO_SEMANTICS, SRC_TYPE, DEST_TYPE])

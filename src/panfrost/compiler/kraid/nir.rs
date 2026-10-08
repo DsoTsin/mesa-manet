@@ -11,9 +11,11 @@ use crate::phi::PhiAllocator;
 use crate::ssa_value::SSAValueAllocator;
 use compiler::bindings::*;
 use compiler::cfg::*;
+use compiler::float16::F16;
 use compiler::nir::*;
 use kraid_bindings::*;
 use rustc_hash::{FxBuildHasher, FxHashMap};
+use std::num::FpCategory;
 
 #[derive(Default)]
 struct BlockLabelMap {
@@ -113,6 +115,36 @@ fn clper_identity(op: nir_op) -> ClperInactiveResult {
         nir_op_imax => ClperInactiveResult::S32Min,
         _ => panic!("Unsupported subgroup reduction op"),
     }
+}
+
+fn f16_exact_consts(src: &nir_src) -> Option<Vec<u16>> {
+    if src.bit_size() != 32 || !src.is_const() {
+        return None;
+    }
+    (0..src.num_components())
+        .map(|c| {
+            let f = f32::from_bits(src.comp_as_uint(c)? as u32);
+            let h = F16::from_f32_rtne(f);
+            let exact = f32::from(h).to_bits() == f.to_bits();
+            let kind = matches!(
+                h.classify(),
+                FpCategory::Zero | FpCategory::Normal | FpCategory::Infinite
+            );
+            (exact && kind).then_some(h.to_bits())
+        })
+        .collect()
+}
+
+fn copy_f16_consts(b: &mut impl SSABuilder, halves: &[u16]) -> Src {
+    let ssa: SSARef = halves
+        .chunks(2)
+        .map(|h| {
+            let lo = u32::from(h[0]);
+            let hi = h.get(1).map_or(0, |&y| u32::from(y));
+            b.copy_i32((lo | (hi << 16)).into())
+        })
+        .collect();
+    ssa.into()
 }
 
 fn emit_reduction_alu(
@@ -3006,9 +3038,24 @@ impl<'a> ShaderFromNir<'a> {
             nir_intrinsic_blend_pan | nir_intrinsic_blend2_pan => {
                 let coverage = self.get_src(&srcs[0]);
                 let descr = self.get_src(&srcs[1]);
-                let color = self.get_src(&srcs[2]);
 
-                assert_eq!(srcs[2].num_components(), 4);
+                let loc = intrin.io_semantics().location() as gl_frag_result;
+                assert!((FRAG_RESULT_DATA0..=FRAG_RESULT_DATA7).contains(&loc));
+                let render_target_idx =
+                    (loc - FRAG_RESULT_DATA0).try_into().unwrap();
+
+                let has_second_color =
+                    intrin.intrinsic == nir_intrinsic_blend2_pan;
+                let fixed_function = !has_second_color
+                    && self.fixed_function_blend & (1_u8 << render_target_idx) != 0;
+                let untyped_color = unsafe {
+                    self.nir.info.__bindgen_anon_1.fs.untyped_color_outputs()
+                };
+                let narrow_color = fixed_function
+                    && !self.info.is_blend
+                    && self.model.arch() >= 15;
+
+                assert!(srcs[2].num_components() == 4 || narrow_color);
 
                 let mut color_type = DataType::get(
                     srcs[2].num_components(),
@@ -3016,18 +3063,28 @@ impl<'a> ShaderFromNir<'a> {
                     srcs[2].bit_size(),
                 );
 
-                let loc = intrin.io_semantics().location() as gl_frag_result;
-                assert!((FRAG_RESULT_DATA0..=FRAG_RESULT_DATA7).contains(&loc));
-                let render_target_idx =
-                    (loc - FRAG_RESULT_DATA0).try_into().unwrap();
+                let f16_color = (narrow_color
+                    && !untyped_color
+                    && color_type.comps() >= 2
+                    && color_type.num_type() == NumericType::Float)
+                    .then(|| f16_exact_consts(&srcs[2]))
+                    .flatten();
+                let color = if let Some(halves) = f16_color {
+                    color_type = DataType::get(
+                        color_type.comps(),
+                        NumericType::Float,
+                        16,
+                    );
+                    copy_f16_consts(b, &halves)
+                } else {
+                    self.get_src(&srcs[2])
+                };
 
                 let old_blend_type = self.info.blend_types
                     [usize::from(render_target_idx)]
                 .replace(color_type);
                 assert!(old_blend_type.is_none());
 
-                let has_second_color =
-                    intrin.intrinsic == nir_intrinsic_blend2_pan;
                 let second_color = if has_second_color {
                     let second_color = self.get_src(&srcs[3]);
                     let second_type = DataType::get(
@@ -3044,9 +3101,6 @@ impl<'a> ShaderFromNir<'a> {
                     0_u32.into()
                 };
 
-                let untyped_color = unsafe {
-                    self.nir.info.__bindgen_anon_1.fs.untyped_color_outputs()
-                };
                 if untyped_color {
                     color_type = DataType::get(
                         color_type.comps(),
@@ -3055,8 +3109,6 @@ impl<'a> ShaderFromNir<'a> {
                     );
                 }
 
-                let fixed_function = !has_second_color
-                    && self.fixed_function_blend & (1_u8 << render_target_idx) != 0;
                 if self.info.is_blend || fixed_function {
                     assert!(second_color.is_zero());
                     if fixed_function {

@@ -456,6 +456,393 @@ vk_subpass_attachment_link_resolve(struct vk_subpass_attachment *att,
    att->resolve = resolve;
 }
 
+struct vk_merge_group {
+   uint32_t first_subpass;
+   uint32_t last_subpass;
+   uint32_t color_count;
+   uint32_t color_attachments[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   uint32_t depth_stencil_attachment;
+};
+
+static int
+vk_merge_group_color_slot(const struct vk_merge_group *group,
+                          uint32_t attachment)
+{
+   for (uint32_t i = 0; i < group->color_count; i++) {
+      if (group->color_attachments[i] == attachment)
+         return i;
+   }
+
+   return -1;
+}
+
+static bool
+vk_merge_group_has_target(const struct vk_merge_group *group,
+                          uint32_t attachment)
+{
+   return vk_merge_group_color_slot(group, attachment) >= 0 ||
+          group->depth_stencil_attachment == attachment;
+}
+
+static bool
+vk_stages_are_framebuffer_space(VkPipelineStageFlags2 src_stages,
+                                VkPipelineStageFlags2 dst_stages)
+{
+   const VkPipelineStageFlags2 fb_stages =
+      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+   return !(src_stages & ~(fb_stages | VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT)) &&
+          !(dst_stages & ~(fb_stages | VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT));
+}
+
+static bool
+vk_subpass_can_be_merged(const struct vk_render_pass *pass,
+                         const struct vk_subpass *subpass)
+{
+   if (subpass->fragment_shading_rate_attachment != NULL ||
+       subpass->mrtss.multisampledRenderToSingleSampledEnable)
+      return false;
+
+   for (uint32_t a = 0; a < subpass->attachment_count; a++) {
+      const uint32_t att = subpass->attachments[a].attachment;
+      if (att == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      const struct vk_render_pass_attachment *rp_att = &pass->attachments[att];
+      if ((rp_att->flags & VK_ATTACHMENT_DESCRIPTION_MAY_ALIAS_BIT) ||
+          rp_att->has_external_format)
+         return false;
+   }
+
+   return true;
+}
+
+static bool
+vk_subpass_has_resolve(const struct vk_subpass *subpass)
+{
+   if (subpass->depth_stencil_resolve_attachment != NULL)
+      return true;
+
+   for (uint32_t c = 0; c < subpass->color_count; c++) {
+      if (subpass->color_attachments[c].resolve != NULL)
+         return true;
+   }
+
+   return false;
+}
+
+static bool
+vk_subpass_inputs_can_be_merged(const struct vk_subpass *subpass,
+                                const struct vk_merge_group *group)
+{
+   for (uint32_t i = 0; i < subpass->input_count; i++) {
+      const struct vk_subpass_attachment *in = &subpass->input_attachments[i];
+      if (in->attachment == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      if (vk_merge_group_color_slot(group, in->attachment) >= 0) {
+         if (in->aspects & ~VK_IMAGE_ASPECT_COLOR_BIT)
+            return false;
+      } else if (in->attachment == group->depth_stencil_attachment) {
+         if (!(in->aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
+                              VK_IMAGE_ASPECT_STENCIL_BIT)))
+            return false;
+      } else {
+         continue;
+      }
+
+      for (uint32_t j = 0; j < i; j++) {
+         const struct vk_subpass_attachment *prev =
+            &subpass->input_attachments[j];
+         if (prev->attachment == in->attachment &&
+             ((prev->aspects & in->aspects) || !prev->aspects || !in->aspects))
+            return false;
+      }
+   }
+
+   return true;
+}
+
+static bool
+vk_merge_group_add_targets(const struct vk_render_pass *pass,
+                           struct vk_merge_group *group,
+                           const struct vk_subpass *subpass)
+{
+   for (uint32_t c = 0; c < subpass->color_count; c++) {
+      const uint32_t att = subpass->color_attachments[c].attachment;
+      if (att == VK_ATTACHMENT_UNUSED ||
+          vk_merge_group_color_slot(group, att) >= 0)
+         continue;
+
+      if (group->color_count >= MESA_VK_MAX_COLOR_ATTACHMENTS)
+         return false;
+
+      group->color_attachments[group->color_count++] = att;
+   }
+
+   if (subpass->depth_stencil_attachment != NULL) {
+      const uint32_t att = subpass->depth_stencil_attachment->attachment;
+      if (group->depth_stencil_attachment != VK_ATTACHMENT_UNUSED &&
+          group->depth_stencil_attachment != att)
+         return false;
+
+      group->depth_stencil_attachment = att;
+   }
+
+   uint32_t samples = 0;
+   for (uint32_t i = 0; i < group->color_count; i++) {
+      const uint32_t att_samples =
+         pass->attachments[group->color_attachments[i]].samples;
+      if (samples != 0 && samples != att_samples)
+         return false;
+
+      samples = att_samples;
+   }
+
+   if (group->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+      const uint32_t att_samples =
+         pass->attachments[group->depth_stencil_attachment].samples;
+      if (samples != 0 && samples != att_samples)
+         return false;
+   }
+
+   return true;
+}
+
+static bool
+vk_merge_group_try_append(const struct vk_render_pass *pass,
+                          struct vk_merge_group *group,
+                          uint32_t subpass_idx)
+{
+   const struct vk_subpass *first = &pass->subpasses[group->first_subpass];
+   const struct vk_subpass *prev = &pass->subpasses[subpass_idx - 1];
+   const struct vk_subpass *subpass = &pass->subpasses[subpass_idx];
+
+   if (!vk_subpass_can_be_merged(pass, subpass) ||
+       subpass->view_mask != first->view_mask ||
+       subpass->legacy_dithering_enabled != first->legacy_dithering_enabled ||
+       vk_subpass_has_resolve(prev))
+      return false;
+
+   struct vk_merge_group merged = *group;
+   merged.last_subpass = subpass_idx;
+
+   if (!vk_merge_group_add_targets(pass, &merged, subpass))
+      return false;
+
+   if (merged.color_count == 0 &&
+       merged.depth_stencil_attachment == VK_ATTACHMENT_UNUSED)
+      return false;
+
+   for (uint32_t s = merged.first_subpass; s <= subpass_idx; s++) {
+      if (!vk_subpass_inputs_can_be_merged(&pass->subpasses[s], &merged))
+         return false;
+   }
+
+   for (uint32_t c = 0; c < subpass->color_count; c++) {
+      const struct vk_subpass_attachment *res =
+         subpass->color_attachments[c].resolve;
+      if (res != NULL && vk_merge_group_has_target(&merged, res->attachment))
+         return false;
+   }
+
+   if (subpass->depth_stencil_resolve_attachment != NULL &&
+       vk_merge_group_has_target(&merged,
+          subpass->depth_stencil_resolve_attachment->attachment))
+      return false;
+
+   for (uint32_t d = 0; d < pass->dependency_count; d++) {
+      const struct vk_subpass_dependency *dep = &pass->dependencies[d];
+      if (dep->dst_subpass != subpass_idx ||
+          dep->src_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->src_subpass < merged.first_subpass ||
+          dep->src_subpass >= subpass_idx)
+         continue;
+
+      if (!(dep->flags & VK_DEPENDENCY_BY_REGION_BIT) ||
+          !vk_stages_are_framebuffer_space(dep->src_stage_mask,
+                                           dep->dst_stage_mask))
+         return false;
+
+      if (pass->is_multiview &&
+          (!(dep->flags & VK_DEPENDENCY_VIEW_LOCAL_BIT) ||
+           dep->view_offset != 0))
+         return false;
+   }
+
+   *group = merged;
+   return true;
+}
+
+static void
+vk_merge_group_finalize(struct vk_render_pass *pass,
+                        const struct vk_merge_group *group)
+{
+   VkImageLayout color_layouts[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+   VkImageLayout stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+   bool depth_layout_found = false;
+
+   for (uint32_t i = 0; i < group->color_count; i++)
+      color_layouts[i] = VK_IMAGE_LAYOUT_MAX_ENUM;
+
+   for (uint32_t s = group->first_subpass; s <= group->last_subpass; s++) {
+      const struct vk_subpass *subpass = &pass->subpasses[s];
+
+      for (uint32_t c = 0; c < subpass->color_count; c++) {
+         const struct vk_subpass_attachment *sp_att =
+            &subpass->color_attachments[c];
+         if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         const int slot = vk_merge_group_color_slot(group, sp_att->attachment);
+         assert(slot >= 0);
+         if (color_layouts[slot] == VK_IMAGE_LAYOUT_MAX_ENUM)
+            color_layouts[slot] = sp_att->layout;
+      }
+
+      if (subpass->depth_stencil_attachment != NULL && !depth_layout_found) {
+         depth_layout = subpass->depth_stencil_attachment->layout;
+         stencil_layout = subpass->depth_stencil_attachment->stencil_layout;
+         depth_layout_found = true;
+      }
+   }
+
+   VkFormat depth_format = VK_FORMAT_UNDEFINED;
+   VkFormat stencil_format = VK_FORMAT_UNDEFINED;
+   VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+   if (group->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+      const struct vk_render_pass_attachment *ds_att =
+         &pass->attachments[group->depth_stencil_attachment];
+      if (ds_att->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+         depth_format = ds_att->format;
+      if (ds_att->aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+         stencil_format = ds_att->format;
+      samples = ds_att->samples;
+   }
+   if (group->color_count > 0)
+      samples = pass->attachments[group->color_attachments[0]].samples;
+
+   for (uint32_t s = group->first_subpass; s <= group->last_subpass; s++) {
+      struct vk_subpass *subpass = &pass->subpasses[s];
+      struct vk_subpass_merge *merge = &subpass->merge;
+
+      merge->first_subpass = group->first_subpass;
+      merge->last_subpass = group->last_subpass;
+      merge->color_count = group->color_count;
+      merge->depth_stencil_attachment = group->depth_stencil_attachment;
+      merge->depth_layout = depth_layout;
+      merge->stencil_layout = stencil_layout;
+
+      for (uint32_t i = 0; i < MESA_VK_MAX_COLOR_ATTACHMENTS; i++) {
+         merge->color_slots[i] = VK_ATTACHMENT_UNUSED;
+         merge->color_locations[i] = VK_ATTACHMENT_UNUSED;
+      }
+
+      for (uint32_t i = 0; i < group->color_count; i++) {
+         const uint32_t att = group->color_attachments[i];
+         merge->color_attachments[i] = att;
+         merge->color_formats[i] = pass->attachments[att].format;
+         merge->color_samples[i] = pass->attachments[att].samples;
+         merge->color_layouts[i] = color_layouts[i];
+      }
+
+      for (uint32_t c = 0; c < subpass->color_count; c++) {
+         const uint32_t att = subpass->color_attachments[c].attachment;
+         if (att == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         const int slot = vk_merge_group_color_slot(group, att);
+         assert(slot >= 0);
+         merge->color_slots[c] = slot;
+         merge->color_locations[slot] = c;
+      }
+
+      merge->cal_info = (VkRenderingAttachmentLocationInfoKHR) {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO_KHR,
+         .colorAttachmentCount = group->color_count,
+         .pColorAttachmentLocations = merge->color_locations,
+      };
+
+      for (uint32_t i = 0; i < MESA_VK_MAX_COLOR_ATTACHMENTS; i++)
+         subpass->ial.colors[i] = VK_ATTACHMENT_UNUSED;
+      subpass->ial.depth = VK_ATTACHMENT_UNUSED;
+      subpass->ial.stencil = VK_ATTACHMENT_UNUSED;
+
+      for (uint32_t j = 0; j < subpass->input_count; j++) {
+         const struct vk_subpass_attachment *in = &subpass->input_attachments[j];
+         if (in->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         const int slot = vk_merge_group_color_slot(group, in->attachment);
+         if (slot >= 0) {
+            subpass->ial.colors[slot] = j;
+         } else if (in->attachment == group->depth_stencil_attachment) {
+            if (in->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+               subpass->ial.depth = j;
+            if (in->aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+               subpass->ial.stencil = j;
+         }
+      }
+
+      subpass->ial.info.colorAttachmentCount = group->color_count;
+
+      subpass->pipeline_info.colorAttachmentCount = group->color_count;
+      subpass->pipeline_info.pColorAttachmentFormats = merge->color_formats;
+
+      subpass->sample_count_info_amd.colorAttachmentCount = group->color_count;
+      subpass->sample_count_info_amd.pColorAttachmentSamples =
+         merge->color_samples;
+
+      subpass->inheritance_info.colorAttachmentCount = group->color_count;
+      subpass->inheritance_info.pColorAttachmentFormats = merge->color_formats;
+      subpass->inheritance_info.depthAttachmentFormat = depth_format;
+      subpass->inheritance_info.stencilAttachmentFormat = stencil_format;
+      subpass->inheritance_info.rasterizationSamples = samples;
+   }
+}
+
+static void
+vk_render_pass_merge_subpasses(const struct vk_device *device,
+                               struct vk_render_pass *pass)
+{
+   for (uint32_t s = 0; s < pass->subpass_count; s++) {
+      pass->subpasses[s].merge.first_subpass = s;
+      pass->subpasses[s].merge.last_subpass = s;
+   }
+
+   if (!device->merge_subpasses || pass->subpass_count < 2 ||
+       pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED)
+      return;
+
+   uint32_t s = 0;
+   while (s < pass->subpass_count) {
+      struct vk_merge_group group = {
+         .first_subpass = s,
+         .last_subpass = s,
+         .depth_stencil_attachment = VK_ATTACHMENT_UNUSED,
+      };
+
+      if (vk_subpass_can_be_merged(pass, &pass->subpasses[s]) &&
+          vk_merge_group_add_targets(pass, &group, &pass->subpasses[s])) {
+         while (group.last_subpass + 1 < pass->subpass_count &&
+                vk_merge_group_try_append(pass, &group,
+                                          group.last_subpass + 1))
+            ;
+      } else {
+         group.last_subpass = s;
+      }
+
+      if (group.last_subpass > group.first_subpass)
+         vk_merge_group_finalize(pass, &group);
+
+      s = group.last_subpass + 1;
+   }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 vk_common_CreateRenderPass2(VkDevice _device,
                             const VkRenderPassCreateInfo2 *pCreateInfo,
@@ -966,6 +1353,8 @@ vk_common_CreateRenderPass2(VkDevice _device,
       pass->fragment_density_map.layout = VK_IMAGE_LAYOUT_UNDEFINED;
    }
 
+   vk_render_pass_merge_subpasses(device, pass);
+
    *pRenderPass = vk_render_pass_to_handle(pass);
 
    return VK_SUCCESS;
@@ -994,6 +1383,33 @@ vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info)
 
    return vk_find_struct_const(info->pNext,
                                RENDERING_INPUT_ATTACHMENT_INDEX_INFO_KHR);
+}
+
+const VkRenderingAttachmentLocationInfoKHR *
+vk_get_pipeline_rendering_cal_info(const VkGraphicsPipelineCreateInfo *info)
+{
+   VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
+   if (render_pass != NULL) {
+      assert(info->subpass < render_pass->subpass_count);
+      const struct vk_subpass *subpass =
+         &render_pass->subpasses[info->subpass];
+      if (vk_subpass_is_merged(subpass))
+         return &subpass->merge.cal_info;
+   }
+
+   return vk_find_struct_const(info->pNext,
+                               RENDERING_ATTACHMENT_LOCATION_INFO_KHR);
+}
+
+bool
+vk_get_pipeline_rendering_merged_subpass(const VkGraphicsPipelineCreateInfo *info)
+{
+   VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
+   if (render_pass == NULL)
+      return false;
+
+   assert(info->subpass < render_pass->subpass_count);
+   return vk_subpass_is_merged(&render_pass->subpasses[info->subpass]);
 }
 
 VkPipelineCreateFlags2KHR
@@ -1088,6 +1504,83 @@ vk_attachment_description_flags_to_rendering_flags(VkAttachmentDescriptionFlags 
    return ret;
 }
 
+static const VkRenderingInfo *
+vk_get_merged_subpass_as_rendering_resume(const struct vk_render_pass *pass,
+                                          const struct vk_subpass *subpass,
+                                          const struct vk_framebuffer *fb,
+                                          struct vk_gcbiarr_data *data)
+{
+   const struct vk_subpass_merge *merge = &subpass->merge;
+   const bool has_ds =
+      merge->depth_stencil_attachment != VK_ATTACHMENT_UNUSED;
+
+   data->rendering = (VkRenderingInfo) {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+      .flags = VK_RENDERING_RESUMING_BIT,
+      .renderArea = {
+         .offset = { 0, 0 },
+         .extent = { fb->width, fb->height },
+      },
+      .layerCount = fb->layers,
+      .viewMask = pass->is_multiview ? subpass->view_mask : 0,
+   };
+
+   VkRenderingAttachmentInfo *attachments = data->attachments;
+   VkRenderingAttachmentFlagsInfoKHR *attachments_flags =
+      (VkRenderingAttachmentFlagsInfoKHR *)
+      (data->attachments + merge->color_count + 2 * has_ds);
+
+   for (uint32_t i = 0; i < merge->color_count; i++) {
+      const uint32_t att = merge->color_attachments[i];
+
+      attachments_flags[i] = (VkRenderingAttachmentFlagsInfoKHR) {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_FLAGS_INFO_KHR,
+         .flags = vk_attachment_description_flags_to_rendering_flags(
+            pass->attachments[att].flags),
+      };
+
+      attachments[i] = (VkRenderingAttachmentInfo) {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .pNext = &attachments_flags[i],
+         .imageView = fb->attachments[att],
+         .imageLayout = merge->color_layouts[i],
+         .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      };
+   }
+   data->rendering.colorAttachmentCount = merge->color_count;
+   data->rendering.pColorAttachments = attachments;
+   attachments += merge->color_count;
+
+   if (has_ds) {
+      VK_FROM_HANDLE(vk_image_view, iview,
+                     fb->attachments[merge->depth_stencil_attachment]);
+      if (iview->image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
+         *attachments = (VkRenderingAttachmentInfo) {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = vk_image_view_to_handle(iview),
+            .imageLayout = merge->depth_layout,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+         };
+         data->rendering.pDepthAttachment = attachments++;
+      }
+
+      if (iview->image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
+         *attachments = (VkRenderingAttachmentInfo) {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = vk_image_view_to_handle(iview),
+            .imageLayout = merge->stencil_layout,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+         };
+         data->rendering.pStencilAttachment = attachments++;
+      }
+   }
+
+   return &data->rendering;
+}
+
 const VkRenderingInfo *
 vk_get_command_buffer_inheritance_as_rendering_resume(
    VkCommandBufferLevel level,
@@ -1124,6 +1617,9 @@ vk_get_command_buffer_inheritance_as_rendering_resume(
    VK_FROM_HANDLE(vk_framebuffer, fb, inheritance->framebuffer);
    if (fb == NULL || (fb->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT))
       return NULL;
+
+   if (vk_subpass_is_merged(subpass))
+      return vk_get_merged_subpass_as_rendering_resume(pass, subpass, fb, data);
 
    data->rendering = (VkRenderingInfo) {
       .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
@@ -1268,11 +1764,51 @@ vk_get_command_buffer_rendering_attachment_location_info(
    if (!(pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT))
       return NULL;
 
-   if (pBeginInfo->pInheritanceInfo->renderPass != VK_NULL_HANDLE)
-      return NULL;
+   if (pBeginInfo->pInheritanceInfo->renderPass != VK_NULL_HANDLE) {
+      const struct vk_subpass *subpass =
+         vk_get_command_buffer_inheritance_merged_subpass(level, pBeginInfo);
+      return subpass != NULL ? &subpass->merge.cal_info : NULL;
+   }
 
    return vk_find_struct_const(pBeginInfo,
                                RENDERING_ATTACHMENT_LOCATION_INFO_KHR);
+}
+
+const struct vk_subpass *
+vk_get_command_buffer_inheritance_merged_subpass(
+   VkCommandBufferLevel level,
+   const VkCommandBufferBeginInfo *pBeginInfo)
+{
+   if (level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+      return NULL;
+
+   if (!(pBeginInfo->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT))
+      return NULL;
+
+   const VkCommandBufferInheritanceInfo *inheritance =
+      pBeginInfo->pInheritanceInfo;
+   if (inheritance == NULL)
+      return NULL;
+
+   VK_FROM_HANDLE(vk_render_pass, pass, inheritance->renderPass);
+   if (pass == NULL)
+      return NULL;
+
+   assert(inheritance->subpass < pass->subpass_count);
+   const struct vk_subpass *subpass = &pass->subpasses[inheritance->subpass];
+
+   return vk_subpass_is_merged(subpass) ? subpass : NULL;
+}
+
+uint32_t
+vk_command_buffer_map_color_attachment(const struct vk_command_buffer *cmd_buffer,
+                                       uint32_t color_attachment)
+{
+   const struct vk_subpass *subpass = cmd_buffer->merged_subpass;
+   if (subpass == NULL || color_attachment >= subpass->color_count)
+      return color_attachment;
+
+   return subpass->merge.color_slots[color_attachment];
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1937,6 +2473,658 @@ load_attachment(struct vk_command_buffer *cmd_buffer,
    disp->CmdEndRendering(vk_command_buffer_to_handle(cmd_buffer));
 }
 
+static bool
+merge_has_target(const struct vk_subpass_merge *merge, uint32_t att_idx)
+{
+   if (merge->depth_stencil_attachment == att_idx)
+      return true;
+
+   for (uint32_t i = 0; i < merge->color_count; i++) {
+      if (merge->color_attachments[i] == att_idx)
+         return true;
+   }
+
+   return false;
+}
+
+static void
+merged_attachment_use_masks(const struct vk_render_pass *pass,
+                            uint32_t first_subpass_idx,
+                            uint32_t last_subpass_idx,
+                            uint32_t att_idx,
+                            uint32_t *first_mask,
+                            uint32_t *last_mask)
+{
+   *first_mask = 0;
+   *last_mask = 0;
+
+   for (uint32_t s = first_subpass_idx; s <= last_subpass_idx; s++) {
+      const struct vk_subpass *subpass = &pass->subpasses[s];
+      for (uint32_t a = 0; a < subpass->attachment_count; a++) {
+         const struct vk_subpass_attachment *sp_att = &subpass->attachments[a];
+         if (sp_att->attachment != att_idx)
+            continue;
+
+         *first_mask |= sp_att->first_subpass;
+         *last_mask |= sp_att->last_subpass;
+      }
+   }
+}
+
+static bool
+merged_rendering_allowed(const struct vk_command_buffer *cmd_buffer,
+                         const struct vk_subpass *subpass)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const struct vk_subpass_merge *merge = &subpass->merge;
+
+   if (cmd_buffer->pass_sample_locations != NULL ||
+       cmd_buffer->pass_perf_counters != NULL)
+      return false;
+
+   for (uint32_t s = merge->first_subpass; s <= merge->last_subpass; s++) {
+      const struct vk_subpass *sp = &pass->subpasses[s];
+      for (uint32_t a = 0; a < sp->attachment_count; a++) {
+         const uint32_t att_a = sp->attachments[a].attachment;
+         if (att_a == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         const struct vk_image *image_a =
+            cmd_buffer->attachments[att_a].image_view->image;
+
+         for (uint32_t t = s; t <= merge->last_subpass; t++) {
+            const struct vk_subpass *sp_t = &pass->subpasses[t];
+            for (uint32_t b = 0; b < sp_t->attachment_count; b++) {
+               const uint32_t att_b = sp_t->attachments[b].attachment;
+               if (att_b == VK_ATTACHMENT_UNUSED || att_b == att_a)
+                  continue;
+
+               if (cmd_buffer->attachments[att_b].image_view->image == image_a)
+                  return false;
+            }
+         }
+      }
+   }
+
+   return true;
+}
+
+static void
+set_merged_subpass_maps(struct vk_command_buffer *cmd_buffer,
+                        const struct vk_subpass *subpass)
+{
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
+
+   cmd_buffer->merged_subpass = subpass;
+
+   if (disp->CmdSetRenderingAttachmentLocations) {
+      disp->CmdSetRenderingAttachmentLocations(
+         vk_command_buffer_to_handle(cmd_buffer), &subpass->merge.cal_info);
+   }
+
+   if (disp->CmdSetRenderingInputAttachmentIndices) {
+      disp->CmdSetRenderingInputAttachmentIndices(
+         vk_command_buffer_to_handle(cmd_buffer), &subpass->ial.info);
+   }
+}
+
+static void
+begin_merged_rendering(struct vk_command_buffer *cmd_buffer,
+                       uint32_t first_subpass_idx,
+                       uint32_t last_subpass_idx)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const struct vk_framebuffer *framebuffer = cmd_buffer->framebuffer;
+   const struct vk_subpass *subpass = &pass->subpasses[first_subpass_idx];
+   const struct vk_subpass *last_subpass = &pass->subpasses[last_subpass_idx];
+   const struct vk_subpass_merge *merge = &subpass->merge;
+   const uint32_t view_mask = subpass->view_mask;
+   const bool resolve = last_subpass_idx == merge->last_subpass;
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
+
+   cmd_buffer->merged_rendering_first = first_subpass_idx;
+   cmd_buffer->merged_rendering_last = last_subpass_idx;
+
+   STACK_ARRAY(VkRenderingAttachmentFlagsInfoKHR, color_attachments_flags,
+               merge->color_count);
+   STACK_ARRAY(VkRenderingAttachmentInfo, color_attachments,
+               merge->color_count);
+
+   for (uint32_t i = 0; i < merge->color_count; i++) {
+      const uint32_t att = merge->color_attachments[i];
+      const struct vk_render_pass_attachment *rp_att = &pass->attachments[att];
+      struct vk_attachment_state *att_state = &cmd_buffer->attachments[att];
+      VkRenderingAttachmentInfo *color_attachment = &color_attachments[i];
+      uint32_t first_mask, last_mask;
+
+      merged_attachment_use_masks(pass, first_subpass_idx, last_subpass_idx,
+                                  att, &first_mask, &last_mask);
+
+      color_attachments_flags[i] = (VkRenderingAttachmentFlagsInfoKHR) {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_FLAGS_INFO_KHR,
+      };
+
+      *color_attachment = (VkRenderingAttachmentInfo) {
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+         .pNext = &color_attachments_flags[i],
+         .imageView = vk_image_view_to_handle(att_state->image_view),
+         .imageLayout = merge->color_layouts[i],
+      };
+
+      if (!(view_mask & att_state->views_loaded)) {
+         color_attachment->loadOp = rp_att->load_op;
+         color_attachment->clearValue = att_state->clear_value;
+         att_state->views_loaded |= view_mask;
+      } else {
+         color_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      }
+
+      if (!(view_mask & ~last_mask))
+         color_attachment->storeOp = rp_att->store_op;
+      else
+         color_attachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+   }
+
+   if (resolve) {
+      for (uint32_t c = 0; c < last_subpass->color_count; c++) {
+         const struct vk_subpass_attachment *sp_att =
+            &last_subpass->color_attachments[c];
+         if (sp_att->resolve == NULL)
+            continue;
+
+         const uint32_t slot = last_subpass->merge.color_slots[c];
+         assert(slot < merge->color_count);
+         VkRenderingAttachmentInfo *color_attachment = &color_attachments[slot];
+
+         assert(sp_att->resolve->attachment < pass->attachment_count);
+         struct vk_attachment_state *res_att_state =
+            &cmd_buffer->attachments[sp_att->resolve->attachment];
+         res_att_state->views_loaded |= view_mask;
+
+         const struct vk_render_pass_attachment *resolve_att =
+            &pass->attachments[sp_att->resolve->attachment];
+         if (resolve_att->has_external_format)
+            color_attachment->resolveMode = VK_RESOLVE_MODE_EXTERNAL_FORMAT_DOWNSAMPLE_BIT_ANDROID;
+         else if (vk_format_is_int(res_att_state->image_view->format))
+            color_attachment->resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+         else
+            color_attachment->resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+
+         color_attachment->resolveImageView =
+            vk_image_view_to_handle(res_att_state->image_view);
+         color_attachment->resolveImageLayout = sp_att->resolve->layout;
+
+         color_attachments_flags[slot].flags =
+            vk_attachment_description_flags_to_rendering_flags(resolve_att->flags);
+      }
+   }
+
+   VkRenderingAttachmentInfo depth_attachment = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+   };
+   VkRenderingAttachmentInfo stencil_attachment = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+   };
+   VkRenderingAttachmentFlagsInfoKHR depth_attachment_flags = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_FLAGS_INFO_KHR,
+   };
+   VkRenderingAttachmentFlagsInfoKHR stencil_attachment_flags = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_FLAGS_INFO_KHR,
+   };
+
+   const VkSampleLocationsInfoEXT *sample_locations = NULL;
+   if (merge->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+      const uint32_t att = merge->depth_stencil_attachment;
+      const struct vk_render_pass_attachment *rp_att = &pass->attachments[att];
+      struct vk_attachment_state *att_state = &cmd_buffer->attachments[att];
+      uint32_t first_mask, last_mask;
+
+      merged_attachment_use_masks(pass, first_subpass_idx, last_subpass_idx,
+                                  att, &first_mask, &last_mask);
+
+      if (rp_att->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
+         depth_attachment.imageView =
+            vk_image_view_to_handle(att_state->image_view);
+         depth_attachment.imageLayout = merge->depth_layout;
+         depth_attachment_flags.flags =
+            vk_attachment_description_flags_to_rendering_flags(rp_att->flags);
+      }
+
+      if (rp_att->aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
+         stencil_attachment.imageView =
+            vk_image_view_to_handle(att_state->image_view);
+         stencil_attachment.imageLayout = merge->stencil_layout;
+         stencil_attachment_flags.flags =
+            vk_attachment_description_flags_to_rendering_flags(rp_att->flags);
+      }
+
+      __vk_append_struct(&depth_attachment, &depth_attachment_flags);
+      __vk_append_struct(&stencil_attachment, &stencil_attachment_flags);
+
+      if (!(view_mask & att_state->views_loaded)) {
+         depth_attachment.loadOp = rp_att->load_op;
+         depth_attachment.clearValue = att_state->clear_value;
+         stencil_attachment.loadOp = rp_att->stencil_load_op;
+         stencil_attachment.clearValue = att_state->clear_value;
+         att_state->views_loaded |= view_mask;
+      } else {
+         depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+         stencil_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      }
+
+      if (!(view_mask & ~last_mask)) {
+         depth_attachment.storeOp = rp_att->store_op;
+         stencil_attachment.storeOp = rp_att->stencil_store_op;
+      } else {
+         depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+         stencil_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      }
+
+      if (cmd_buffer->pass_sample_locations != NULL &&
+          subpass->depth_stencil_attachment != NULL &&
+          (att_state->image_view->image->create_flags &
+           VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT)) {
+         sample_locations =
+            get_subpass_sample_locations(cmd_buffer->pass_sample_locations,
+                                         first_subpass_idx);
+
+         u_foreach_bit(view, view_mask)
+            att_state->views[view].sample_locations = sample_locations;
+      }
+
+      const struct vk_subpass_attachment *last_ds =
+         last_subpass->depth_stencil_attachment;
+      if (resolve && last_ds != NULL && last_ds->resolve != NULL) {
+         const struct vk_subpass_attachment *res_sp_att = last_ds->resolve;
+         assert(res_sp_att->attachment < pass->attachment_count);
+         const struct vk_render_pass_attachment *res_rp_att =
+            &pass->attachments[res_sp_att->attachment];
+         struct vk_attachment_state *res_att_state =
+            &cmd_buffer->attachments[res_sp_att->attachment];
+
+         VkResolveModeFlagBits depth_resolve_mode = VK_RESOLVE_MODE_NONE;
+         if (res_rp_att->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+            depth_resolve_mode = last_subpass->depth_resolve_mode;
+
+         VkResolveModeFlagBits stencil_resolve_mode = VK_RESOLVE_MODE_NONE;
+         if (res_rp_att->aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+            stencil_resolve_mode = last_subpass->stencil_resolve_mode;
+
+         VkImageAspectFlags resolved_aspects = 0;
+
+         if (depth_resolve_mode != VK_RESOLVE_MODE_NONE) {
+            depth_attachment.resolveMode = depth_resolve_mode;
+            depth_attachment.resolveImageView =
+               vk_image_view_to_handle(res_att_state->image_view);
+            depth_attachment.resolveImageLayout = res_sp_att->layout;
+            resolved_aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+         }
+
+         if (stencil_resolve_mode != VK_RESOLVE_MODE_NONE) {
+            stencil_attachment.resolveMode = stencil_resolve_mode;
+            stencil_attachment.resolveImageView =
+               vk_image_view_to_handle(res_att_state->image_view);
+            stencil_attachment.resolveImageLayout = res_sp_att->stencil_layout;
+            resolved_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+         }
+
+         if (resolved_aspects == rp_att->aspects)
+            res_att_state->views_loaded |= view_mask;
+      }
+   }
+
+   STACK_ARRAY(VkMemoryBarrier2, mem_barriers, pass->dependency_count + 1);
+   uint32_t mem_barrier_count = 0;
+   bool external_dependency = false;
+   for (uint32_t d = 0; d < pass->dependency_count; d++) {
+      const struct vk_subpass_dependency *dep = &pass->dependencies[d];
+      if (dep->dst_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->dst_subpass < first_subpass_idx ||
+          dep->dst_subpass > last_subpass_idx)
+         continue;
+
+      if (dep->src_subpass != VK_SUBPASS_EXTERNAL &&
+          dep->src_subpass >= first_subpass_idx)
+         continue;
+
+      if (dep->flags & VK_DEPENDENCY_VIEW_LOCAL_BIT) {
+         assert(dep->src_subpass != VK_SUBPASS_EXTERNAL);
+         assert(dep->src_subpass < pass->subpass_count);
+         const struct vk_subpass *src_subpass =
+            &pass->subpasses[dep->src_subpass];
+
+         uint32_t src_dep_view_mask = view_mask;
+         if (dep->view_offset >= 0)
+            src_dep_view_mask <<= dep->view_offset;
+         else
+            src_dep_view_mask >>= -dep->view_offset;
+
+         if (!(src_subpass->view_mask & src_dep_view_mask))
+            continue;
+      }
+
+      mem_barriers[mem_barrier_count++] = (VkMemoryBarrier2){
+         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+         .srcStageMask = dep->src_stage_mask,
+         .srcAccessMask = dep->src_access_mask,
+         .dstStageMask = dep->dst_stage_mask,
+         .dstAccessMask = dep->dst_access_mask,
+      };
+      external_dependency |= (dep->src_subpass == VK_SUBPASS_EXTERNAL);
+   }
+
+   const uint32_t max_image_barrier_count =
+      pass->attachment_count * util_bitcount(view_mask) * 2;
+   STACK_ARRAY(VkImageMemoryBarrier2, image_barriers, max_image_barrier_count);
+   STACK_ARRAY(bool, att_transitioned, pass->attachment_count);
+   for (uint32_t a = 0; a < pass->attachment_count; a++)
+      att_transitioned[a] = false;
+
+   uint32_t image_barrier_count = 0;
+   bool has_layout_transition = false;
+
+   for (uint32_t i = 0; i < merge->color_count; i++) {
+      const uint32_t att = merge->color_attachments[i];
+      uint32_t first_mask, last_mask;
+
+      merged_attachment_use_masks(pass, first_subpass_idx, last_subpass_idx,
+                                  att, &first_mask, &last_mask);
+
+      uint32_t transitioned_views =
+         transition_attachment(cmd_buffer, att, view_mask,
+                               merge->color_layouts[i],
+                               VK_IMAGE_LAYOUT_UNDEFINED,
+                               &image_barrier_count,
+                               max_image_barrier_count,
+                               image_barriers);
+
+      has_layout_transition |= (first_mask & transitioned_views) != 0;
+      att_transitioned[att] = true;
+   }
+
+   if (merge->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+      const uint32_t att = merge->depth_stencil_attachment;
+      uint32_t first_mask, last_mask;
+
+      merged_attachment_use_masks(pass, first_subpass_idx, last_subpass_idx,
+                                  att, &first_mask, &last_mask);
+
+      uint32_t transitioned_views =
+         transition_attachment(cmd_buffer, att, view_mask,
+                               merge->depth_layout, merge->stencil_layout,
+                               &image_barrier_count,
+                               max_image_barrier_count,
+                               image_barriers);
+
+      has_layout_transition |= (first_mask & transitioned_views) != 0;
+      att_transitioned[att] = true;
+   }
+
+   for (uint32_t s = first_subpass_idx; s <= last_subpass_idx; s++) {
+      const struct vk_subpass *sp = &pass->subpasses[s];
+      for (uint32_t a = 0; a < sp->attachment_count; a++) {
+         const struct vk_subpass_attachment *sp_att = &sp->attachments[a];
+         if (sp_att->attachment == VK_ATTACHMENT_UNUSED ||
+             att_transitioned[sp_att->attachment])
+            continue;
+
+         att_transitioned[sp_att->attachment] = true;
+
+         uint32_t transitioned_views =
+            transition_attachment(cmd_buffer, sp_att->attachment, view_mask,
+                                  sp_att->layout, sp_att->stencil_layout,
+                                  &image_barrier_count,
+                                  max_image_barrier_count,
+                                  image_barriers);
+
+         has_layout_transition |=
+            (sp_att->first_subpass & transitioned_views) != 0;
+      }
+   }
+   assert(image_barrier_count <= max_image_barrier_count);
+
+   if (has_layout_transition && !external_dependency) {
+      mem_barriers[mem_barrier_count++] = (VkMemoryBarrier2){
+         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+         .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+         .srcAccessMask = VK_ACCESS_2_NONE,
+         .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+         .dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+      };
+   }
+
+   if (mem_barrier_count > 0 || image_barrier_count > 0) {
+      const VkDependencyInfo dependency_info = {
+         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+         .dependencyFlags = 0,
+         .memoryBarrierCount = mem_barrier_count,
+         .pMemoryBarriers = mem_barrier_count > 0 ? mem_barriers : NULL,
+         .imageMemoryBarrierCount = image_barrier_count,
+         .pImageMemoryBarriers = image_barrier_count > 0 ? image_barriers : NULL,
+      };
+      cmd_buffer->runtime_rp_barrier = true;
+      disp->CmdPipelineBarrier2(vk_command_buffer_to_handle(cmd_buffer),
+                                &dependency_info);
+      cmd_buffer->runtime_rp_barrier = false;
+   }
+
+   STACK_ARRAY_FINISH(att_transitioned);
+   STACK_ARRAY_FINISH(image_barriers);
+   STACK_ARRAY_FINISH(mem_barriers);
+
+   for (uint32_t s = first_subpass_idx; s <= last_subpass_idx; s++) {
+      const struct vk_subpass *sp = &pass->subpasses[s];
+      for (uint32_t a = 0; a < sp->attachment_count; a++) {
+         const struct vk_subpass_attachment *sp_att = &sp->attachments[a];
+         if (sp_att->attachment == VK_ATTACHMENT_UNUSED ||
+             merge_has_target(merge, sp_att->attachment))
+            continue;
+
+         load_attachment(cmd_buffer, sp_att->attachment, view_mask,
+                         sp_att->layout, sp_att->stencil_layout);
+      }
+   }
+
+   VkRenderingInfo rendering = {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+      .flags = VK_RENDERING_LOCAL_READ_CONCURRENT_ACCESS_CONTROL_BIT_KHR,
+      .renderArea = cmd_buffer->render_area,
+      .layerCount = pass->is_multiview ? 1 : framebuffer->layers,
+      .viewMask = pass->is_multiview ? view_mask : 0,
+      .colorAttachmentCount = merge->color_count,
+      .pColorAttachments = color_attachments,
+      .pDepthAttachment = &depth_attachment,
+      .pStencilAttachment = &stencil_attachment,
+   };
+
+   if (subpass->legacy_dithering_enabled)
+      rendering.flags |= VK_RENDERING_ENABLE_LEGACY_DITHERING_BIT_EXT;
+
+   VkSampleLocationsInfoEXT sample_locations_tmp;
+   if (sample_locations) {
+      sample_locations_tmp = *sample_locations;
+      __vk_append_struct(&rendering, &sample_locations_tmp);
+   }
+
+   VkRenderPassPerformanceCountersByRegionBeginInfoARM perf_counters;
+   if (cmd_buffer->pass_perf_counters) {
+      perf_counters = get_subpass_perf_counters(cmd_buffer);
+      __vk_append_struct(&rendering, &perf_counters);
+   }
+
+   cmd_buffer->merged_subpass = subpass;
+   disp->CmdBeginRendering(vk_command_buffer_to_handle(cmd_buffer),
+                           &rendering);
+   set_merged_subpass_maps(cmd_buffer, subpass);
+
+   STACK_ARRAY_FINISH(color_attachments);
+   STACK_ARRAY_FINISH(color_attachments_flags);
+}
+
+static void
+continue_merged_rendering(struct vk_command_buffer *cmd_buffer)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
+   const struct vk_subpass *subpass = &pass->subpasses[subpass_idx];
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
+
+   const VkPipelineStageFlags2 fb_stages =
+      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+   const VkAccessFlags2 local_src_access =
+      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+   const VkAccessFlags2 local_dst_access =
+      VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT |
+      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+   VkMemoryBarrier2 barrier = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+      .srcStageMask = fb_stages,
+      .dstStageMask = fb_stages,
+   };
+
+   for (uint32_t d = 0; d < pass->dependency_count; d++) {
+      const struct vk_subpass_dependency *dep = &pass->dependencies[d];
+      if (dep->dst_subpass != subpass_idx ||
+          dep->src_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->src_subpass < cmd_buffer->merged_rendering_first ||
+          dep->src_subpass >= subpass_idx)
+         continue;
+
+      barrier.srcAccessMask |= dep->src_access_mask & local_src_access;
+      barrier.dstAccessMask |= dep->dst_access_mask & local_dst_access;
+   }
+
+   const VkDependencyInfo dependency_info = {
+      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+      .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
+      .memoryBarrierCount = 1,
+      .pMemoryBarriers = &barrier,
+   };
+   cmd_buffer->runtime_rp_barrier = true;
+   disp->CmdPipelineBarrier2(vk_command_buffer_to_handle(cmd_buffer),
+                             &dependency_info);
+   cmd_buffer->runtime_rp_barrier = false;
+
+   set_merged_subpass_maps(cmd_buffer, subpass);
+}
+
+static void
+end_merged_rendering(struct vk_command_buffer *cmd_buffer)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const uint32_t first_subpass_idx = cmd_buffer->merged_rendering_first;
+   const uint32_t last_subpass_idx = cmd_buffer->merged_rendering_last;
+   const uint32_t view_mask = pass->subpasses[first_subpass_idx].view_mask;
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
+
+   disp->CmdEndRendering(vk_command_buffer_to_handle(cmd_buffer));
+   cmd_buffer->merged_subpass = NULL;
+
+   STACK_ARRAY(VkMemoryBarrier2, mem_barriers, pass->dependency_count + 1);
+   uint32_t mem_barrier_count = 0;
+   for (uint32_t d = 0; d < pass->dependency_count; d++) {
+      const struct vk_subpass_dependency *dep = &pass->dependencies[d];
+      if (dep->dst_subpass != VK_SUBPASS_EXTERNAL ||
+          dep->src_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->src_subpass < first_subpass_idx ||
+          dep->src_subpass > last_subpass_idx)
+         continue;
+
+      mem_barriers[mem_barrier_count++] = (VkMemoryBarrier2){
+         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+         .srcStageMask = dep->src_stage_mask,
+         .srcAccessMask = dep->src_access_mask,
+         .dstStageMask = dep->dst_stage_mask,
+         .dstAccessMask = dep->dst_access_mask,
+      };
+   }
+
+   if (mem_barrier_count == 0) {
+      bool has_layout_transition = false;
+      for (uint32_t s = first_subpass_idx; s <= last_subpass_idx; s++) {
+         const struct vk_subpass *sp = &pass->subpasses[s];
+         for (uint32_t a = 0; a < sp->attachment_count; a++) {
+            const struct vk_subpass_attachment *sp_att = &sp->attachments[a];
+            if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
+               continue;
+
+            const struct vk_render_pass_attachment *rp_att =
+               &pass->attachments[sp_att->attachment];
+            uint32_t views =
+               transition_view_mask(cmd_buffer, sp_att->attachment, view_mask,
+                                    rp_att->final_layout,
+                                    rp_att->final_stencil_layout);
+
+            has_layout_transition |= (sp_att->last_subpass & views) != 0;
+         }
+      }
+
+      if (has_layout_transition) {
+         mem_barriers[mem_barrier_count++] = (VkMemoryBarrier2){
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .dstAccessMask = VK_ACCESS_2_NONE,
+         };
+      }
+   }
+
+   if (mem_barrier_count > 0) {
+      const VkDependencyInfo dependency_info = {
+         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+         .dependencyFlags = 0,
+         .memoryBarrierCount = mem_barrier_count,
+         .pMemoryBarriers = mem_barriers,
+      };
+      cmd_buffer->runtime_rp_barrier = true;
+      disp->CmdPipelineBarrier2(vk_command_buffer_to_handle(cmd_buffer),
+                                &dependency_info);
+      cmd_buffer->runtime_rp_barrier = false;
+   }
+
+   STACK_ARRAY_FINISH(mem_barriers);
+}
+
+static void
+begin_merged_subpass(struct vk_command_buffer *cmd_buffer)
+{
+   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
+   const struct vk_subpass *subpass =
+      &cmd_buffer->render_pass->subpasses[subpass_idx];
+
+   if (cmd_buffer->merged_subpass != NULL &&
+       subpass_idx > cmd_buffer->merged_rendering_first &&
+       subpass_idx <= cmd_buffer->merged_rendering_last) {
+      continue_merged_rendering(cmd_buffer);
+      return;
+   }
+
+   uint32_t last_subpass_idx = subpass_idx;
+   if (subpass_idx == subpass->merge.first_subpass &&
+       merged_rendering_allowed(cmd_buffer, subpass))
+      last_subpass_idx = subpass->merge.last_subpass;
+
+   begin_merged_rendering(cmd_buffer, subpass_idx, last_subpass_idx);
+}
+
 static void
 begin_subpass(struct vk_command_buffer *cmd_buffer,
               const VkSubpassBeginInfo *begin_info)
@@ -1948,6 +3136,11 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
    const struct vk_subpass *subpass = &pass->subpasses[subpass_idx];
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
+
+   if (vk_subpass_is_merged(subpass)) {
+      begin_merged_subpass(cmd_buffer);
+      return;
+   }
 
    /* First, we figure out all our attachments and attempt to handle image
     * layout transitions and load ops as part of vkCmdBeginRendering if we
@@ -2603,6 +3796,12 @@ end_subpass(struct vk_command_buffer *cmd_buffer,
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
 
+   if (vk_subpass_is_merged(subpass)) {
+      if (subpass_idx >= cmd_buffer->merged_rendering_last)
+         end_merged_rendering(cmd_buffer);
+      return;
+   }
+
    disp->CmdEndRendering(vk_command_buffer_to_handle(cmd_buffer));
 
    /* At most all dependencies will need a barrier, and we might have an
@@ -2885,6 +4084,9 @@ vk_command_buffer_reset_render_pass(struct vk_command_buffer *cmd_buffer)
    if (cmd_buffer->pass_perf_counters != NULL)
       vk_free(vk_default_allocator(), cmd_buffer->pass_perf_counters);
    cmd_buffer->pass_perf_counters = NULL;
+   cmd_buffer->merged_subpass = NULL;
+   cmd_buffer->merged_rendering_first = 0;
+   cmd_buffer->merged_rendering_last = 0;
 }
 
 VKAPI_ATTR void VKAPI_CALL

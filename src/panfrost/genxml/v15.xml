@@ -745,6 +745,7 @@
     <value name="SB Sel Endpoint" value="0"/>
     <value name="SB Sel Other" value="1"/>
     <value name="SB Sel Deferred" value="2"/>
+    <value name="Dynamic Cache" value="6"/>
     <value name="SB Mask Stream" value="8"/>
     <value name="SB Mask Wait" value="9"/>
   </enum>
@@ -933,6 +934,7 @@
   <struct name="CS SET_STATE_IMM32" size="2">
     <field name="Value" size="32" start="0" type="uint"/>
     <field name="State" size="8" start="32" type="CS Set State Type"/>
+    <field name="Selection Mask" size="16" start="40" type="hex"/>
     <field name="Opcode" size="8" start="56" type="CS Opcode" default="SET_STATE_IMM32"/>
   </struct>
 
@@ -2694,7 +2696,8 @@
   </struct>
 
   <struct name="Tiler Context" size="32" align="64">
-    <field name="Polygon List" size="64" start="0:0" type="address"/>
+    <field name="Polygon List" size="48" start="0:0" type="address"/>
+    <field name="Polygon List Flags" size="16" start="1:16" type="uint"/>
     <field name="Hierarchy Mask" size="13" start="2:0" type="uint"/>
     <field name="Sample Pattern" size="3" start="2:13" type="Sample Pattern"/>
     <field name="Sample test disable" size="1" start="2:17" type="bool"/>

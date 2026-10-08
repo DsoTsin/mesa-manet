@@ -50,6 +50,8 @@ struct panvk_image {
     * possible. */
    bool crc_safe_external;
 
+   bool block_copies;
+
    VkFormat bc_emu_format;
 };
 

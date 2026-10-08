@@ -109,6 +109,7 @@ struct pan_image_props {
    unsigned nr_slices;
    unsigned array_size;
    bool crc;
+   bool afbc_crc;
 };
 
 struct pan_image_layout {

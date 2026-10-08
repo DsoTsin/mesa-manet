@@ -27,3 +27,12 @@ panvk_bcn_astc_spv = custom_target(
     prog_glslang, '-V', '--target-env', 'spirv1.5', '-DBC_ENCODE_ASTC', '-x', '-o', '@OUTPUT@', '@INPUT@'
   ] + glslang_quiet,
 )
+
+panvk_copy_blocks_spv = custom_target(
+  'copy_blocks.spv.h',
+  input : 'copy_blocks.comp',
+  output : 'copy_blocks.spv.h',
+  command : [
+    prog_glslang, '-V', '--target-env', 'spirv1.5', '-x', '-o', '@OUTPUT@', '@INPUT@'
+  ] + glslang_quiet,
+)

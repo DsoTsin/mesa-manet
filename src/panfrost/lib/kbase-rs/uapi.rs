@@ -251,11 +251,29 @@ pub struct GroupCreate {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct GroupCreateOutput {
+    pub handle: u8,
+    pub padding: [u8; 3],
+    pub uid: u32,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<GroupCreateOutput>() == 8);
+    assert!(std::mem::offset_of!(GroupCreateOutput, uid) == 4);
+};
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct KcpuCommand {
     pub ty: u8,
     pub padding: [u8; 7],
     pub info: [u64; 2],
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<KcpuCommand>() == 24);
+    assert!(std::mem::offset_of!(KcpuCommand, info) == 8);
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

@@ -77,6 +77,25 @@ struct vk_subpass_attachment {
    struct vk_subpass_attachment *resolve;
 };
 
+struct vk_subpass_merge {
+   uint32_t first_subpass;
+   uint32_t last_subpass;
+
+   uint32_t color_count;
+   uint32_t color_attachments[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   VkFormat color_formats[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   VkSampleCountFlagBits color_samples[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   VkImageLayout color_layouts[MESA_VK_MAX_COLOR_ATTACHMENTS];
+
+   uint32_t depth_stencil_attachment;
+   VkImageLayout depth_layout;
+   VkImageLayout stencil_layout;
+
+   uint32_t color_slots[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   uint32_t color_locations[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   VkRenderingAttachmentLocationInfoKHR cal_info;
+};
+
 /***/
 struct vk_subpass {
    /** Count of all attachments referenced by this subpass */
@@ -171,7 +190,15 @@ struct vk_subpass {
 
    /** True if legacy dithering is enabled for this subpass. */
    bool legacy_dithering_enabled;
+
+   struct vk_subpass_merge merge;
 };
+
+static inline bool
+vk_subpass_is_merged(const struct vk_subpass *subpass)
+{
+   return subpass->merge.first_subpass != subpass->merge.last_subpass;
+}
 
 /***/
 struct vk_render_pass_attachment {
@@ -327,6 +354,12 @@ vk_get_pipeline_rendering_create_info(const VkGraphicsPipelineCreateInfo *info);
 const VkRenderingInputAttachmentIndexInfo *
 vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info);
 
+const VkRenderingAttachmentLocationInfoKHR *
+vk_get_pipeline_rendering_cal_info(const VkGraphicsPipelineCreateInfo *info);
+
+bool
+vk_get_pipeline_rendering_merged_subpass(const VkGraphicsPipelineCreateInfo *info);
+
 /** Returns any extra VkPipelineCreateFlags from the render pass
  *
  * For render-pass-free drivers, this can be used to get any extra pipeline
@@ -426,6 +459,15 @@ const VkRenderingAttachmentLocationInfoKHR *
 vk_get_command_buffer_rendering_attachment_location_info(
    VkCommandBufferLevel level,
    const VkCommandBufferBeginInfo *pBeginInfo);
+
+const struct vk_subpass *
+vk_get_command_buffer_inheritance_merged_subpass(
+   VkCommandBufferLevel level,
+   const VkCommandBufferBeginInfo *pBeginInfo);
+
+uint32_t
+vk_command_buffer_map_color_attachment(const struct vk_command_buffer *cmd_buffer,
+                                       uint32_t color_attachment);
 /**
  * Return true if the subpass dependency is framebuffer-local.
  */

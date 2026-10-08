@@ -28,6 +28,7 @@
 #include "vk_format.h"
 #include "vk_image.h"
 #include "vk_pipeline.h"
+#include "vk_render_pass.h"
 #include "vk_util.h"
 
 #include "nir_builder.h"
@@ -218,7 +219,9 @@ vk_meta_clear_attachments(struct vk_command_buffer *cmd,
 
    for (uint32_t i = 0; i < attachment_count; i++) {
       if (attachments[i].aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
-         const uint32_t a = attachments[i].colorAttachment;
+         const uint32_t a =
+            vk_command_buffer_map_color_attachment(cmd,
+                                                   attachments[i].colorAttachment);
          if (a == VK_ATTACHMENT_UNUSED)
             continue;
 

@@ -78,6 +78,7 @@ struct panvk_subqueue {
        * CSI0.  Some Android kbase stacks accept later CSIs into a scheduled
        * CSG but never execute them. */
       uint32_t group_handle;
+      uint32_t group_uid;
 
       struct pan_kmod_bo *ringbuf_bo;
       void *ringbuf_cpu;
@@ -123,6 +124,8 @@ struct panvk_gpu_queue {
    struct vk_queue vk;
 
    uint32_t group_handle;
+   uint32_t group_uid;
+   uint32_t cache_frame_next;
    uint32_t syncobj_handle;
 
    struct panvk_priv_bo *dvs_bo;

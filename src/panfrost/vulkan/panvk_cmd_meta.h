@@ -99,6 +99,15 @@ void panvk_per_arch(cmd_bc_emu_decode)(struct panvk_cmd_buffer *cmdbuf,
                                        struct panvk_image *img,
                                        const VkImageSubresourceLayers *sub,
                                        VkOffset3D offset, VkExtent3D extent);
+
+void panvk_per_arch(cmd_copy_blocks_to_image)(
+   struct panvk_cmd_buffer *cmdbuf, const VkCopyDeviceMemoryImageInfoKHR *info);
+
+void panvk_per_arch(cmd_copy_blocks_from_image)(
+   struct panvk_cmd_buffer *cmdbuf, const VkCopyDeviceMemoryImageInfoKHR *info);
+
+void panvk_per_arch(cmd_copy_blocks_image)(struct panvk_cmd_buffer *cmdbuf,
+                                           const VkCopyImageInfo2 *info);
 #endif
 
 #endif

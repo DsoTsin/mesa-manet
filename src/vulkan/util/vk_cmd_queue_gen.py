@@ -76,6 +76,7 @@ TEMPLATE_H = Template(COPYRIGHT + """\
 
 #define VK_PROTOTYPES
 #include <vulkan/vulkan_core.h>
+#include <vulkan/vulkan_mtk.h>
 #ifdef VK_ENABLE_BETA_EXTENSIONS
 #include <vulkan/vulkan_beta.h>
 #endif
@@ -781,6 +782,10 @@ def get_params_copy(command, types):
     struct_access = "cmd->u.%s." % (to_struct_field_name(command.name))
     for param in command.params[1:]:
         get_param_copy(builder, command, types, "", struct_access, param, dst_snake_case=True)
+
+    if command.name == 'CmdSetDynamicCacheMemoryMTK':
+        builder.add("if (cmd->u.set_dynamic_cache_memory_mtk.info)")
+        builder.add("   ((VkDynamicCacheMemoryInfoMTK *)cmd->u.set_dynamic_cache_memory_mtk.info)->pNext = NULL;")
 
     builder.code += "\n"
     builder.add("list_addtail(&cmd->cmd_link, &queue->cmds);")

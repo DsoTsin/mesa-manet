@@ -46,11 +46,11 @@
 #include "vk_synchronization.h"
 
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_frag_others_inv,
-                           "PANVK_CSF_OPT_FRAG_OTHERS_INV", false)
+                           "PANVK_CSF_OPT_FRAG_OTHERS_INV", PAN_ARCH >= 15)
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_batch_others_inv,
-                           "PANVK_CSF_OPT_BATCH_OTHERS_INV", false)
+                           "PANVK_CSF_OPT_BATCH_OTHERS_INV", PAN_ARCH >= 15)
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_cb_tail, "PANVK_CSF_OPT_CB_TAIL",
-                           false)
+                           PAN_ARCH >= 15)
 
 static bool
 cb_tail_merged_into_ring(const struct panvk_cmd_buffer *cmdbuf)
@@ -1034,6 +1034,7 @@ panvk_reset_cmdbuf(struct vk_command_buffer *vk_cmdbuf,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
 
    vk_command_buffer_reset(&cmdbuf->vk);
+   panvk_per_arch(cmd_cache_reset)(cmdbuf);
    panvk_per_arch(dgc_records_reset)(cmdbuf);
 
    panvk_priv_bo_unref(cmdbuf->poly_heap.bo);
@@ -1050,6 +1051,9 @@ panvk_reset_cmdbuf(struct vk_command_buffer *vk_cmdbuf,
       u_trace_fini(ut);
       u_trace_init(ut, &dev->utrace.utctx);
    }
+
+   memset(cmdbuf->utrace.pass_index, 0, sizeof(cmdbuf->utrace.pass_index));
+   memset(cmdbuf->utrace.pass_depth, 0, sizeof(cmdbuf->utrace.pass_depth));
 
    for (uint32_t i = 0; i < ARRAY_SIZE(cmdbuf->state.cs); i++)
       cs_builder_fini(&cmdbuf->state.cs[i].builder);
@@ -1078,6 +1082,7 @@ panvk_destroy_cmdbuf(struct vk_command_buffer *vk_cmdbuf)
    panvk_priv_bo_unref(cmdbuf->poly_heap.bo);
 
    panvk_per_arch(cmd_pilots_fini)(cmdbuf);
+   panvk_per_arch(cmd_cache_reset)(cmdbuf);
 
    panvk_pool_cleanup(&cmdbuf->cs_pool);
    panvk_per_arch(dgc_records_reset)(cmdbuf);
@@ -1127,6 +1132,7 @@ panvk_create_cmdbuf(struct vk_command_pool *vk_pool, VkCommandBufferLevel level,
    panvk_per_arch(cmd_pilots_init)(cmdbuf);
    cmdbuf->vk.dynamic_graphics_state.vi = &cmdbuf->state.gfx.dynamic.vi;
    list_inithead(&cmdbuf->dgc_records);
+   list_inithead(&cmdbuf->cache_passes);
    cmdbuf->vk.dynamic_graphics_state.ms.sample_locations =
       &cmdbuf->state.gfx.dynamic.sl;
 
@@ -1242,6 +1248,21 @@ panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
 
    if (commandBufferCount == 0)
       return;
+
+   if (primary->vk.base.device->enabled_extensions.MTK_dynamic_cache_memory) {
+      const struct panvk_device *dev = to_panvk_device(primary->vk.base.device);
+      for (uint32_t i = 0; i < commandBufferCount; i++) {
+         VK_FROM_HANDLE(panvk_cmd_buffer, secondary, pCommandBuffers[i]);
+         struct panvk_cond_render_state saved = primary->state.cond_render;
+         if (!secondary->state.cond_render.inherited)
+            primary->state.cond_render = (struct panvk_cond_render_state){0};
+         vk_cmd_queue_execute(&secondary->vk.cmd_queue, commandBuffer,
+                               &dev->cmd_dispatch);
+         primary->state.cond_render = saved;
+      }
+      panvk_cmd_invalidate_state(primary);
+      return;
+   }
 
    panvk_per_arch(cmd_pilot_close_all)(primary);
    resolve_deferred_others_inv(primary);

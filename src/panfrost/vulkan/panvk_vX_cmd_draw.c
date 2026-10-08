@@ -616,6 +616,10 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
    memset(&render->s_attachment, 0, sizeof(render->s_attachment));
    memset(&render->fb, 0, sizeof(render->fb));
    render->bound_attachments = 0;
+   render->merged_subpasses = cmdbuf->vk.merged_subpass != NULL;
+   render->merged_subpass_barrier =
+      render->merged_subpasses &&
+      cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY;
 
    const VkMultisampledRenderToSingleSampledInfoEXT *ms2ss_info =
       vk_find_struct_const(pRenderingInfo,

@@ -16,6 +16,7 @@ test(
       'test-nir-shadd.cpp',
       'test-nir-robust-image.cpp',
       'test-nir-kraid.cpp',
+      'test-nir-link-varyings.cpp',
       'test-mark-last.cpp',
       'test-merge-flow.cpp',
       'test-packing.cpp',

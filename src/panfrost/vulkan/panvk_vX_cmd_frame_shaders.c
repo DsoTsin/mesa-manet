@@ -739,7 +739,8 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf,
        */
       cfg.flags_0.allow_forward_pixel_to_kill =
          key->type == PANVK_META_OBJECT_KEY_FB_COLOR_PRELOAD_SHADER;
-      cfg.flags_0.allow_forward_pixel_to_be_killed = true;
+      cfg.flags_0.allow_forward_pixel_to_be_killed =
+         !cmdbuf->state.gfx.render.merged_subpasses;
       cfg.depth_stencil = zsd.gpu;
       cfg.flags_1.sample_mask = 0xFFFF;
       cfg.flags_0.multisample_enable = fb->sample_count > 1;

@@ -77,7 +77,7 @@
  * remains disarmed. */
 #if PAN_ARCH >= 15
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_shared_sb, "PANVK_CSF_OPT_SHARED_SB",
-                           false)
+                           true)
 
 #define PANVK_SHARED_SB_VT_FRAG 0
 
@@ -387,7 +387,9 @@ prepare_vs_driver_set(struct panvk_cmd_buffer *cmdbuf, uint32_t repeat_count)
    u_foreach_bit(i, vi->attributes_valid)
       vb_count = MAX2(vi->attributes[i].binding + 1, vb_count);
 
-   uint32_t vb_offset = vs_desc_info->dyn_bufs.count + MAX_VS_ATTRIBS + 1;
+   uint32_t vb_offset = MAX_VS_ATTRIBS + 1;
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+      vb_offset += vs_desc_info->dyn_bufs.count;
    uint32_t desc_count = vb_offset + vb_count;
 
    const struct panvk_descriptor_state *desc_state =
@@ -419,9 +421,10 @@ prepare_vs_driver_set(struct panvk_cmd_buffer *cmdbuf, uint32_t repeat_count)
          cfg.clamp_integer_array_indices = false;
       }
 
-      panvk_per_arch(cmd_fill_dyn_bufs)(
-         desc_state, vs_desc_info,
-         (struct mali_buffer_packed *)(&descs[MAX_VS_ATTRIBS + 1]));
+      if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+         panvk_per_arch(cmd_fill_dyn_bufs)(
+            desc_state, vs_desc_info,
+            (struct mali_buffer_packed *)(&descs[MAX_VS_ATTRIBS + 1]));
 
       for (uint32_t i = 0; i < vb_count; i++) {
          const struct panvk_attrib_buf *vb = &cmdbuf->state.gfx.vb.bufs[i];
@@ -468,6 +471,20 @@ vs_desc_dirty(struct panvk_cmd_buffer *cmdbuf)
           gfx_state_dirty(cmdbuf, DESC_STATE);
 }
 
+static bool
+vs_driver_set_dirty(struct panvk_cmd_buffer *cmdbuf)
+{
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS ||
+       cmdbuf->state.gfx.vi.attribs_changing_on_base_instance)
+      return true;
+
+   return dyn_gfx_state_dirty(cmdbuf, VI) ||
+          dyn_gfx_state_dirty(cmdbuf, VI_BINDINGS_VALID) ||
+          dyn_gfx_state_dirty(cmdbuf, VI_BINDING_STRIDES) ||
+          gfx_state_dirty(cmdbuf, VB) || gfx_state_dirty(cmdbuf, VS) ||
+          !cmdbuf->state.gfx.vs.desc.driver_set.dev_addr;
+}
+
 static VkResult
 prepare_vs_desc(struct panvk_cmd_buffer *cmdbuf,
                 const struct panvk_draw_info *draw)
@@ -477,22 +494,27 @@ prepare_vs_desc(struct panvk_cmd_buffer *cmdbuf,
    if (!vs_desc_dirty(cmdbuf))
       return VK_SUCCESS;
 
-   cmdbuf->state.gfx.vs.desc_repeat_count = 0;
-   if (draw->indirect.buffer_dev_addr) {
-      /* BASE_INSTANCE is always dirty for indirect draws so it's safe to look
-       * at the draw info here.
-       */
-      assert(gfx_state_dirty(cmdbuf, BASE_INSTANCE));
-      if (cmdbuf->state.gfx.vi.attribs_changing_on_base_instance)
-         cmdbuf->state.gfx.vs.desc_repeat_count = draw->indirect.draw_count;
+   VkResult result;
+
+   if (vs_driver_set_dirty(cmdbuf)) {
+      cmdbuf->state.gfx.vs.desc_repeat_count = 0;
+      if (draw->indirect.buffer_dev_addr) {
+         /* BASE_INSTANCE is always dirty for indirect draws so it's safe to
+          * look at the draw info here.
+          */
+         assert(gfx_state_dirty(cmdbuf, BASE_INSTANCE));
+         if (cmdbuf->state.gfx.vi.attribs_changing_on_base_instance)
+            cmdbuf->state.gfx.vs.desc_repeat_count = draw->indirect.draw_count;
+      }
+
+      result = prepare_vs_driver_set(
+         cmdbuf, MAX2(cmdbuf->state.gfx.vs.desc_repeat_count, 1));
+      if (result != VK_SUCCESS)
+         return result;
    }
 
    const uint32_t repeat_count =
       MAX2(cmdbuf->state.gfx.vs.desc_repeat_count, 1);
-
-   VkResult result = prepare_vs_driver_set(cmdbuf, repeat_count);
-   if (result != VK_SUCCESS)
-      return result;
 
    const struct panvk_shader_desc_info *vs_desc_info =
       &cmdbuf->state.gfx.vs.shader->desc_info;
@@ -932,7 +954,8 @@ prepare_tcs_driver_set(struct panvk_cmd_buffer *cmdbuf)
    struct panvk_shader_desc_state *shader_desc_state =
       &cmdbuf->state.gfx.tess.tcs.desc;
 
-   const uint32_t desc_count = desc_info->dyn_bufs.count + 1;
+   const uint32_t desc_count =
+      (PANVK_DRIVER_SET_HAS_DYN_BUFS ? desc_info->dyn_bufs.count : 0) + 1;
    struct pan_ptr driver_set =
       panvk_cmd_alloc_dev_mem(cmdbuf, desc,
                               desc_count * PANVK_DESCRIPTOR_SIZE,
@@ -947,9 +970,10 @@ prepare_tcs_driver_set(struct panvk_cmd_buffer *cmdbuf)
       cfg.clamp_integer_array_indices = false;
    }
 
-   panvk_per_arch(cmd_fill_dyn_bufs)(
-      desc_state, desc_info,
-      (struct mali_buffer_packed *)&descs[1]);
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+      panvk_per_arch(cmd_fill_dyn_bufs)(
+         desc_state, desc_info,
+         (struct mali_buffer_packed *)&descs[1]);
 
    shader_desc_state->driver_set.dev_addr = driver_set.gpu;
    shader_desc_state->driver_set.size =
@@ -978,7 +1002,8 @@ prepare_tes_driver_set(struct panvk_cmd_buffer *cmdbuf)
 
    const uint32_t sampler_idx = MAX_VS_ATTRIBS;
    const uint32_t desc_count =
-      MAX_VS_ATTRIBS + 1 + desc_info->dyn_bufs.count;
+      MAX_VS_ATTRIBS + 1 +
+      (PANVK_DRIVER_SET_HAS_DYN_BUFS ? desc_info->dyn_bufs.count : 0);
 
    struct pan_ptr driver_set =
       panvk_cmd_alloc_dev_mem(cmdbuf, desc,
@@ -1003,9 +1028,10 @@ prepare_tes_driver_set(struct panvk_cmd_buffer *cmdbuf)
       cfg.clamp_integer_array_indices = false;
    }
 
-   panvk_per_arch(cmd_fill_dyn_bufs)(
-      desc_state, desc_info,
-      (struct mali_buffer_packed *)&descs[sampler_idx + 1]);
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+      panvk_per_arch(cmd_fill_dyn_bufs)(
+         desc_state, desc_info,
+         (struct mali_buffer_packed *)&descs[sampler_idx + 1]);
 
    shader_desc_state->driver_set.dev_addr = driver_set.gpu;
    shader_desc_state->driver_set.size =
@@ -1081,7 +1107,8 @@ prepare_compute_abi_desc(struct panvk_cmd_buffer *cmdbuf,
                          const struct panvk_shader_desc_info *desc_info,
                          struct panvk_shader_desc_state *gs_desc)
 {
-   const uint32_t desc_count = desc_info->dyn_bufs.count + 1;
+   const uint32_t desc_count =
+      (PANVK_DRIVER_SET_HAS_DYN_BUFS ? desc_info->dyn_bufs.count : 0) + 1;
    struct pan_ptr driver_set =
       panvk_cmd_alloc_dev_mem(cmdbuf, desc,
                               desc_count * PANVK_DESCRIPTOR_SIZE,
@@ -1095,9 +1122,10 @@ prepare_compute_abi_desc(struct panvk_cmd_buffer *cmdbuf,
       cfg.clamp_integer_array_indices = false;
    }
 
-   panvk_per_arch(cmd_fill_dyn_bufs)(
-      &cmdbuf->state.gfx.desc_state, desc_info,
-      (struct mali_buffer_packed *)&descs[1]);
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+      panvk_per_arch(cmd_fill_dyn_bufs)(
+         &cmdbuf->state.gfx.desc_state, desc_info,
+         (struct mali_buffer_packed *)&descs[1]);
 
    gs_desc->driver_set.dev_addr = driver_set.gpu;
    gs_desc->driver_set.size = desc_count * PANVK_DESCRIPTOR_SIZE;
@@ -1140,7 +1168,7 @@ prepare_fs_driver_set(struct panvk_cmd_buffer *cmdbuf)
     * Attribute Descriptors for varying loads. */
    const uint32_t desc_count =
       fs_desc_info->fs_varying_attr_desc_count +
-      fs_desc_info->dyn_bufs.count + 1;
+      (PANVK_DRIVER_SET_HAS_DYN_BUFS ? fs_desc_info->dyn_bufs.count : 0) + 1;
    struct pan_ptr driver_set = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, desc_count * PANVK_DESCRIPTOR_SIZE, PANVK_DESCRIPTOR_SIZE);
    struct panvk_opaque_desc *descs = driver_set.cpu;
@@ -1157,9 +1185,10 @@ prepare_fs_driver_set(struct panvk_cmd_buffer *cmdbuf)
       cfg.clamp_integer_array_indices = false;
    }
 
-   panvk_per_arch(cmd_fill_dyn_bufs)(
-      desc_state, fs_desc_info,
-      (struct mali_buffer_packed *)(&descs[sampler_idx + 1]));
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS)
+      panvk_per_arch(cmd_fill_dyn_bufs)(
+         desc_state, fs_desc_info,
+         (struct mali_buffer_packed *)(&descs[sampler_idx + 1]));
 
    fs_desc_state->driver_set.dev_addr = driver_set.gpu;
    fs_desc_state->driver_set.size = desc_count * PANVK_DESCRIPTOR_SIZE;
@@ -1193,10 +1222,15 @@ prepare_fs_desc(struct panvk_cmd_buffer *cmdbuf)
 
    const struct panvk_descriptor_state *desc_state =
       &cmdbuf->state.gfx.desc_state;
+   VkResult result;
 
-   VkResult result = prepare_fs_driver_set(cmdbuf);
-   if (result != VK_SUCCESS)
-      return result;
+   if (PANVK_DRIVER_SET_HAS_DYN_BUFS || fs_user_dirty(cmdbuf) ||
+       gfx_state_dirty(cmdbuf, VS) || gfx_state_dirty(cmdbuf, TES) ||
+       gfx_state_dirty(cmdbuf, GS) || !fs_desc_state->driver_set.dev_addr) {
+      result = prepare_fs_driver_set(cmdbuf);
+      if (result != VK_SUCCESS)
+         return result;
+   }
 
    result = panvk_per_arch(cmd_prepare_shader_res_table)(
       cmdbuf, desc_state, &fs->desc_info, fs_desc_state, 1);
@@ -3224,11 +3258,24 @@ build_dcd_flags(struct panvk_cmd_buffer *cmdbuf,
    bool writes_z = writes_depth(cmdbuf);
    bool writes_s = writes_stencil(cmdbuf);
    bool shader_modifies_coverage = false;
-   uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
+   const struct panvk_rendering_state *render = &cmdbuf->state.gfx.render;
+   uint8_t rt_mask = render->bound_attachments &
                      MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
+   uint8_t fpk_rt_mask = rt_mask;
+
+   if (render->merged_subpasses) {
+      uint8_t mapped_rt_mask = 0;
+      for (uint32_t i = 0; i < MAX_RTS; i++) {
+         if (dyns->cal.color_map[i] != MESA_VK_ATTACHMENT_UNUSED)
+            mapped_rt_mask |= BITFIELD_BIT(i);
+      }
+      fpk_rt_mask &= mapped_rt_mask;
+   }
 
    if (fs) {
       out->rt_written = color_attachment_written_mask(fs, &dyns->cal);
+      if (render->merged_subpasses)
+         out->rt_written &= rt_mask;
       out->rt_read = color_attachment_read_mask(fs, &dyns->ial, rt_mask);
       shader_modifies_coverage = fs->info.fs.writes_coverage ||
                                  fs->info.fs.can_discard || alpha_to_coverage;
@@ -3267,7 +3314,7 @@ build_dcd_flags(struct panvk_cmd_buffer *cmdbuf,
             VK_IMAGE_ASPECT_COLOR_BIT;
 
          cfg.allow_forward_pixel_to_kill =
-            fs->info.fs.can_fpk && !(rt_mask & ~out->rt_written) &&
+            fs->info.fs.can_fpk && !(fpk_rt_mask & ~out->rt_written) &&
             !(out->rt_read & out->rt_written) && !alpha_to_coverage &&
             !cmdbuf->state.gfx.cb.info.any_dest_read && !roa_color;
 
@@ -3389,7 +3436,8 @@ build_dcd_flags(struct panvk_cmd_buffer *cmdbuf,
          /* HSR can cull */
          cfg.hsr_can_cull = !fs->info.fs.hsr.ld_tile && out->rt_written &&
                               !(out->rt_read & out->rt_written) &&
-                              !cmdbuf->state.gfx.cb.info.any_dest_read;
+                              !cmdbuf->state.gfx.cb.info.any_dest_read &&
+                              !render->merged_subpass_barrier;
 
          /* HSR can_be_culled
             * - FUTURE: We could allow write-only side effects.
@@ -3872,7 +3920,9 @@ panvk_per_arch(cmd_prepare_dgc_draw)(
    const struct vk_vertex_input_state *vi = dyn->vi;
    params->attribs_valid = vi->attributes_valid;
    params->vertex_buffer_offset =
-      MAX_VS_ATTRIBS + 1 + gfx->vs.shader->desc_info.dyn_bufs.count;
+      MAX_VS_ATTRIBS + 1 +
+      (PANVK_DRIVER_SET_HAS_DYN_BUFS ? gfx->vs.shader->desc_info.dyn_bufs.count
+                                     : 0);
    u_foreach_bit(a, vi->attributes_valid) {
       const unsigned binding = vi->attributes[a].binding;
       params->attrib_binding[a] = binding;
@@ -6014,6 +6064,8 @@ panvk_per_arch(cmd_inherit_render_state)(
    memset(&render->z_attachment, 0, sizeof(render->z_attachment));
    memset(&render->s_attachment, 0, sizeof(render->s_attachment));
    cmdbuf->state.gfx.render.bound_attachments = 0;
+   render->merged_subpasses = cmdbuf->vk.merged_subpass != NULL;
+   render->merged_subpass_barrier = render->merged_subpasses;
 
    render->view_mask = inheritance_info->viewMask;
    render->layer_count = inheritance_info->viewMask ?
@@ -6520,6 +6572,17 @@ panvk_per_arch(cmd_fb_barrier)(struct panvk_cmd_buffer *cmdbuf)
        !inherits_render_ctx(cmdbuf))
       return;
 
+   if (cmdbuf->state.gfx.render.merged_subpasses &&
+       !cmdbuf->state.gfx.render.merged_subpass_barrier) {
+      cmdbuf->state.gfx.render.merged_subpass_barrier = true;
+      BITSET_SET(cmdbuf->vk.dynamic_graphics_state.dirty,
+                 MESA_VK_DYNAMIC_INPUT_ATTACHMENT_MAP);
+   }
+
+   if (cmdbuf->state.gfx.render.merged_subpasses &&
+       cmdbuf->vk.runtime_rp_barrier)
+      return;
+
    struct pan_ptr zsd = panvk_cmd_alloc_desc(cmdbuf, DEPTH_STENCIL);
    if (!zsd.gpu)
       return;
@@ -6542,7 +6605,7 @@ panvk_per_arch(cmd_fb_barrier)(struct panvk_cmd_buffer *cmdbuf)
 #if PAN_ARCH >= 12
       cfg.flags_0.disable_vrs_clamp_2x2 = true;
 #endif
-      cfg.flags_1.sample_mask = 0xffff;
+      cfg.flags_1.sample_mask = 0;
 
       cfg.flags_2.read_mask = 0;
       cfg.flags_2.write_mask = 0;
@@ -7060,6 +7123,8 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
    panvk_per_arch(kbase_mark_progress)(
       cmdbuf, PANVK_SUBQUEUE_FRAGMENT,
       PANVK_KBASE_PROGRESS_FRAG_BEFORE_RUN);
+
+   panvk_per_arch(cmd_cache_begin)(cmdbuf, false);
 
    if (cmdbuf->state.gfx.render.layer_count <= 1) {
 #if PAN_ARCH >= 14

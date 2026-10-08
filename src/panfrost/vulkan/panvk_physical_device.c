@@ -1512,7 +1512,6 @@ panvk_physical_device_init_kbase(struct panvk_physical_device *device,
    case 6:
    case 7:
    case 14:
-   case 15:
       if (!os_get_option("PAN_I_WANT_A_BROKEN_VULKAN_DRIVER")) {
          result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                                "WARNING: panvk is not well-tested on v%d, "
@@ -1526,6 +1525,7 @@ panvk_physical_device_init_kbase(struct panvk_physical_device *device,
    case 11:
    case 12:
    case 13:
+   case 15:
       break;
 
    default:

@@ -427,6 +427,9 @@ bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
     */
    if (pan_arch(gpu_id) >= 9 && nir->info.stage == MESA_SHADER_FRAGMENT)
       NIR_PASS(_, nir, nir_opt_move_discards_to_top);
+
+   if (pan_arch(gpu_id) >= 15 && nir->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, pan_nir_move_atest_after_discards);
 }
 
 #define BI_RSCALE_BLOCKERS                                                    \
@@ -829,6 +832,17 @@ bi_optimize_late_finish(nir_shader *nir, uint64_t gpu_id, uint32_t gpu_variant)
    }
 }
 
+static bool
+bi_lower_subgroup_size(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_subgroup_size)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_imm_int(b, *(const unsigned *)data));
+   return true;
+}
+
 void
 bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
 {
@@ -836,6 +850,12 @@ bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
 
    NIR_PASS(_, nir, pan_nir_lower_bf16);
    NIR_PASS(_, nir, nir_split_var_copies);
+
+   if (bi_use_kraid(nir, gpu_id)) {
+      unsigned subgroup_size = pan_subgroup_size(pan_arch(gpu_id));
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, bi_lower_subgroup_size,
+               nir_metadata_control_flow, &subgroup_size);
+   }
 
    /* The DISCARD instruction just flags the thread as discarded, but the
     * actual termination only happens when all threads in the quad are
@@ -1024,6 +1044,58 @@ bi_lower_subgroups_filter(const nir_intrinsic_instr *intr,
    default:
       return true;
    }
+}
+
+static bool
+bi_opt_relative_shuffle(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_shuffle ||
+       intr->def.num_components != 1)
+      return false;
+
+   nir_scalar idx = nir_get_scalar(intr->src[1].ssa, 0);
+   if (!nir_scalar_is_alu(idx))
+      return false;
+
+   nir_op op = nir_scalar_alu_op(idx);
+   if (op != nir_op_iadd && op != nir_op_isub && op != nir_op_ixor)
+      return false;
+
+   nir_scalar lane = nir_scalar_chase_alu_src(idx, 0);
+   nir_scalar offset = nir_scalar_chase_alu_src(idx, 1);
+   if (op != nir_op_isub && nir_scalar_is_const(lane)) {
+      nir_scalar tmp = lane;
+      lane = offset;
+      offset = tmp;
+   }
+
+   if (!nir_scalar_is_intrinsic(lane) ||
+       nir_scalar_intrinsic_op(lane) != nir_intrinsic_load_subgroup_invocation ||
+       !nir_scalar_is_const(offset))
+      return false;
+
+   int64_t delta = nir_scalar_as_int(offset);
+   unsigned subgroup_size = *(const unsigned *)data;
+   nir_def *value = intr->src[0].ssa;
+   nir_def *res;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   if (op == nir_op_ixor) {
+      if (delta <= 0 || delta >= subgroup_size)
+         return false;
+      res = nir_shuffle_xor(b, value, nir_imm_int(b, delta));
+   } else {
+      if (op == nir_op_isub)
+         delta = -delta;
+      if (delta == 0 || delta <= -(int64_t)subgroup_size ||
+          delta >= subgroup_size)
+         return false;
+      res = delta < 0 ? nir_shuffle_up(b, value, nir_imm_int(b, -delta))
+                      : nir_shuffle_down(b, value, nir_imm_int(b, delta));
+   }
+
+   nir_def_replace(&intr->def, res);
+   return true;
 }
 
 static bool
@@ -1461,7 +1533,7 @@ bifrost_postprocess_nir(nir_shader *nir,
                                       BITFIELD_BIT(FRAG_RESULT_STENCIL));
       const bool skip_atest = inputs->is_blit && !emit_zs;
       NIR_PASS(_, nir, pan_nir_lower_fs_outputs, skip_atest,
-               inputs->fragcolor_nr_cbufs);
+               inputs->fragcolor_nr_cbufs, 0, false);
    } else if (nir->info.stage == MESA_SHADER_VERTEX) {
       if (!inputs->screen_space_position)
          NIR_PASS(_, nir, nir_lower_viewport_transform);
@@ -1636,8 +1708,12 @@ bifrost_postprocess_nir(nir_shader *nir,
       .lower_boolean_reduce = true,
       .lower_boolean_shuffle = true,
    };
-   if (bi_use_kraid(nir, gpu_id))
+   if (bi_use_kraid(nir, gpu_id)) {
+      unsigned subgroup_size = pan_subgroup_size(gpu_arch);
+      NIR_PASS(_, nir, nir_shader_intrinsics_pass, bi_opt_relative_shuffle,
+               nir_metadata_control_flow, &subgroup_size);
       nir_divergence_analysis(nir);
+   }
    bool lower_subgroups_progress = false;
    NIR_PASS(lower_subgroups_progress, nir, nir_lower_subgroups,
             &lower_subgroup_opts);
@@ -1897,7 +1973,7 @@ bifrost_make_unified_idvs_shader(nir_shader *nir)
    b->cursor = nir_before_impl(impl);
    nir_def *shader_output = nir_load_shader_output_pan(b);
 
-   nir_block *out_blocks[VA_SHADER_OUTPUT_COUNT] = {NULL};
+   nir_if *out_ifs[VA_SHADER_OUTPUT_COUNT] = {NULL};
 
    for (enum va_shader_output out = 0; out < VA_SHADER_OUTPUT_COUNT; ++out) {
       nir_def *cond =
@@ -1907,7 +1983,7 @@ bifrost_make_unified_idvs_shader(nir_shader *nir)
                                      NULL);
       nir_pop_if(b, NULL);
 
-      out_blocks[out] = nir_if_first_then_block(nif);
+      out_ifs[out] = nif;
    }
 
    /* After messing around with the CFG, reindex blocks. */
@@ -1918,10 +1994,10 @@ bifrost_make_unified_idvs_shader(nir_shader *nir)
     * instruction is in.
     */
    for (enum va_shader_output out = 0; out < VA_SHADER_OUTPUT_COUNT; ++out) {
-      nir_block *out_block = out_blocks[out];
-      assert(out_block);
+      nir_if *out_if = out_ifs[out];
+      assert(out_if);
 
-      nir_foreach_block_in_cf_node_safe(block, &out_block->cf_node) {
+      nir_foreach_block_in_cf_node_safe(block, &out_if->cf_node) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;

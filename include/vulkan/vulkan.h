@@ -8,6 +8,7 @@
 
 #include "vk_platform.h"
 #include "vulkan_core.h"
+#include "vulkan_mtk.h"
 
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
 #include "vulkan_android.h"

@@ -1,0 +1,78 @@
+/*
+ * Copyright © 2026 Pix Philosophy (HK) Limited
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer block8_ref
+{
+   uvec2 v;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer block16_ref
+{
+   uvec4 v;
+};
+
+layout(push_constant) uniform consts
+{
+   uint64_t src;
+   uint64_t dst;
+   uint64_t src_layer_stride;
+   uint64_t dst_layer_stride;
+   ivec2 src_block_offset;
+   ivec2 dst_block_offset;
+   ivec2 block_extent;
+   uint src_row_stride;
+   uint dst_row_stride;
+   uint src_tile_shift;
+   uint dst_tile_shift;
+   uint block_size;
+};
+
+uint
+spread(uint v)
+{
+   v = (v | (v << 2)) & 0x33u;
+   v = (v | (v << 1)) & 0x55u;
+   return v;
+}
+
+uint64_t
+block_addr(uint64_t base, uint64_t layer_stride, uint row_stride, uint shift,
+           uvec2 b)
+{
+   uint64_t addr = base + uint64_t(gl_GlobalInvocationID.z) * layer_stride;
+   if (shift != 0u) {
+      uint mask = (1u << shift) - 1u;
+      uint swz = spread(b.x & mask) ^ (spread(b.y & mask) * 3u);
+      uint tile_bytes = (1u << (2u * shift)) * block_size;
+      return addr + uint64_t(b.y >> shift) * row_stride +
+             uint64_t(b.x >> shift) * uint64_t(tile_bytes) +
+             uint64_t(swz) * block_size;
+   }
+   return addr + uint64_t(b.y) * row_stride + uint64_t(b.x) * block_size;
+}
+
+void
+main()
+{
+   uvec2 id = gl_GlobalInvocationID.xy;
+   if (id.x >= uint(block_extent.x) || id.y >= uint(block_extent.y))
+      return;
+
+   uint64_t s = block_addr(src, src_layer_stride, src_row_stride, src_tile_shift,
+                           uvec2(src_block_offset) + id);
+   uint64_t d = block_addr(dst, dst_layer_stride, dst_row_stride, dst_tile_shift,
+                           uvec2(dst_block_offset) + id);
+   if (block_size == 16u)
+      block16_ref(d).v = block16_ref(s).v;
+   else
+      block8_ref(d).v = block8_ref(s).v;
+}

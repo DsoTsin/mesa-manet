@@ -32,8 +32,10 @@ panvk_instr_end_render(enum panvk_subqueue_id id,
                        struct panvk_utrace_cs_info *cs_info,
                        const struct panvk_instr_end_args *const args)
 {
-   trace_end_render(&cs_info->cmdbuf->utrace.uts[id], cs_info, args->render.flags,
-                    args->render.fb);
+   trace_end_render(&cs_info->cmdbuf->utrace.uts[id], cs_info,
+                    &cs_info->cmdbuf->utrace
+                        .passes[id][cs_info->cmdbuf->utrace.pass_depth[id]],
+                    args->render.flags, args->render.fb);
 }
 
 static void
@@ -42,6 +44,8 @@ panvk_instr_end_dispatch(enum panvk_subqueue_id id,
                          const struct panvk_instr_end_args *const args)
 {
    trace_end_dispatch(&cs_info->cmdbuf->utrace.uts[id], cs_info,
+                      &cs_info->cmdbuf->utrace
+                          .passes[id][cs_info->cmdbuf->utrace.pass_depth[id]],
                       args->dispatch.base_group_x, args->dispatch.base_group_y,
                       args->dispatch.base_group_z, args->dispatch.group_count_x,
                       args->dispatch.group_count_y,
@@ -54,11 +58,14 @@ panvk_instr_end_dispatch_indirect(enum panvk_subqueue_id id,
                                   struct panvk_utrace_cs_info *cs_info,
                                   const struct panvk_instr_end_args *const args)
 {
-   trace_end_dispatch_indirect(&cs_info->cmdbuf->utrace.uts[id], cs_info,
-                               (struct u_trace_address){
-                                  .bo = NULL,
-                                  .offset = args->dispatch_indirect.buffer_gpu,
-                               });
+   trace_end_dispatch_indirect(
+      &cs_info->cmdbuf->utrace.uts[id], cs_info,
+      &cs_info->cmdbuf->utrace
+          .passes[id][cs_info->cmdbuf->utrace.pass_depth[id]],
+      (struct u_trace_address){
+         .bo = NULL,
+         .offset = args->dispatch_indirect.buffer_gpu,
+      });
 }
 
 static void
@@ -146,6 +153,31 @@ panvk_per_arch(panvk_instr_begin_work)(enum panvk_subqueue_id id,
                                        struct panvk_cmd_buffer *cmdbuf,
                                        enum panvk_instr_work_type work_type)
 {
+   if (!u_trace_enabled(cmdbuf->utrace.uts[id].utctx))
+      return;
+
+   if (work_type == PANVK_INSTR_WORK_TYPE_RENDER ||
+       work_type == PANVK_INSTR_WORK_TYPE_DISPATCH ||
+       work_type == PANVK_INSTR_WORK_TYPE_DISPATCH_INDIRECT) {
+      uint32_t depth = cmdbuf->utrace.pass_depth[id]++;
+      if (depth >= ARRAY_SIZE(cmdbuf->utrace.passes[id]))
+         return;
+      struct panvk_utrace_pass *pass = &cmdbuf->utrace.passes[id][depth];
+      *pass = (struct panvk_utrace_pass){
+         .command_buffer = (uintptr_t)cmdbuf,
+         .pass = ++cmdbuf->utrace.pass_index[id],
+         .subqueue = id,
+      };
+      if (cmdbuf->vk.labels.size) {
+         const VkDebugUtilsLabelEXT *label =
+            util_dynarray_top_ptr(&cmdbuf->vk.labels, VkDebugUtilsLabelEXT);
+         size_t len = strnlen(label->pLabelName, sizeof(pass->label) - 1);
+         while (len && ((unsigned char)label->pLabelName[len] & 0xc0) == 0x80)
+            len--;
+         memcpy(pass->label, label->pLabelName, len);
+      }
+   }
+
    struct cs_async_op op = cs_now();
    struct panvk_utrace_cs_info cs_info = {
       .cmdbuf = cmdbuf,
@@ -210,6 +242,18 @@ panvk_per_arch(panvk_instr_end_work_async)(
    const struct panvk_instr_end_args *const args,
    struct cs_async_op ts_async_op)
 {
+   if (!u_trace_enabled(cmdbuf->utrace.uts[id].utctx))
+      return;
+
+   if (work_type == PANVK_INSTR_WORK_TYPE_RENDER ||
+       work_type == PANVK_INSTR_WORK_TYPE_DISPATCH ||
+       work_type == PANVK_INSTR_WORK_TYPE_DISPATCH_INDIRECT) {
+      if (!cmdbuf->utrace.pass_depth[id] ||
+          --cmdbuf->utrace.pass_depth[id] >=
+             ARRAY_SIZE(cmdbuf->utrace.passes[id]))
+         return;
+   }
+
    struct panvk_utrace_cs_info cs_info = {
       .cmdbuf = cmdbuf,
       .ts_async_op = &ts_async_op,

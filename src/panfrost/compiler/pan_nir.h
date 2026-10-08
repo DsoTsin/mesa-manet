@@ -13,6 +13,7 @@
 struct util_format_description;
 
 bool pan_nir_opt_phi_alu(nir_shader *shader);
+bool pan_nir_link_varyings(nir_shader *producer, nir_shader *consumer);
 bool pan_nir_lower_robust_image_access2(nir_shader *shader);
 
 nir_shader *pan_nir_opt_preamble(nir_shader *nir,
@@ -392,7 +393,10 @@ bool pan_nir_lower_framebuffer(nir_shader *shader,
                                bool broken_ld_special);
 
 bool pan_nir_lower_fs_outputs(nir_shader *shader, bool skip_atest,
-                              unsigned fragcolor_nr_cbufs);
+                              unsigned fragcolor_nr_cbufs,
+                              uint8_t trim_color_locs, bool early_atest);
+
+bool pan_nir_move_atest_after_discards(nir_shader *shader);
 
 uint32_t pan_nir_collect_noperspective_varyings_fs(nir_shader *s);
 

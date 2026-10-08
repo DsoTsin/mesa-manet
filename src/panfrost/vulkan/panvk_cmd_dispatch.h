@@ -61,6 +61,7 @@ struct panvk_cmd_compute_state {
 enum panvk_csf_barrier {
    PANVK_CSF_BARRIER_SYNC,
    PANVK_CSF_BARRIER_WAIT,
+   PANVK_CSF_BARRIER_NONE,
 };
 
 void panvk_per_arch(cmd_signal_barrier)(

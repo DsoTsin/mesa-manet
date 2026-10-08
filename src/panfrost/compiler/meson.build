@@ -7,6 +7,7 @@ libpanfrost_compiler_files = files(
   'pan_nir_collect_varyings.c',
   'pan_nir_fuse_io_cvt.c',
   'pan_nir_instrument.c',
+  'pan_nir_link_varyings.c',
   'pan_nir_lower_bf16.c',
   'pan_nir_lower_bool_to_bitsize.c',
   'pan_nir_lower_divergent_scratch.c',

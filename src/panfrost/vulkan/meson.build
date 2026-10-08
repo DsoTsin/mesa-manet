@@ -57,6 +57,7 @@ libpanvk_files = files(
   'panvk_buffer.c',
   'panvk_cmd_pool.c',
   'panvk_device_memory.c',
+  'panvk_dynamic_cache.c',
   'panvk_host_copy.c',
   'panvk_image.c',
   'panvk_instance.c',
@@ -118,6 +119,7 @@ csf_files = [
   'csf/panvk_vX_cmd_cond_render.c',
   'csf/panvk_vX_cmd_dgc.c',
   'csf/panvk_vX_cmd_dispatch.c',
+  'csf/panvk_vX_cmd_dynamic_cache.c',
   'csf/panvk_vX_cmd_draw.c',
   'csf/panvk_vX_cmd_event.c',
   'csf/panvk_vX_cmd_xfb.c',
@@ -200,7 +202,8 @@ foreach arch : [6, 7, 10, 11, 12, 13, 14, 15]
   endif
 
   if arch in csf_archs
-    per_arch_files += ['panvk_vX_bc_emu.c', panvk_bcn_spv, panvk_bcn_3d_spv, panvk_bcn_astc_spv]
+    per_arch_files += ['panvk_vX_bc_emu.c', panvk_bcn_spv, panvk_bcn_3d_spv, panvk_bcn_astc_spv,
+                       'panvk_vX_copy_blocks.c', panvk_copy_blocks_spv]
   endif
 
   if arch in jm_archs
@@ -338,3 +341,16 @@ _dev_icd = custom_target(
 )
 
 devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())
+
+if with_tests
+  test(
+    'panvk_dynamic_cache',
+    executable(
+      'panvk_dynamic_cache_test',
+      files('test-dynamic-cache.c', 'panvk_dynamic_cache.c'),
+      include_directories : [inc_include, inc_src, inc_panfrost],
+      dependencies : [idep_mesautil, idep_vulkan_util, idep_vulkan_runtime, dep_thread],
+    ),
+    suite : ['panfrost'],
+  )
+endif
