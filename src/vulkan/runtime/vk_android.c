@@ -236,7 +236,7 @@ vk_android_import_anb_memory(struct vk_device *device,
 
    uint32_t compatible_types = mem_reqs.memoryTypeBits & fd_props.memoryTypeBits;
    if (!compatible_types) {
-      mesa_loge("No compatible AHB mem types (img_reqs=%#b,fd_reqs=%#b)",
+      mesa_loge("No compatible AHB mem types (img_reqs=%#x,fd_reqs=%#x)",
                  mem_reqs.memoryTypeBits, fd_props.memoryTypeBits);
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
    }
