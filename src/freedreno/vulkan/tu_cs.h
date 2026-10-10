@@ -923,9 +923,6 @@ struct tu_crb : public tu_pkt {
       return *this;
    }
 
-   /* for with_crb() */
-   bool first = true;
-
 private:
    /* Disallow copy constructor to prevent mistakes with using tu_crb instead
     * of tu_crb& as function param:
@@ -934,9 +931,14 @@ private:
 };
 
 
-#define with_crb(...) \
-   for (tu_crb crb(__VA_ARGS__); crb.first; crb.first = false)
+#define __with_crb(_label, ...)                                      \
+   for (tu_crb crb(__VA_ARGS__); true; ({ goto _label; }))           \
+      if (false) {                                                   \
+_label:                                                              \
+         break;                                                      \
+      } else
 
+#define with_crb(...) __with_crb(CONCAT2(_label, __COUNTER__), __VA_ARGS__)
 
 /**
  * A builder for an arbitrary PKT7 (for CRB, use fd_crb instead)
