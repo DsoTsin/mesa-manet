@@ -398,8 +398,6 @@ public:
       return *this;
    }
 
-   bool first = true;
-
 protected:
    fd_crb(struct fd_ringbuffer *ring) : fd_pkt(ring) {}
 
@@ -415,8 +413,15 @@ private:
    }
 };
 
-#define with_crb(...) \
-   for (fd_crb crb(__VA_ARGS__); crb.first; crb.first = false)
+#define __with_crb(_label, ...)                                      \
+   for (fd_crb crb(__VA_ARGS__); true; ({ goto _label; }))           \
+      if (false) {                                                   \
+_label:                                                              \
+         break;                                                      \
+      } else
+
+
+#define with_crb(...) __with_crb(CONCAT2(_label, __COUNTER__), __VA_ARGS__)
 
 /**
  * A builder for writing non-context regs, which is implemented differently
@@ -434,8 +439,14 @@ public:
    fd_ncrb& add(struct fd_reg_pair reg_lo, struct fd_reg_pair reg_hi);
 };
 
-#define with_ncrb(cs, nregs) \
-   for (fd_ncrb<CHIP> ncrb(cs, nregs); ncrb.first; ncrb.first = false)
+#define __with_ncrb(_label, cs, nregs)                               \
+   for (fd_ncrb<CHIP> ncrb(cs, nregs); true; ({ goto _label; }))     \
+      if (false) {                                                   \
+_label:                                                              \
+         break;                                                      \
+      } else
+
+#define with_ncrb(cs, nregs) __with_ncrb(CONCAT2(_label, __COUNTER__), cs, nregs)
 
 /**
  * A6XX does not have CP_NON_CONTEXT_REG_BUNCH, so the builder is implemented
@@ -462,8 +473,6 @@ public:
       fd_pkt4::add(reg_lo, reg_hi);
       return *this;
    }
-
-   bool first = true;
 
 private:
    void check_restart(struct fd_reg_pair reg) {
@@ -498,8 +507,6 @@ public:
       fd_crb::add(reg_lo, reg_hi);
       return *this;
    }
-
-   bool first = true;
 };
 
 /**
