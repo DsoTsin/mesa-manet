@@ -32,6 +32,7 @@
 #include "util/u_atomic.h"
 #include "git_sha1.h"
 
+#include "vk_acceleration_structure.h"
 #include "vk_android.h"
 #include "vk_device.h"
 #include "vk_drm_syncobj.h"
@@ -49,6 +50,8 @@
 #include "panvk_instance.h"
 #include "panvk_perf_counters_by_region.h"
 #include "panvk_physical_device.h"
+
+alignas(8) uint64_t panvk_heap_used;
 #include "panvk_tensor.h"
 #include "panvk_wsi.h"
 
@@ -1899,7 +1902,7 @@ panvk_GetPhysicalDeviceMemoryProperties2(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT: {
          VkPhysicalDeviceMemoryBudgetPropertiesEXT *p = ext;
 
-         uint64_t used = p_atomic_read(&physical_device->memory.heap_used);
+         uint64_t used = p_atomic_read(&panvk_heap_used);
          uint64_t heap_size = physical_device->memory.heaps[0].size;
 
          /* From the Vulkan 1.3.278 spec:
@@ -2229,8 +2232,12 @@ get_buffer_format_features(struct panvk_physical_device *physical_device,
    enum pipe_format pfmt = vk_format_to_pipe_format(format);
    const struct pan_format fmt = physical_device->formats.all[pfmt];
 
+   if (physical_device->vk.supported_extensions.KHR_acceleration_structure &&
+       vk_acceleration_struct_vtx_format_supported(format))
+      features |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
+
    if (!format_is_supported(physical_device, fmt, pfmt))
-      return 0;
+      return features;
 
    /* Reject sRGB formats (see
     * https://github.com/KhronosGroup/Vulkan-Docs/issues/2214).

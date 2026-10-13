@@ -17,7 +17,7 @@ foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14', '15']
 
   # Software tessellation is used by the CSF PanVK path.
   if ver.to_int() >= 10
-    libpan_shader_files_cur_ver += files('poly_tessellation.cl', 'csf_dgc.cl', 'xfb.cl')
+    libpan_shader_files_cur_ver += files('poly_tessellation.cl', 'csf_dgc.cl', 'xfb.cl', 'gs.cl')
   endif
 
   libpan_spv = custom_target(

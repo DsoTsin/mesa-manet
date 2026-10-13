@@ -182,6 +182,7 @@ meta_gfx_start(struct panvk_cmd_buffer *cmdbuf,
    save_ctx->vs.desc = cmdbuf->state.gfx.vs.desc;
    save_ctx->tcs = cmdbuf->state.gfx.tess.tcs.shader;
    save_ctx->tes = cmdbuf->state.gfx.tess.tes.shader;
+   save_ctx->tes_bound = cmdbuf->state.gfx.tess.tes.bound;
    save_ctx->vb0 = cmdbuf->state.gfx.vb.bufs[0];
 
    save_ctx->dyn_state.all = cmdbuf->vk.dynamic_graphics_state;
@@ -256,6 +257,7 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
       gfx_state_set_dirty(cmdbuf, TCS);
       gfx_state_set_dirty(cmdbuf, TCS_PUSH_UNIFORMS);
    }
+   cmdbuf->state.gfx.tess.tes.bound = save_ctx->tes_bound;
    if (cmdbuf->state.gfx.tess.tes.shader != save_ctx->tes) {
       cmdbuf->state.gfx.tess.tes.shader = save_ctx->tes;
       gfx_state_set_dirty(cmdbuf, TES);

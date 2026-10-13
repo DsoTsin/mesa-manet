@@ -207,6 +207,21 @@ panvk_AllocateMemory(VkDevice _device,
 
    mem->addr.dev = op.va.start;
 
+   if ((mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT) &&
+       !mem->vk.import_handle_type && !mem->vk.ahardware_buffer) {
+      const uint64_t size = pan_kmod_bo_size(mem->bo);
+      void *cpu =
+         pan_kmod_bo_mmap(mem->bo, PROT_READ | PROT_WRITE, MAP_SHARED, NULL);
+
+      if (cpu != MAP_FAILED) {
+         memset(cpu, 0, size);
+         pan_kmod_queue_bo_map_sync(mem->bo, 0, cpu, size,
+                                    PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH);
+         pan_kmod_flush_bo_map_syncs(device->kmod.dev);
+         pan_kmod_bo_munmap(mem->bo, cpu, size);
+      }
+   }
+
    panvk_address_binding_report(device, &mem->vk.base, mem->addr.dev,
                                 pan_kmod_bo_size(mem->bo),
                                 VK_DEVICE_ADDRESS_BINDING_TYPE_BIND_EXT);
@@ -242,8 +257,7 @@ panvk_AllocateMemory(VkDevice _device,
 
    panvk_memory_emit_report(device, mem, pAllocateInfo, VK_SUCCESS);
 
-   p_atomic_add(&physical_device->memory.heap_used,
-                (uint64_t)pan_kmod_bo_size(mem->bo));
+   p_atomic_add(&panvk_heap_used, (uint64_t)pan_kmod_bo_size(mem->bo));
 
    *pMem = panvk_device_memory_to_handle(mem);
 
@@ -274,11 +288,7 @@ panvk_FreeMemory(VkDevice _device, VkDeviceMemory _mem,
    if (mem == NULL)
       return;
 
-   struct panvk_physical_device *physical_device =
-      to_panvk_physical_device(device->vk.physical);
-
-   p_atomic_add(&physical_device->memory.heap_used,
-                -((int64_t)pan_kmod_bo_size(mem->bo)));
+   p_atomic_add(&panvk_heap_used, -((int64_t)pan_kmod_bo_size(mem->bo)));
 
    if (device->debug.decode_ctx) {
       pandecode_inject_free(device->debug.decode_ctx, mem->addr.dev,

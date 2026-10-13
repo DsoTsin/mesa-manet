@@ -266,7 +266,7 @@ static const struct pan_varying_slot hw_varying_slots[] = {{
    .alu_type = nir_type_uint8,
    .ncomps = 1,
    .section = PAN_VARYING_SECTION_ATTRIBS,
-   .offset = 2,
+   .offset = 3,
 }, {
    .location = VARYING_SLOT_PRIMITIVE_ID,
    .alu_type = nir_type_uint32,

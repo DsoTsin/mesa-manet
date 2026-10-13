@@ -758,6 +758,14 @@ vk_ahb_format_to_image_format(uint32_t ahb_format)
    case AHARDWAREBUFFER_FORMAT_R8_UNORM:
       return VK_FORMAT_R8_UNORM;
 #endif
+#if ANDROID_API_LEVEL >= 34
+   case AHARDWAREBUFFER_FORMAT_R16_UINT:
+      return VK_FORMAT_R16_UINT;
+   case AHARDWAREBUFFER_FORMAT_R16G16_UINT:
+      return VK_FORMAT_R16G16_UINT;
+   case AHARDWAREBUFFER_FORMAT_R10G10B10A10_UNORM:
+      return VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16;
+#endif
    case AHARDWAREBUFFER_FORMAT_Y8:
       return VK_FORMAT_R8_UNORM;
    case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:
@@ -803,6 +811,14 @@ vk_image_format_to_ahb_format(VkFormat vk_format)
    case VK_FORMAT_R8_UNORM:
       return AHARDWAREBUFFER_FORMAT_R8_UNORM;
 #endif
+#if ANDROID_API_LEVEL >= 34
+   case VK_FORMAT_R16_UINT:
+      return AHARDWAREBUFFER_FORMAT_R16_UINT;
+   case VK_FORMAT_R16G16_UINT:
+      return AHARDWAREBUFFER_FORMAT_R16G16_UINT;
+   case VK_FORMAT_R10X6G10X6B10X6A10X6_UNORM_4PACK16:
+      return AHARDWAREBUFFER_FORMAT_R10G10B10A10_UNORM;
+#endif
    case VK_FORMAT_B8G8R8A8_UNORM:
       return AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM;
    default:
@@ -820,8 +836,13 @@ vk_external_format_to_efr_format(VkFormat external_format)
    switch (external_format) {
    case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
    case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+   case VK_FORMAT_G8_B8R8_2PLANE_422_UNORM:
+   case VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM:
+   case VK_FORMAT_G8B8G8R8_422_UNORM:
+   case VK_FORMAT_B8G8R8G8_422_UNORM:
       return VK_FORMAT_R8G8B8A8_UNORM;
    case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16:
+   case VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16:
       return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
    default:
       break;
@@ -1113,21 +1134,52 @@ get_ahb_buffer_format_properties2(
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
    }
 
+   bool swap_chroma = false;
    switch (info.drm_fourcc) {
    case DRM_FORMAT_YVU420:
       /* Assuming that U and V planes are swapped earlier */
+   case DRM_FORMAT_YUV420:
       external_format = VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM;
       break;
-   case DRM_FORMAT_NV12:
+   case DRM_FORMAT_YVU422:
+   case DRM_FORMAT_YUV422:
+      external_format = VK_FORMAT_G8_B8_R8_3PLANE_422_UNORM;
+      break;
+   case DRM_FORMAT_NV21:
+      swap_chroma = true;
       external_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
       break;
+   case DRM_FORMAT_NV12:
+   case DRM_FORMAT_YUV420_8BIT:
+      external_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+      break;
+   case DRM_FORMAT_NV61:
+      swap_chroma = true;
+      external_format = VK_FORMAT_G8_B8R8_2PLANE_422_UNORM;
+      break;
+   case DRM_FORMAT_NV16:
+      external_format = VK_FORMAT_G8_B8R8_2PLANE_422_UNORM;
+      break;
+   case DRM_FORMAT_YUYV:
+      external_format = VK_FORMAT_G8B8G8R8_422_UNORM;
+      break;
+   case DRM_FORMAT_UYVY:
+      external_format = VK_FORMAT_B8G8R8G8_422_UNORM;
+      break;
    case DRM_FORMAT_P010:
+   case DRM_FORMAT_YUV420_10BIT:
       external_format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
       break;
    case DRM_FORMAT_P210:
       external_format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_422_UNORM_3PACK16;
       break;
+   case DRM_FORMAT_R16:
+      external_format = desc.format == HAL_PIXEL_FORMAT_Y16
+                           ? VK_FORMAT_R16_UNORM
+                           : VK_FORMAT_R16_UINT;
+      break;
    case DRM_FORMAT_XBGR8888:
+   case DRM_FORMAT_ABGR8888:
       /* This can be resolved from IMPLEMENTATION_DEFINED AHB format */
       external_format = VK_FORMAT_R8G8B8A8_UNORM;
       break;
@@ -1135,6 +1187,9 @@ get_ahb_buffer_format_properties2(
       mesa_loge("Unsupported external DRM format: %d", info.drm_fourcc);
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
    }
+
+   if (!vk_format_get_ycbcr_info(external_format))
+      goto finish;
 
    struct u_gralloc_buffer_color_info color_info;
    if (u_gralloc_get_buffer_color_info(vk_android_get_ugralloc(), &gr_handle,
@@ -1155,6 +1210,11 @@ get_ahb_buffer_format_properties2(
       break;
    default:
       break;
+   }
+
+   if (swap_chroma) {
+      p->samplerYcbcrConversionComponents.r = VK_COMPONENT_SWIZZLE_B;
+      p->samplerYcbcrConversionComponents.b = VK_COMPONENT_SWIZZLE_R;
    }
 
    p->suggestedYcbcrRange = (color_info.sample_range == __DRI_YUV_NARROW_RANGE)

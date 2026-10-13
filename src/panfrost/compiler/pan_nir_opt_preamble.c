@@ -592,6 +592,7 @@ struct buffer_bases {
    struct buffer_base *bases;
    unsigned count;
    nir_variable_mode modes;
+   struct hash_table *range_ht;
 };
 
 static nir_variable_mode
@@ -679,9 +680,18 @@ collect_buffer_bases(nir_function_impl *impl, nir_variable_mode modes,
             compare_buffer_base);
 }
 
+static bool
+add_imm_no_wrap(nir_builder *b, struct hash_table *range_ht, nir_scalar add,
+                nir_scalar x, uint32_t imm)
+{
+   return nir_def_as_alu(add.def)->no_unsigned_wrap ||
+          nir_unsigned_upper_bound(b->shader, range_ht, x) <= UINT32_MAX - imm;
+}
+
 static nir_def *
-buffer_address(nir_builder *b, nir_def *base, nir_def *offset, unsigned shift,
-               unsigned align_offset, bool fold_imm)
+buffer_address(nir_builder *b, struct hash_table *range_ht, nir_def *base,
+               nir_def *offset, unsigned shift, unsigned align_offset,
+               bool fold_imm)
 {
    nir_scalar s = nir_scalar_chase_movs(nir_get_scalar(offset, 0));
    if (nir_scalar_is_const(s)) {
@@ -699,7 +709,8 @@ buffer_address(nir_builder *b, nir_def *base, nir_def *offset, unsigned shift,
          nir_scalar x = nir_scalar_chase_alu_src(s, 1 - i);
          uint32_t imm = (uint32_t)nir_scalar_as_uint(c);
          nir_def *xd = nir_channel(b, x.def, x.comp);
-         if (fold_imm && imm <= INT16_MAX) {
+         if (fold_imm && imm <= INT16_MAX &&
+             add_imm_no_wrap(b, range_ht, s, x, imm)) {
             rest = xd;
             fold = imm;
          } else if (align_offset > 0 && align_offset <= INT16_MAX) {
@@ -864,13 +875,13 @@ rewrite_buffer_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    b->cursor = nir_before_instr(&intr->instr);
    if (intr->intrinsic == nir_intrinsic_load_ssbo_address) {
       nir_def_replace(&intr->def,
-                      buffer_address(b, base, intr->src[1].ssa, 0,
-                                     address_user_align_offset(&intr->def),
+                      buffer_address(b, bb->range_ht, base, intr->src[1].ssa,
+                                     0, address_user_align_offset(&intr->def),
                                      address_user_folds_offset(&intr->def)));
       return true;
    }
 
-   nir_def *addr = buffer_address(b, base, intr->src[1].ssa,
+   nir_def *addr = buffer_address(b, bb->range_ht, base, intr->src[1].ssa,
                                   nir_intrinsic_offset_shift(intr),
                                   nir_intrinsic_align_offset(intr), true);
    nir_def *value = nir_load_global(
@@ -1069,9 +1080,12 @@ pan_nir_opt_preamble(nir_shader *nir, const struct pan_compile_inputs *inputs,
    unsigned slots = size[0];
    if (bb.count)
       slots = pilot_emit_buffer_bases(pilot, main, &bb, first);
-   if (buffer_modes)
+   if (buffer_modes) {
+      bb.range_ht = _mesa_pointer_hash_table_create(NULL);
       NIR_PASS(_, clone, nir_shader_intrinsics_pass, rewrite_buffer_access,
                nir_metadata_control_flow, &bb);
+      _mesa_hash_table_destroy(bb.range_ht, NULL);
+   }
    if (bb.count)
       NIR_PASS(_, clone, nir_opt_cse);
    util_dynarray_fini(&bases);

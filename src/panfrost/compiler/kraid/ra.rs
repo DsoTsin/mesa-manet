@@ -132,7 +132,8 @@ impl Arena {
     pub fn regs_used(&self) -> u8 {
         debug_assert!(!self.is_mem);
         debug_assert!(self.bytes_used() % 4 == 0);
-        (self.bytes_used() / 4).try_into().unwrap()
+        let bytes = self.bytes_used().max(self.granularity.into());
+        (bytes / 4).try_into().unwrap()
     }
 
     /// Returns true if the given SSAValue is in this arena

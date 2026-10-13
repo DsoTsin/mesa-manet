@@ -8,6 +8,8 @@
 #include "panvk_device.h"
 #include "panvk_image.h"
 
+#include "drm-uapi/drm_fourcc.h"
+#include "util/u_gralloc/u_gralloc.h"
 #include "vndk/hardware_buffer.h"
 #include "vulkan/vk_android_native_buffer.h"
 
@@ -234,6 +236,19 @@ panvk_android_ahb_image_init(struct AHardwareBuffer *ahb,
    if (result != VK_SUCCESS)
       return result;
    __vk_append_struct(img->vk.android_deferred_create_info, &mod_info);
+
+   AHardwareBuffer_Desc desc;
+   AHardwareBuffer_describe(ahb, &desc);
+   struct u_gralloc_buffer_handle gr_handle = {
+      .handle = AHardwareBuffer_getNativeHandle(ahb),
+      .pixel_stride = desc.stride,
+      .hal_format = desc.format,
+   };
+   struct u_gralloc_buffer_basic_info info;
+   if (u_gralloc_get_buffer_basic_info(vk_android_get_ugralloc(), &gr_handle,
+                                       &info) == 0)
+      img->yuv_swap_chroma = info.drm_fourcc == DRM_FORMAT_NV21 ||
+                             info.drm_fourcc == DRM_FORMAT_NV61;
 
    VkExternalMemoryImageCreateInfo external_info = {
       .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,

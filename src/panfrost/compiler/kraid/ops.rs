@@ -5497,6 +5497,8 @@ impl Op {
                 true
             }
 
+            Op::LdTile(op) => op.z_stencil,
+
             // Stores are ignored in discarded lanes
             Op::StTile(_) => true,
             Op::Store(op) => op.access != MemAccess::Force,

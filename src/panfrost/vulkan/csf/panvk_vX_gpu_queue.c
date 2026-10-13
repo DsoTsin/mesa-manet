@@ -1066,8 +1066,20 @@ kbase_destroy_group(struct panvk_gpu_queue *queue)
 {
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
 
+   /* Single-CSG layout: the group is owned by the queue, not a subqueue. */
+   if (queue->group_handle != UINT32_MAX) {
+      kbase_kmod_csf_group_destroy(dev->kmod.dev, queue->group_handle);
+      queue->group_handle = UINT32_MAX;
+   }
+
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct panvk_subqueue *subq = &queue->subqueues[i];
+
+      if (subq->kbase.group_handle != UINT32_MAX) {
+         kbase_kmod_csf_group_destroy(dev->kmod.dev,
+                                      subq->kbase.group_handle);
+         subq->kbase.group_handle = UINT32_MAX;
+      }
 
       if (subq->kbase.user_io.map)
          kbase_kmod_csf_queue_term(dev->kmod.dev, subq->kbase.ringbuf_dev,
@@ -1075,18 +1087,6 @@ kbase_destroy_group(struct panvk_gpu_queue *queue)
 
       pan_kmod_bo_put(subq->kbase.ringbuf_bo);
       subq->kbase.ringbuf_bo = NULL;
-
-      if (subq->kbase.group_handle != UINT32_MAX) {
-         kbase_kmod_csf_group_destroy(dev->kmod.dev,
-                                      subq->kbase.group_handle);
-         subq->kbase.group_handle = UINT32_MAX;
-      }
-   }
-
-   /* Single-CSG layout: the group is owned by the queue, not a subqueue. */
-   if (queue->group_handle != UINT32_MAX) {
-      kbase_kmod_csf_group_destroy(dev->kmod.dev, queue->group_handle);
-      queue->group_handle = UINT32_MAX;
    }
 
    panvk_priv_bo_unref(queue->dvs_bo);
@@ -1278,6 +1278,10 @@ finish_render_desc_ringbuf(struct panvk_gpu_queue *queue)
                                ringbuf->size);
    }
 
+   if (ringbuf->addr.dev)
+      panvk_address_binding_report(dev, NULL, ringbuf->addr.dev, ringbuf->size,
+                                   VK_DEVICE_ADDRESS_BINDING_TYPE_UNBIND_EXT);
+
 #ifdef HAVE_PAN_KMOD_KBASE
    if (gpu_queue_uses_kbase(dev)) {
       /* The BO's own mapping goes away with the BO; only the alias region
@@ -1288,9 +1292,6 @@ finish_render_desc_ringbuf(struct panvk_gpu_queue *queue)
    } else
 #endif
    if (ringbuf->addr.dev) {
-      panvk_address_binding_report(dev, NULL, ringbuf->addr.dev, ringbuf->size,
-                                   VK_DEVICE_ADDRESS_BINDING_TYPE_UNBIND_EXT);
-
       struct pan_kmod_vm_op op = {
          .type = PAN_KMOD_VM_OP_TYPE_UNMAP,
          .va = {

@@ -672,8 +672,8 @@ rt_pipeline_create(struct panvk_device *dev,
       nir_shader *nir = linked.nir;
       ralloc_steal(NULL, nir);
       result = panvk_per_arch(rt_compile_nir)(
-         dev, nir, pipeline->layout, &pipeline->robustness, flags, alloc,
-         &pipeline->shader);
+         dev, nir, pipeline->layout, &pipeline->robustness, flags,
+         linked.ray_query_slots, alloc, &pipeline->shader);
    }
    ralloc_free(link_ctx);
    if (result != VK_SUCCESS)

@@ -210,6 +210,7 @@ va_shader_output_from_loc(gl_varying_slot location)
       return VA_SHADER_OUTPUT_POSITION;
    case VARYING_SLOT_PSIZ:
    case VARYING_SLOT_LAYER:
+   case VARYING_SLOT_VIEWPORT:
    case VARYING_SLOT_PRIMITIVE_ID:
    case VARYING_SLOT_PRIMITIVE_SHADING_RATE:
       return VA_SHADER_OUTPUT_ATTRIB;

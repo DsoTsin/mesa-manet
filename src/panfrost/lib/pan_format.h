@@ -361,8 +361,12 @@ pan_yuv_rt_internal_format(enum pipe_format format)
    switch (format) {
    case PIPE_FORMAT_G8_B8R8_420_UNORM:
    case PIPE_FORMAT_G8_B8_R8_420_UNORM:
+   case PIPE_FORMAT_NV16:
+   case PIPE_FORMAT_Y8_U8_V8_422_UNORM:
+   case PIPE_FORMAT_G8B8_G8R8_UNORM:
       return PIPE_FORMAT_R8G8B8A8_UNORM;
    case PIPE_FORMAT_X6G10_X6B10X6R10_420_UNORM:
+   case PIPE_FORMAT_X6G10_X6B10X6R10_422_UNORM:
       return PIPE_FORMAT_R10G10B10A2_UNORM;
    default:
       UNREACHABLE("Unsupported YUV RT format");

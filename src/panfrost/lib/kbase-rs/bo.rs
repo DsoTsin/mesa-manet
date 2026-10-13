@@ -7,8 +7,8 @@ use std::ffi::{c_int, c_void};
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::ptr;
-use std::sync::LazyLock;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{LazyLock, Mutex};
 
 use crate::dev::Dev;
 use crate::pan_kmod::*;
@@ -22,7 +22,20 @@ pub struct Bo {
     map: *mut c_void,
     cpu: *mut c_void,
     dmabuf: Option<OwnedFd>,
+    own_dmabuf: Option<(u64, u64)>,
     same_va: bool,
+}
+
+static OWN_DMABUFS: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+fn dmabuf_key(fd: c_int) -> Option<(u64, u64)> {
+    let mut st = unsafe { std::mem::zeroed::<libc::stat>() };
+    (unsafe { libc::fstat(fd, &mut st) } == 0)
+        .then(|| (st.st_dev as u64, st.st_ino as u64))
+}
+
+fn own_dmabufs() -> std::sync::MutexGuard<'static, Vec<(u64, u64)>> {
+    OWN_DMABUFS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Bo {
@@ -39,6 +52,7 @@ impl Bo {
             map,
             cpu: map,
             dmabuf: None,
+            own_dmabuf: None,
             same_va,
         }
     }
@@ -58,6 +72,12 @@ impl Bo {
 
 impl Drop for Bo {
     fn drop(&mut self) {
+        if let Some(key) = self.own_dmabuf {
+            let mut own = own_dmabufs();
+            if let Some(i) = own.iter().position(|k| *k == key) {
+                own.swap_remove(i);
+            }
+        }
         let size = self.base.size as usize;
         unsafe {
             if !self.cpu.is_null() && self.cpu != self.map {
@@ -109,6 +129,8 @@ fn import(
     dmabuf: OwnedFd,
     flags: u32,
     external: bool,
+    system_coherent: bool,
+    own_key: Option<(u64, u64)>,
 ) -> *mut KmodBo {
     let mut mem = BASE_MEM_PROT_CPU_RD
         | BASE_MEM_PROT_CPU_WR
@@ -116,7 +138,7 @@ fn import(
         | BASE_MEM_PROT_GPU_WR
         | BASE_MEM_IMPORT_SHARED
         | BASE_MEM_COHERENT_LOCAL;
-    if !external {
+    if system_coherent {
         mem |= BASE_MEM_COHERENT_SYSTEM;
     }
     if flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED != 0 {
@@ -158,6 +180,7 @@ fn import(
     let same_va = out.flags & (BASE_MEM_SAME_VA | BASE_MEM_NEED_MMAP) != 0;
     let mut bo = Bo::new(dev, size, map, out.gpu_va, same_va);
     bo.dmabuf = Some(dmabuf);
+    bo.own_dmabuf = own_key;
     bo.cpu = ptr::null_mut();
     if flags & PAN_KMOD_BO_FLAG_NO_MMAP == 0 {
         match mmap(fd, size as usize, rw, 0) {
@@ -169,6 +192,9 @@ fn import(
         }
     }
 
+    if let Some(key) = own_key {
+        own_dmabufs().push(key);
+    }
     logd!("imported dma-buf {fd}, size {size}");
     let imported = if external {
         PAN_KMOD_BO_FLAG_IMPORTED
@@ -194,7 +220,8 @@ fn alloc_dmabuf(
     {
         Some(out) => {
             let dmabuf = unsafe { OwnedFd::from_raw_fd(out.fd as c_int) };
-            import(dev, dmabuf, flags, false)
+            let key = dmabuf_key(dmabuf.as_raw_fd());
+            import(dev, dmabuf, flags, false, true, key)
         }
         None => ptr::null_mut(),
     }
@@ -303,7 +330,10 @@ pub extern "C" fn bo_import_fd(
 ) -> *mut KmodBo {
     let d = unsafe { Dev::get(dev) };
     match unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned() {
-        Ok(dmabuf) => import(d, dmabuf, 0, true),
+        Ok(dmabuf) => {
+            let own = dmabuf_key(fd).is_some_and(|k| own_dmabufs().contains(&k));
+            import(d, dmabuf, 0, true, own, None)
+        }
         Err(e) => {
             loge!("failed to duplicate dma-buf: {e}");
             ptr::null_mut()

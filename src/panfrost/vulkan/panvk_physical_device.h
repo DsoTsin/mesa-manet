@@ -26,6 +26,8 @@ struct pan_blendable_format;
 struct pan_format;
 struct panvk_instance;
 
+extern uint64_t panvk_heap_used;
+
 struct panvk_physical_device {
    struct vk_physical_device vk;
 
@@ -84,7 +86,6 @@ struct panvk_physical_device {
       uint32_t type_count;
 
       uint64_t max_supported_va;
-      alignas(8) uint64_t heap_used;
    } memory;
 
    struct vk_sync_type drm_syncobj_type;

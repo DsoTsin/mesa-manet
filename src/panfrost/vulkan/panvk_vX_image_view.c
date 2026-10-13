@@ -394,6 +394,8 @@ panvk_per_arch(CreateImageView)(VkDevice _device,
       }
    }
    vk_component_mapping_to_pipe_swizzle(view->vk.swizzle, view->pview.swizzle);
+   view->pview.yuv.swap_chroma =
+      image->yuv_swap_chroma && vk_format_get_ycbcr_info(view->vk.format);
 
    u_foreach_bit(aspect_bit, view->vk.aspects) {
       uint8_t image_plane = panvk_plane_index(image, 1u << aspect_bit);

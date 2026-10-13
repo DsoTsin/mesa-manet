@@ -26,6 +26,7 @@ enum FlowCtrlBit {
     Reconverge,
     Discard,
     EndShader,
+    Continue,
 }
 
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
@@ -97,6 +98,18 @@ impl FlowCtrl {
         self.take_ctrl_bit(FlowCtrlBit::Discard)
     }
 
+    pub fn get_continue(&self) -> bool {
+        self.get_ctrl_bit(FlowCtrlBit::Continue)
+    }
+
+    pub fn set_continue(&mut self) {
+        self.set_ctrl_bit(FlowCtrlBit::Continue)
+    }
+
+    pub fn take_continue(&mut self) -> bool {
+        self.take_ctrl_bit(FlowCtrlBit::Continue)
+    }
+
     pub fn get_end_shader(&self) -> bool {
         self.get_ctrl_bit(FlowCtrlBit::EndShader)
     }
@@ -139,6 +152,9 @@ impl fmt::Display for FlowCtrl {
         }
         if self.get_end_shader() {
             write!(f, ".end")?;
+        }
+        if self.get_continue() {
+            write!(f, ".continue")?;
         }
 
         // Wait bit

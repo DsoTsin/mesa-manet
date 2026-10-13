@@ -301,7 +301,6 @@ panvk_image_get_explicit_mod(
 {
    uint64_t mod = explicit->drmFormatModifier;
 
-   assert(!vk_format_is_depth_or_stencil(image->vk.format));
    assert(image->vk.samples == 1);
    assert(image->vk.image_type != VK_IMAGE_TYPE_3D);
    assert(panvk_image_can_use_mod(image, iusage, mod, false));
@@ -811,6 +810,28 @@ create_ms_images(struct panvk_device *dev, struct panvk_image *img,
           VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT);
    ms_img_info.flags &=
       ~VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
+   ms_img_info.pNext = NULL;
+   if (ms_img_info.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT)
+      ms_img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+
+   const VkImageFormatListCreateInfo *format_list =
+      vk_find_struct_const(pCreateInfo->pNext, IMAGE_FORMAT_LIST_CREATE_INFO);
+   const VkImageStencilUsageCreateInfo *stencil_usage =
+      vk_find_struct_const(pCreateInfo->pNext, IMAGE_STENCIL_USAGE_CREATE_INFO);
+   VkImageFormatListCreateInfo format_list_copy;
+   VkImageStencilUsageCreateInfo stencil_usage_copy;
+
+   if (format_list) {
+      format_list_copy = *format_list;
+      format_list_copy.pNext = ms_img_info.pNext;
+      ms_img_info.pNext = &format_list_copy;
+   }
+
+   if (stencil_usage) {
+      stencil_usage_copy = *stencil_usage;
+      stencil_usage_copy.pNext = ms_img_info.pNext;
+      ms_img_info.pNext = &stencil_usage_copy;
+   }
 
    for (uint32_t msaa_idx = 0; msaa_idx < ARRAY_SIZE(img->ms_imgs);
         ++msaa_idx) {
@@ -828,7 +849,7 @@ create_ms_images(struct panvk_device *dev, struct panvk_image *img,
 
       struct panvk_image *res = panvk_image_from_handle(img->ms_imgs[msaa_idx]);
       assert(res->vk.format == img->vk.format);
-      assert(res->plane_count == img->plane_count);
+      assert(!img->plane_count || res->plane_count == img->plane_count);
    }
 }
 
@@ -847,8 +868,14 @@ panvk_CreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
    VkResult result;
 
    if (panvk_android_is_gralloc_image(pCreateInfo)) {
-      return panvk_android_create_gralloc_image(device, pCreateInfo, pAllocator,
-                                                pImage);
+      result = panvk_android_create_gralloc_image(device, pCreateInfo,
+                                                  pAllocator, pImage);
+      if (result == VK_SUCCESS &&
+          (pCreateInfo->flags &
+           VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT))
+         create_ms_images(dev, panvk_image_from_handle(*pImage), pCreateInfo,
+                          pAllocator);
+      return result;
    }
 
    if (wsi_common_is_swapchain_image(pCreateInfo)) {
@@ -961,6 +988,7 @@ panvk_DestroyImage(VkDevice _device, VkImage _image,
       for (uint32_t i = 0; i < ARRAY_SIZE(image->ms_imgs); ++i) {
          panvk_DestroyImage(_device, image->ms_imgs[i], pAllocator);
       }
+      panvk_FreeMemory(_device, image->ms_mem, NULL);
    }
 
    if (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) {
@@ -1362,9 +1390,11 @@ static VkResult panvk_image_bind(struct panvk_device *dev,
                                  const VkBindImageMemoryInfo *bind_info);
 
 static void
-bind_ms_images(struct panvk_device *dev, const VkBindImageMemoryInfo *bind_info)
+bind_ms_images(struct panvk_device *dev, const VkBindImageMemoryInfo *bind_info,
+               const struct panvk_device_memory *mem)
 {
    VK_FROM_HANDLE(panvk_image, image, bind_info->image);
+   uint32_t sub_type_bits = ~0u;
 
    uint64_t total_size = 0;
    {
@@ -1405,6 +1435,7 @@ bind_ms_images(struct panvk_device *dev, const VkBindImageMemoryInfo *bind_info)
 
       sub_sz[i] = reqs2.memoryRequirements.size;
       sub_al[i] = reqs2.memoryRequirements.alignment;
+      sub_type_bits &= reqs2.memoryRequirements.memoryTypeBits;
    }
 
    /*
@@ -1424,6 +1455,28 @@ bind_ms_images(struct panvk_device *dev, const VkBindImageMemoryInfo *bind_info)
 
    uint64_t sub_image_offset =
       bind_info->memoryOffset + total_size - sub_imgs_aligned_size;
+   VkDeviceMemory sub_mem = bind_info->memory;
+
+   if (!bind_info->memory || mem->vk.import_handle_type ||
+       mem->vk.ahardware_buffer) {
+      if (!sub_imgs_aligned_size || !sub_type_bits)
+         return;
+
+      if (!image->ms_mem) {
+         const VkMemoryAllocateInfo alloc_info = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = sub_imgs_aligned_size,
+            .memoryTypeIndex = ffs(sub_type_bits) - 1,
+         };
+
+         if (panvk_AllocateMemory(panvk_device_to_handle(dev), &alloc_info,
+                                  NULL, &image->ms_mem) != VK_SUCCESS)
+            return;
+      }
+
+      sub_mem = image->ms_mem;
+      sub_image_offset = 0;
+   }
 
    for (uint32_t i = 0; i < ARRAY_SIZE(image->ms_imgs); ++i) {
       if (image->ms_imgs[i] == VK_NULL_HANDLE)
@@ -1434,7 +1487,7 @@ bind_ms_images(struct panvk_device *dev, const VkBindImageMemoryInfo *bind_info)
       VkBindImageMemoryInfo sub_bind_info = {
          .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
          .image = image->ms_imgs[i],
-         .memory = bind_info->memory,
+         .memory = sub_mem,
          .memoryOffset = sub_image_offset,
       };
 
@@ -1497,7 +1550,7 @@ panvk_image_bind(struct panvk_device *dev,
 
    if (!!(image->vk.create_flags &
           VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT))
-      bind_ms_images(dev, bind_info);
+      bind_ms_images(dev, bind_info, mem);
 
    return VK_SUCCESS;
 }

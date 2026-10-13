@@ -1019,7 +1019,7 @@ panvk_per_arch(get_physical_device_properties)(
       .maxImageDimension2D = (1 << 16),
       .maxImageDimension3D = (1 << 16),
       .maxImageDimensionCube = (1 << 16),
-      .maxImageArrayLayers = (1 << 16),
+      .maxImageArrayLayers = 4096,
       .maxTexelBufferElements = UINT64_C(1) << (util_logbase2(panvk_get_max_buffer_size(device) / 16)),
       /* Each uniform entry is 16-byte and the number of entries is encoded in a
        * 12-bit field, with the minus(1) modifier, which gives 2^20.

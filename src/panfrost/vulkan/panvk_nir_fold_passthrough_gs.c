@@ -341,3 +341,102 @@ out:
    free(fold);
    return progress;
 }
+
+static bool
+force_unit_point_size(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_store_deref)
+      return false;
+
+   nir_variable *var = nir_intrinsic_get_var(intr, 0);
+   if (!var || var->data.mode != nir_var_shader_out ||
+       var->data.location != VARYING_SLOT_PSIZ)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def *one = nir_imm_floatN_t(b, 1.0, intr->src[1].ssa->bit_size);
+   nir_src_rewrite(&intr->src[1],
+                   nir_replicate(b, one, intr->src[1].ssa->num_components));
+   return true;
+}
+
+static bool
+lower_prim_id_input(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_deref ||
+       nir_intrinsic_get_var(intr, 0) != data)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_load_primitive_id(b));
+   return true;
+}
+
+nir_shader *
+panvk_nir_create_polygon_mode_gs(const nir_shader_compiler_options *options,
+                                 const nir_shader *producer, bool points)
+{
+   nir_shader *gs = nir_create_passthrough_gs(
+      options, producer, MESA_PRIM_TRIANGLES,
+      points ? MESA_PRIM_POINTS : MESA_PRIM_TRIANGLES, false, !points, true);
+
+   gs->xfb_info = NULL;
+   gs->info.has_transform_feedback_varyings = false;
+   memset(gs->info.xfb_stride, 0, sizeof(gs->info.xfb_stride));
+
+   nir_variable *prim_id =
+      nir_find_variable_with_location(gs, nir_var_shader_in,
+                                      VARYING_SLOT_PRIMITIVE_ID);
+   if (prim_id) {
+      nir_shader_intrinsics_pass(gs, lower_prim_id_input,
+                                 nir_metadata_control_flow, prim_id);
+      nir_remove_dead_derefs(gs);
+      exec_node_remove(&prim_id->node);
+   }
+
+   if (points)
+      nir_shader_intrinsics_pass(gs, force_unit_point_size,
+                                 nir_metadata_control_flow, NULL);
+
+   nir_variable *pos =
+      nir_find_variable_with_location(gs, nir_var_shader_in, VARYING_SLOT_POS);
+   if (pos) {
+      nir_function_impl *impl = nir_shader_get_entrypoint(gs);
+      nir_builder b = nir_builder_at(nir_before_impl(impl));
+      nir_def *x[3], *y[3], *w[3];
+
+      for (unsigned i = 0; i < 3; i++) {
+         nir_def *v = nir_load_array_var_imm(&b, pos, i);
+         x[i] = nir_channel(&b, v, 0);
+         y[i] = nir_channel(&b, v, 1);
+         w[i] = nir_channel(&b, v, 3);
+      }
+
+      nir_def *det = nir_fadd(
+         &b,
+         nir_fsub(&b,
+                  nir_fmul(&b, x[0], nir_fsub(&b, nir_fmul(&b, y[1], w[2]),
+                                              nir_fmul(&b, y[2], w[1]))),
+                  nir_fmul(&b, y[0], nir_fsub(&b, nir_fmul(&b, x[1], w[2]),
+                                              nir_fmul(&b, x[2], w[1])))),
+         nir_fmul(&b, w[0], nir_fsub(&b, nir_fmul(&b, x[1], y[2]),
+                                     nir_fmul(&b, x[2], y[1]))));
+
+      nir_def *cull = nir_ior(
+         &b,
+         nir_iand(&b, nir_flt_imm(&b, det, 0.0),
+                  nir_load_cull_face_negative_determinant_enabled_amd(&b)),
+         nir_iand(&b, nir_fgt_imm(&b, det, 0.0),
+                  nir_load_cull_face_positive_determinant_enabled_amd(&b)));
+
+      nir_push_if(&b, cull);
+      nir_jump(&b, nir_jump_return);
+      nir_pop_if(&b, NULL);
+
+      nir_progress(true, impl, nir_metadata_none);
+      nir_lower_returns(gs);
+   }
+
+   nir_shader_gather_info(gs, nir_shader_get_entrypoint(gs));
+   return gs;
+}

@@ -283,6 +283,7 @@ fn finish_shader(
     pass!(s.opt_redundant_movs());
     pass!(s.hoist_message_loads());
     pass!(s.schedule_after_ra());
+    pass!(s.cluster_texture_messages());
 
     // These have to happen after register allocation because they may add
     // critical edges.
@@ -298,6 +299,7 @@ fn finish_shader(
     pass!(s.opt_flow());
     pass!(s.mark_helper_terminate());
     pass!(s.mark_last_use());
+    pass!(s.mark_message_continue());
 }
 
 fn allocation_better(c: &Shader, b: &Shader) -> bool {

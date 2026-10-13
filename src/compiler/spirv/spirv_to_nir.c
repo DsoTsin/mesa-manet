@@ -149,6 +149,7 @@ static const struct spirv_capabilities implemented_capabilities = {
    .RayQueryKHR = true,
    .RayQueryPositionFetchKHR = true,
    .RayTracingKHR = true,
+   .RayTracingOpacityMicromapKHR = true,
    .RayTracingPositionFetchKHR = true,
    .RayTraversalPrimitiveCullingKHR = true,
    .ReplicatedCompositesEXT = true,

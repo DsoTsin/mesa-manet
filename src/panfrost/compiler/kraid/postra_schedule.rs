@@ -22,6 +22,25 @@ fn alu_unit(model: &dyn Model, instr: &Instr) -> Option<ExecUnit> {
     }
 }
 
+fn is_texture(op: &Op) -> bool {
+    matches!(op, Op::TexDual(_) | Op::TexFetch(_) | Op::TexGather(_) | Op::TexGradient(_) | Op::TexSingle(_))
+}
+
+fn texture_handle(op: &Op) -> Option<&Src> {
+    match op {
+        Op::TexDual(op) => Some(&op.handle),
+        Op::TexFetch(op) => Some(&op.handle),
+        Op::TexGather(op) => Some(&op.handle),
+        Op::TexGradient(op) => Some(&op.handle),
+        Op::TexSingle(op) => Some(&op.handle),
+        _ => None,
+    }
+}
+
+fn same_texture(a: &Op, b: &Op) -> bool {
+    matches!((texture_handle(a), texture_handle(b)), (Some(x), Some(y)) if x == y)
+}
+
 fn halves(bytes: RegByteSet) -> Vec<usize> {
     let mut units: Vec<_> = bytes.iter().map(|byte| usize::from(byte / 2)).collect();
     units.dedup();
@@ -244,6 +263,96 @@ impl Shader<'_> {
                 if start != ip {
                     b.instrs[start..=ip].rotate_right(1);
                     access[start..=ip].rotate_right(1);
+                }
+            }
+        }
+    }
+
+    pub fn cluster_texture_messages(&mut self) {
+        if self.model.arch() != 15 {
+            return;
+        }
+        for b in self.blocks.iter_mut() {
+            let mut first = 0;
+            while first < b.instrs.len() {
+                if !is_texture(&b.instrs[first].op) || b.instrs[first].flow != FlowCtrl::NONE {
+                    first += 1;
+                    continue;
+                }
+                let mut second = first + 1;
+                while second < b.instrs.len() && alu_unit(self.model, &b.instrs[second]).is_some() {
+                    second += 1;
+                }
+                if second == b.instrs.len()
+                    || !same_texture(&b.instrs[first].op, &b.instrs[second].op)
+                {
+                    first = second;
+                    continue;
+                }
+                if second == first + 1 {
+                    first = second;
+                    continue;
+                }
+                let access: Vec<_> = b.instrs[first..=second].iter()
+                    .map(|instr| RegAccess::for_instr(self.model, instr)).collect();
+                let last = access.len() - 1;
+                let mut moved = vec![false; access.len()];
+                let mut need = access[last].reads;
+                for k in (1..last).rev() {
+                    if !(access[k].writes & need).is_empty() {
+                        moved[k] = true;
+                        need |= access[k].reads;
+                    }
+                }
+                let lead = access[0];
+                let tail = access[last];
+                let mut ok = true;
+                for k in 1..last {
+                    let a = access[k];
+                    if moved[k] {
+                        ok &= (a.writes & (lead.reads | lead.writes)).is_empty()
+                            && (a.reads & lead.writes).is_empty();
+                        for j in 1..k {
+                            if !moved[j] {
+                                ok &= (access[j].reads & a.writes).is_empty()
+                                    && (access[j].writes & (a.writes | a.reads)).is_empty();
+                            }
+                        }
+                    } else {
+                        ok &= (tail.writes & (a.reads | a.writes)).is_empty()
+                            && (tail.reads & a.writes).is_empty();
+                    }
+                }
+                if !ok {
+                    first = second;
+                    continue;
+                }
+                let mut order: Vec<usize> = (1..last).filter(|&k| moved[k]).collect();
+                let hoisted = order.len();
+                order.push(0);
+                order.push(last);
+                order.extend((1..last).filter(|&k| !moved[k]));
+                let mut old: Vec<Option<Instr>> = b.instrs.drain(first..=second).map(Some).collect();
+                let new: Vec<Instr> = order.iter().map(|&k| old[k].take().unwrap()).collect();
+                b.instrs.splice(first..first, new);
+                first += hoisted + 1;
+            }
+        }
+    }
+
+    pub fn mark_message_continue(&mut self) {
+        if self.model.arch() != 15 {
+            return;
+        }
+        for b in self.blocks.iter_mut() {
+            for ip in 1..b.instrs.len() {
+                if !same_texture(&b.instrs[ip - 1].op, &b.instrs[ip].op) {
+                    continue;
+                }
+                let mut flow = b.instrs[ip - 1].flow;
+                flow.take_msg_slot_idx();
+                if flow == FlowCtrl::NONE {
+                    b.instrs[ip - 1].flow.set_continue();
                 }
             }
         }

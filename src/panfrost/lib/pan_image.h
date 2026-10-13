@@ -71,6 +71,7 @@ struct pan_image_view {
    struct {
       bool override_cr_siting;
       unsigned cr_siting;
+      bool swap_chroma;
    } yuv;
 };
 

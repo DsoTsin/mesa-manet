@@ -20,6 +20,7 @@
 
 #include "vk_shader.h"
 #include "panvk_macros.h"
+#include "libpan/gs.h"
 
 #include "panvk_cmd_push_constant.h"
 #include "panvk_descriptor_set.h"
@@ -199,6 +200,8 @@ struct panvk_graphics_sysvals {
       } scale, offset;
    } viewport;
 
+   aligned_u64 viewport_array;
+
    struct {
 #if PAN_ARCH < 9
       int32_t raw_vertex_offset;
@@ -206,6 +209,7 @@ struct panvk_graphics_sysvals {
       int32_t first_vertex;
       int32_t base_instance;
       uint32_t noperspective_varyings;
+      uint32_t cull_det;
    } vs;
 
    struct {
@@ -466,10 +470,13 @@ struct panvk_shader_variant {
 
       struct {
          struct pan_earlyzs_lut earlyzs_lut;
+         struct pan_earlyzs_lut earlyzs_lut_no_discard;
          uint32_t input_attachment_read;
          uint32_t tile_image_color_read;
          bool tile_image_z_read;
          bool tile_image_s_read;
+         bool clip_cull_only_discard;
+         bool can_fpk_no_discard;
       } fs;
    };
 
@@ -544,15 +551,6 @@ struct panvk_gs_info {
 
 #define PANVK_GS_RASTER_PARAMS_OFFSET 320
 
-struct panvk_gs_raster_params {
-   uint64_t index_buffer;
-   uint64_t position_buffer;
-   uint64_t varying_buffer;
-   uint64_t clip_position_buffer;
-   uint32_t index_count;
-   float viewport_scale[3];
-   float viewport_offset[3];
-};
 
 /*
  * Original Vulkan tessellation metadata retained before libpoly lowers
@@ -587,6 +585,8 @@ struct panvk_shader {
    struct panvk_shader_fallback *bg_no_preamble;
 
    struct panvk_shader *tess_vs;
+
+   struct panvk_shader *polygon_gs[2];
 
    struct panvk_shader_desc_info desc_info;
 

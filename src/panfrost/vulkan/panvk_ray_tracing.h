@@ -27,6 +27,7 @@ VkResult panvk_per_arch(device_reserve_ray_query_slots)(
 
 void panvk_per_arch(device_finish_ray_query)(struct panvk_device *dev);
 
-uint32_t panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir);
+uint32_t panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir,
+                                               uint32_t slot_base);
 
 #endif

@@ -1183,6 +1183,7 @@ cs_if_start(struct cs_builder *b, struct cs_if_else *if_else,
 static inline void
 cs_if_end(struct cs_builder *b, struct cs_if_else *if_else)
 {
+   cs_flush_pending_if(b);
    assert(cs_cur_block(b) == &if_else->block);
 
    b->blocks.pending_if.block.next = if_else->block.next;

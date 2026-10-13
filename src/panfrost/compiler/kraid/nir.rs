@@ -2482,13 +2482,13 @@ impl<'a> ShaderFromNir<'a> {
                         (ClperLaneOp::None, self.get_src(&srcs[1]).byte(0))
                     }
                     nir_intrinsic_quad_swap_horizontal => {
-                        (ClperLaneOp::Xor, Src::from(1_u32))
+                        (ClperLaneOp::Xor, Src::from(1_u32).byte(0))
                     }
                     nir_intrinsic_quad_swap_vertical => {
-                        (ClperLaneOp::Xor, Src::from(2_u32))
+                        (ClperLaneOp::Xor, Src::from(2_u32).byte(0))
                     }
                     nir_intrinsic_quad_swap_diagonal => {
-                        (ClperLaneOp::Xor, Src::from(3_u32))
+                        (ClperLaneOp::Xor, Src::from(3_u32).byte(0))
                     }
                     nir_intrinsic_shuffle_up | nir_intrinsic_shuffle_down => {
                         let delta = srcs[1].as_uint().unwrap();
@@ -2748,6 +2748,10 @@ impl<'a> ShaderFromNir<'a> {
             }
             nir_intrinsic_load_frame_arg_pan => {
                 let ssa = self.preload(b, PreloadReg::FrameArg);
+                self.set_ssa(&intrin.def, ssa.to_vec());
+            }
+            nir_intrinsic_load_primitive_flags_pan => {
+                let ssa = self.preload(b, PreloadReg::PrimitiveFlags);
                 self.set_ssa(&intrin.def, ssa.to_vec());
             }
             nir_intrinsic_load_view_index => {

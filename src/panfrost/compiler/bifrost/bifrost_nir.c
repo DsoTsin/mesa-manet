@@ -1737,7 +1737,7 @@ bifrost_postprocess_nir(nir_shader *nir,
                inputs->fragcolor_nr_cbufs, 0, false);
    } else if (nir->info.stage == MESA_SHADER_VERTEX) {
       if (!inputs->screen_space_position)
-         NIR_PASS(_, nir, nir_lower_viewport_transform);
+         NIR_PASS(_, nir, pan_nir_lower_viewport_transform);
       NIR_PASS(_, nir, nir_lower_point_size, 1.0, 0.0);
 
       /* Copy varying format & Layout */

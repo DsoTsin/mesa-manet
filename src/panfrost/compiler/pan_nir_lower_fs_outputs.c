@@ -110,11 +110,46 @@ is_discard(nir_instr *instr)
 }
 
 static bool
+is_zs_tile_read(nir_instr *instr)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   if (intr->intrinsic != nir_intrinsic_load_tile_pan &&
+       intr->intrinsic != nir_intrinsic_load_tile_res_pan)
+      return false;
+
+   gl_frag_result loc = nir_intrinsic_io_semantics(intr).location;
+   return loc == FRAG_RESULT_DEPTH || loc == FRAG_RESULT_STENCIL;
+}
+
+static bool
+is_atest_dependency(nir_instr *instr)
+{
+   return is_discard(instr) || is_zs_tile_read(instr);
+}
+
+bool
+pan_nir_fs_reads_zs_tile(nir_shader *shader)
+{
+   nir_foreach_function_impl(impl, shader) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (is_zs_tile_read(instr))
+               return true;
+         }
+      }
+   }
+   return false;
+}
+
+static bool
 cf_node_has_discard(nir_cf_node *node)
 {
    nir_foreach_block_in_cf_node(block, node) {
       nir_foreach_instr(instr, block) {
-         if (is_discard(instr))
+         if (is_atest_dependency(instr))
             return true;
       }
    }
@@ -138,7 +173,7 @@ cursor_after_discards(nir_function_impl *impl)
 
    nir_instr *last_discard = NULL;
    nir_foreach_instr(instr, nir_cf_node_as_block(last)) {
-      if (is_discard(instr))
+      if (is_atest_dependency(instr))
          last_discard = instr;
    }
    return nir_after_instr(last_discard);

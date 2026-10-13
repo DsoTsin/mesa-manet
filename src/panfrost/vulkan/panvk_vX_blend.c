@@ -125,6 +125,8 @@ emit_blend_desc(const struct pan_blend_state *state, uint8_t rt_idx,
    const struct pan_blend_rt_state *rt = &state->rts[rt_idx];
 
    pan_pack(bd, BLEND, cfg) {
+      cfg.blend_constant = constant;
+
       if (loc == MESA_VK_ATTACHMENT_UNUSED || !rt->equation.color_mask) {
          cfg.enable = false;
          cfg.internal.mode = MALI_BLEND_MODE_OFF;
@@ -132,9 +134,9 @@ emit_blend_desc(const struct pan_blend_state *state, uint8_t rt_idx,
       }
 
       cfg.srgb = util_format_is_srgb(rt->format);
-      cfg.load_destination = pan_blend_reads_dest(rt->equation);
+      cfg.load_destination =
+         state->logicop_enable || pan_blend_reads_dest(rt->equation);
       cfg.round_to_fb_precision = true;
-      cfg.blend_constant = constant;
 
       if (blend_shader) {
          /* Blend and fragment shaders must be in the same 4G region. */
@@ -275,7 +277,8 @@ panvk_per_arch(blend_emit_descs)(struct panvk_cmd_buffer *cmdbuf,
          vk_format_to_pipe_format(color_attachment_formats[i]),
          color_attachment_samples[i], bs.constants);
 
-      blend_info->any_dest_read |= pan_blend_reads_dest(rt->equation);
+      blend_info->any_dest_read |=
+         bs.logicop_enable || pan_blend_reads_dest(rt->equation);
 
       if (panvk_per_arch(blend_needs_shader)(&bs, i, &ff_blend_constant)) {
          assert(!(fs_info->fs.fixed_function_blend & BITFIELD_BIT(loc)));

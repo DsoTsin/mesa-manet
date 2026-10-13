@@ -755,6 +755,26 @@ get_yuv_rt_formats(enum pipe_format pfmt, uint32_t *writeback,
       *writeback = MALI_YUV_WRITEBACK_FORMAT_Y10X6_U10X6V10X6_420;
       *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
       break;
+   case PIPE_FORMAT_NV16:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y8_U8V8_422;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
+   case PIPE_FORMAT_Y8_U8_V8_422_UNORM:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y8_U8_V8_422;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
+   case PIPE_FORMAT_G8B8_G8R8_UNORM:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R8G8B8A8;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y8U8Y8V8;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
+   case PIPE_FORMAT_X6G10_X6B10X6R10_422_UNORM:
+      *internal = MALI_COLOR_BUFFER_INTERNAL_FORMAT_R10G10B10A2;
+      *writeback = MALI_YUV_WRITEBACK_FORMAT_Y10X6_U10X6V10X6_422;
+      *yuv_swizzle = MALI_YUV_SWIZZLE_UVYA;
+      break;
 #endif
    default:
       UNREACHABLE("invalid yuv pipe format");
@@ -784,6 +804,8 @@ emit_yuv_color_attachment(const struct pan_attachment_info *att, void *payload)
       cfg.writeback_block_format = MALI_BLOCK_FORMAT_LINEAR;
       get_yuv_rt_formats(iview->format, &cfg.writeback_format,
                          &cfg.internal_format, &cfg.swizzle, &cfg.yuv_swizzle);
+      if (iview->yuv.swap_chroma)
+         cfg.yuv_swizzle = MALI_YUV_SWIZZLE_VUYA;
       cfg.conversion_mode = MALI_YUV_CONVERSION_MODE_NO_CONVERSION;
       cfg.full_range = true;
       cfg.unsigned_cr_range = true;

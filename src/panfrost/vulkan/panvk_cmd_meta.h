@@ -68,6 +68,7 @@ struct panvk_cmd_meta_graphics_save_ctx {
 
    const struct panvk_shader *tcs;
    const struct panvk_shader *tes;
+   const struct panvk_shader *tes_bound;
 
    struct panvk_occlusion_query_state occlusion_query;
    bool cond_render_enabled;

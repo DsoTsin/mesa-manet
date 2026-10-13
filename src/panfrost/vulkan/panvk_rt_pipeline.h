@@ -72,8 +72,8 @@ VkResult panvk_per_arch(rt_pipeline_import)(
 VkResult panvk_per_arch(rt_compile_nir)(
    struct panvk_device *dev, nir_shader *nir, struct vk_pipeline_layout *layout,
    const struct vk_pipeline_robustness_state *robustness,
-   VkPipelineCreateFlags2KHR flags, const VkAllocationCallbacks *alloc,
-   struct panvk_shader **shader_out);
+   VkPipelineCreateFlags2KHR flags, uint32_t ray_query_slots,
+   const VkAllocationCallbacks *alloc, struct panvk_shader **shader_out);
 
 void panvk_per_arch(cmd_bind_rt_pipeline)(struct vk_command_buffer *cmd,
                                          struct panvk_rt_pipeline *pipeline);

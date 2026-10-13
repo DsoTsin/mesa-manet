@@ -519,14 +519,18 @@ panvk_per_arch(cmd_dispatch_rt)(
    const struct panvk_dispatch_info *info, uint64_t dispatch_addr)
 {
    const struct panvk_cmd_compute_state saved = cmdbuf->state.compute;
+   const struct panvk_cond_render_state saved_cond = cmdbuf->state.cond_render;
    cmdbuf->state.compute = (struct panvk_cmd_compute_state){
       .shader = shader,
       .desc_state = cmdbuf->state.ray_tracing.desc_state,
       .sysvals.rt_dispatch = dispatch_addr,
    };
+   cmdbuf->state.cond_render.enabled = false;
+   cmdbuf->state.cond_render.inherited = false;
    BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,
                     PANVK_CMD_COMPUTE_DIRTY_STATE_COUNT - 1);
    cmd_dispatch(cmdbuf, info);
+   cmdbuf->state.cond_render = saved_cond;
    cmdbuf->state.ray_tracing.desc_state = cmdbuf->state.compute.desc_state;
    cmdbuf->state.compute = saved;
    BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,

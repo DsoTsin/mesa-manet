@@ -1956,6 +1956,7 @@ load("clear_value_pan", [], [IO_SEMANTICS, DEST_TYPE],
 
 # Frame argument parameter from the framebuffer descriptor
 system_value("frame_arg_pan", 1, bit_sizes=[64])
+system_value("primitive_flags_pan", 1, bit_sizes=[32])
 
 # Cumulative coverage mask, the start of the atest/zt/blend chain
 system_value("cumulative_coverage_pan", 1, bit_sizes=[32])

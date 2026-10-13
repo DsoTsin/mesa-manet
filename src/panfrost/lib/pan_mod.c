@@ -515,7 +515,7 @@ pan_mod_u_tiled_test_props(const struct pan_kmod_dev_props *dprops,
     * tiling does not make sense; using a linear layout instead is optimal
     * for both memory usage and performance.
     */
-   if (MIN2(iprops->extent_px.width, iprops->extent_px.height) < 2)
+   if (iprops->extent_px.height < 2)
       return PAN_MOD_NOT_OPTIMAL;
 
    return PAN_MOD_OPTIMAL;

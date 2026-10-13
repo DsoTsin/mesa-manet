@@ -852,10 +852,11 @@ analyze_rq(nir_function_impl *impl, struct lower_rq_ctx *ctx)
 }
 
 uint32_t
-panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir)
+panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir, uint32_t slot_base)
 {
    struct lower_rq_ctx ctx = {
       .vars = _mesa_pointer_hash_table_create(NULL),
+      .slot_count = slot_base,
    };
 
    nir_foreach_variable_in_shader(var, nir) {
@@ -872,7 +873,7 @@ panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir)
 
    if (!ctx.vars->entries) {
       ralloc_free(ctx.vars);
-      return 0;
+      return slot_base;
    }
 
    nir_foreach_function_impl(impl, nir)

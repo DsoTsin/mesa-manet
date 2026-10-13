@@ -2107,6 +2107,10 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
                                   bi_preload(b, BI_PRELOAD_FRAME_ARG_HI));
       break;
 
+   case nir_intrinsic_load_primitive_flags_pan:
+      bi_mov_i32_to(b, dst, bi_preload(b, BI_PRELOAD_PRIMITIVE_FLAGS));
+      break;
+
    case nir_intrinsic_load_ssbo_address:
       assert(b->shader->arch >= 9);
       bi_lea_pka_to(b, dst, bi_src_index(&instr->src[1]),

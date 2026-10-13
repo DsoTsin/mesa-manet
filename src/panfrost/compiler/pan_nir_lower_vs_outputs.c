@@ -345,3 +345,31 @@ pan_nir_lower_vs_outputs(nir_shader *shader, uint64_t gpu_id,
 
    return nir_progress(true, impl, nir_metadata_none);
 }
+
+static bool
+lower_viewport_transform(nir_builder *b, nir_intrinsic_instr *intr,
+                         void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_store_output &&
+       intr->intrinsic != nir_intrinsic_store_per_view_output)
+      return false;
+
+   if (nir_intrinsic_io_semantics(intr).location != VARYING_SLOT_POS)
+      return false;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_src_rewrite(&intr->src[0],
+                   pan_nir_viewport_transform(b, intr->src[0].ssa,
+                                              nir_load_viewport_scale(b),
+                                              nir_load_viewport_offset(b)));
+   return true;
+}
+
+bool
+pan_nir_lower_viewport_transform(nir_shader *shader)
+{
+   assert(shader->info.stage == MESA_SHADER_VERTEX);
+
+   return nir_shader_intrinsics_pass(shader, lower_viewport_transform,
+                                     nir_metadata_control_flow, NULL);
+}

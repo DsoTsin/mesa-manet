@@ -24,6 +24,7 @@ struct panvk_nir_rt_pipeline_result {
    nir_shader *nir;
    uint32_t frame_size;
    uint32_t stack_size;
+   uint32_t ray_query_slots;
    uint32_t *per_stage_stack_size;
 };
 

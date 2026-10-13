@@ -223,6 +223,10 @@ cmd_wait_event(struct panvk_cmd_buffer *cmdbuf, struct panvk_event *event,
       }
    }
 
+   if (deps.dst[PANVK_SUBQUEUE_VERTEX_TILER].wait_subqueue_mask &
+       ~deps.dst[PANVK_SUBQUEUE_COMPUTE].wait_subqueue_mask)
+      cmdbuf->state.gfx.cs_vertex_synced = false;
+
    if (has_wait_ops) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, exec);
 

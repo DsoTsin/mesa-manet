@@ -575,6 +575,12 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
        */
       wait_masks[PANVK_SUBQUEUE_VERTEX_TILER] &=
          ~BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER);
+
+      for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
+         if (wait_masks[i] & BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER))
+            deps->src[PANVK_SUBQUEUE_VERTEX_TILER].wait_sb_mask |=
+               SB_MASK(LS);
+      }
    }
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
@@ -767,6 +773,30 @@ emit_barrier_insert_waits(struct cs_builder *b, struct panvk_cmd_buffer *cmdbuf,
 }
 
 static void
+track_cs_vertex_sync(struct panvk_cmd_buffer *cmdbuf,
+                     const struct panvk_cs_deps *deps)
+{
+   const struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   const uint32_t vt_bit = BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER);
+   const uint32_t cs_bit = BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE);
+   uint32_t cs_waits = deps->dst[PANVK_SUBQUEUE_COMPUTE].wait_subqueue_mask;
+   uint32_t vt_waits = deps->dst[PANVK_SUBQUEUE_VERTEX_TILER].wait_subqueue_mask;
+
+   if (deps->dst[PANVK_SUBQUEUE_COMPUTE].conditional)
+      cs_waits = 0;
+
+   if (deps->src[PANVK_SUBQUEUE_VERTEX_TILER].wait_sb_mask &
+       dev->csf.sb.all_iters_mask)
+      vt_waits |= vt_bit;
+
+   if (cs_waits & vt_bit)
+      cmdbuf->state.gfx.cs_vertex_synced = true;
+
+   if (vt_waits & ~cs_waits & ~cs_bit)
+      cmdbuf->state.gfx.cs_vertex_synced = false;
+}
+
+static void
 emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
 {
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
@@ -777,6 +807,8 @@ emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
 #if PAN_ARCH >= 15
    shared_sb = barrier_uses_shared_sb(cmdbuf);
 #endif
+
+   track_cs_vertex_sync(cmdbuf, &deps);
 
    panvk_csstat_inc(dev, barriers);
    uint32_t utrace_subqueue_mask = 0;
@@ -816,7 +848,8 @@ emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
       const bool frag_covered = PAN_ARCH >= 13 &&
                                 i == PANVK_SUBQUEUE_FRAGMENT &&
                                 debug_get_option_panvk_csf_opt_frag_others_inv();
-      if (others_only &&
+      const bool signals_others = wait_subqueue_mask & BITFIELD_BIT(i);
+      if (others_only && !signals_others &&
           (frag_covered || debug_get_option_panvk_csf_opt_batch_others_inv())) {
          struct cs_index flush_id = cs_scratch_reg32(b, 0);
          struct cs_maybe *maybe;

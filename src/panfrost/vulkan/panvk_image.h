@@ -45,6 +45,7 @@ struct panvk_image {
 
    /* One image each for 2x 4x 8x 16x. We don't support more than 16x. */
    VkImage ms_imgs[4];
+   VkDeviceMemory ms_mem;
 
    /* If an image can track validity of CRC even when external access is
     * possible. */
@@ -53,6 +54,8 @@ struct panvk_image {
    bool block_copies;
 
    VkFormat bc_emu_format;
+
+   bool yuv_swap_chroma;
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(panvk_image, vk.base, VkImage,

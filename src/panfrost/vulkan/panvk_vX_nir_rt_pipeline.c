@@ -1,5 +1,7 @@
 #include "panvk_nir_rt_pipeline.h"
 #include "panvk_nir_rt_traversal.h"
+#include "panvk_ray_tracing.h"
+#include "panvk_shader.h"
 #include "nir_builder.h"
 #include "nir_deref.h"
 #include "compiler/spirv/spirv.h"
@@ -301,6 +303,8 @@ rt_lower_builtin(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    case nir_intrinsic_load_shader_record_ptr:
       value = rt_load(b, frame, RT_SHADER_RECORD, 1, 64); break;
    case nir_intrinsic_load_push_constant: {
+      if (nir_intrinsic_base(intr) >= SYSVALS_PUSH_CONST_BASE)
+         return false;
       nir_def *base = rt_load(b, dispatch, 120, 1, 64);
       unsigned offset = (part->stage->stage - MESA_SHADER_RAYGEN) * 256;
       value = nir_load_global(b, intr->def.num_components, intr->def.bit_size,
@@ -830,6 +834,7 @@ panvk_nir_rt_pipeline_create(void *mem_ctx,
    result->per_stage_stack_size = rzalloc_array(mem_ctx, uint32_t, info->stage_count);
    uint32_t next_pc = info->stage_count + 1;
    uint32_t max_scratch = 0;
+   uint32_t ray_query_slots = 0;
    nir_lower_shader_calls_options call_options = {
       .address_format = nir_address_format_64bit_global,
       .stack_alignment = 16,
@@ -844,6 +849,8 @@ panvk_nir_rt_pipeline_create(void *mem_ctx,
       nir_lower_returns(nir);
       nir_inline_functions(nir);
       nir_cleanup_functions(nir);
+      ray_query_slots =
+         panvk_per_arch(nir_lower_ray_queries)(nir, ray_query_slots);
       nir_lower_system_values(nir);
       nir_variable_mode modes = nir_var_shader_temp | nir_var_function_temp |
          nir_var_shader_call_data | nir_var_ray_hit_attrib;
@@ -883,6 +890,7 @@ panvk_nir_rt_pipeline_create(void *mem_ctx,
    ctx.phase_base = next_pc;
    ctx.frame_size = ALIGN_POT(RT_HEADER + max_scratch, 128);
    result->frame_size = ctx.frame_size;
+   result->ray_query_slots = ray_query_slots;
    result->stack_size = (2 * info->max_recursion_depth + 8) * ctx.frame_size;
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE, info->options, "panvk rt pipeline");
    b.shader->info.workgroup_size[0] = 16;

@@ -231,12 +231,75 @@ panvk_v19_plane_fd_indices(panvk_v19_buffer_handle_t h, uint64_t planes, int idx
    return 0;
 }
 
+struct panvk_v19_comp {
+   int64_t type, bit_offset, bit_size;
+};
+
+struct panvk_v19_plane {
+   struct panvk_v19_comp comps[4];
+   unsigned comp_count;
+   int64_t vsub;
+};
+
+static const struct panvk_v19_comp *
+panvk_v19_find_comp(const struct panvk_v19_plane *p, int64_t type)
+{
+   for (unsigned i = 0; i < p->comp_count; i++)
+      if (p->comps[i].type == type)
+         return &p->comps[i];
+   return NULL;
+}
+
+static uint32_t
+panvk_v19_yuv_fourcc(uint32_t fourcc, uint64_t modifier, int planes,
+                     const struct panvk_v19_plane *p)
+{
+   enum { Y = 1, CB = 2, CR = 4 };
+   if (modifier != DRM_FORMAT_MOD_LINEAR)
+      return fourcc;
+   if (planes == 2 && panvk_v19_find_comp(&p[0], Y)) {
+      const struct panvk_v19_comp *cb = panvk_v19_find_comp(&p[1], CB);
+      const struct panvk_v19_comp *cr = panvk_v19_find_comp(&p[1], CR);
+      if (!cb || !cr || cb->bit_size != cr->bit_size)
+         return fourcc;
+      bool cb_first = cb->bit_offset < cr->bit_offset;
+      bool sub420 = p[1].vsub == 2;
+      if (cb->bit_size == 8)
+         return sub420 ? (cb_first ? DRM_FORMAT_NV12 : DRM_FORMAT_NV21)
+                       : (cb_first ? DRM_FORMAT_NV16 : DRM_FORMAT_NV61);
+      if (cb->bit_size == 10 && cb_first)
+         return sub420 ? DRM_FORMAT_P010 : DRM_FORMAT_P210;
+      return fourcc;
+   }
+   if (planes == 3 && panvk_v19_find_comp(&p[0], Y)) {
+      bool cb_first = panvk_v19_find_comp(&p[1], CB) && panvk_v19_find_comp(&p[2], CR);
+      bool cr_first = panvk_v19_find_comp(&p[1], CR) && panvk_v19_find_comp(&p[2], CB);
+      bool sub420 = p[1].vsub == 2;
+      if (cb_first)
+         return sub420 ? DRM_FORMAT_YUV420 : DRM_FORMAT_YUV422;
+      if (cr_first)
+         return sub420 ? DRM_FORMAT_YVU420 : DRM_FORMAT_YVU422;
+      return fourcc;
+   }
+   if (planes == 1 && p[0].comp_count == 4) {
+      const struct panvk_v19_comp *c = p[0].comps;
+      if (c[0].type == Y && c[1].type == CB && c[2].type == Y && c[3].type == CR)
+         return DRM_FORMAT_YUYV;
+      if (c[0].type == Y && c[1].type == CR && c[2].type == Y && c[3].type == CB)
+         return DRM_FORMAT_YVYU;
+      if (c[0].type == CB && c[1].type == Y && c[2].type == CR && c[3].type == Y)
+         return DRM_FORMAT_UYVY;
+      if (c[0].type == CR && c[1].type == Y && c[2].type == CB && c[3].type == Y)
+         return DRM_FORMAT_VYUY;
+   }
+   return fourcc;
+}
+
 static int
 panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
-                        uint64_t allocation, struct u_gralloc_buffer_basic_info *out)
+                        uint64_t allocation, struct panvk_v19_plane *desc,
+                        struct u_gralloc_buffer_basic_info *out)
 {
-   static const char component_name[] =
-      "android.hardware.graphics.common.PlaneLayoutComponentType";
    struct panvk_v19_blob b;
    int rc = panvk_v19_get_blob(h, 15, &b);
    if (rc) return rc;
@@ -254,14 +317,18 @@ panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
    }
    for (uint64_t i = 0; i < planes; i++) {
       uint64_t components = 0;
+      desc[i].comp_count = 0;
       if (panvk_v19_read_u64(&b, &pos, &components) || components > 16) { rc = -EINVAL; break; }
       for (uint64_t c = 0; c < components; c++) {
          int64_t component_type, bit_offset, bit_size;
-         if (panvk_v19_skip_string(&b, &pos, component_name) ||
+         if (panvk_v19_skip_string(&b, &pos, NULL) ||
              panvk_v19_read_i64(&b, &pos, &component_type) ||
              panvk_v19_read_i64(&b, &pos, &bit_offset) ||
              panvk_v19_read_i64(&b, &pos, &bit_size) ||
              bit_offset < 0 || bit_size <= 0) { rc = -EINVAL; break; }
+         if (desc[i].comp_count < ARRAY_SIZE(desc[i].comps))
+            desc[i].comps[desc[i].comp_count++] = (struct panvk_v19_comp){
+               component_type, bit_offset, bit_size};
       }
       if (rc) break;
       int64_t offset, sample_inc, stride, width, height, total, hsub, vsub;
@@ -276,16 +343,13 @@ panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
           offset < 0 || offset > INT_MAX ||
           sample_inc <= 0 || stride <= 0 || stride > INT_MAX ||
           width <= 0 || height <= 0 || total <= 0 ||
-          (uint64_t)offset > allocation || (uint64_t)total > allocation - (uint64_t)offset ||
-          hsub <= 0 || vsub <= 0) { rc = -EINVAL; break; }
+          (uint64_t)offset >= allocation ||
+          hsub < 0 || vsub < 0) { rc = -EINVAL; break; }
+      desc[i].vsub = vsub;
       offsets[i] = (int)offset;
       strides[i] = (int)stride;
       if (!raw || fd_index[i] >= raw->numFds) { rc = -EINVAL; break; }
       fds[i] = raw->data[fd_index[i]];
-      mesa_logi("[P0A-V19-FULLPLANE] plane=%u fd_index=%d offset=%d stride=%d total=%lld sample_bits=%lld samples=%lldx%lld sub=%lldx%lld",
-                (unsigned)i, fd_index[i], offsets[i], strides[i], (long long)total,
-                (long long)sample_inc, (long long)width, (long long)height,
-                (long long)hsub, (long long)vsub);
    }
    if (!rc && pos != b.size) rc = -EINVAL;
    if (!rc) {
@@ -317,9 +381,10 @@ panvk_v19_query_mapper(const native_handle_t *raw, struct u_gralloc_buffer_basic
    int rm = panvk_v19_get_scalar(imported, 8, &modifier, sizeof(modifier));
    int ra = panvk_v19_get_scalar(imported, 10, &allocation, sizeof(allocation));
    int rp = 0;
+   struct panvk_v19_plane planes[4];
    if (!rl && !rf && !rm && !ra && layer_count && fourcc &&
        modifier != DRM_FORMAT_MOD_INVALID && allocation)
-      rp = panvk_v19_decode_planes(imported, raw, allocation, out);
+      rp = panvk_v19_decode_planes(imported, raw, allocation, planes, out);
    else
       rp = -EINVAL;
    int32_t fr = panvk_v19_mapper_ptr->v5.freeBuffer(imported);
@@ -327,8 +392,10 @@ panvk_v19_query_mapper(const native_handle_t *raw, struct u_gralloc_buffer_basic
              rl, (unsigned long long)layer_count, rf, fourcc, rm,
              (unsigned long long)modifier, ra, (unsigned long long)allocation, rp, fr);
    if (rl || rf || rm || ra || rp || fr) return -EINVAL;
-   out->drm_fourcc = fourcc;
+   out->drm_fourcc = panvk_v19_yuv_fourcc(fourcc, modifier, out->num_planes, planes);
    out->modifier = modifier;
+   out->alloc_size = allocation;
+   out->layer_count = layer_count;
    mesa_logi("[P0A-V19-FULLPLANE] accepted fourcc=0x%08x modifier=0x%016llx planes=%d",
              out->drm_fourcc, (unsigned long long)out->modifier, out->num_planes);
    return 0;
@@ -402,6 +469,14 @@ fallback_gralloc_get_buffer_info(struct u_gralloc *gralloc,
    if (hnd->handle->numFds == 0)
       return -EINVAL;
 
+   int stable_ret = panvk_v19_query_mapper(hnd->handle, out);
+   if (stable_ret != -ENOTSUP) {
+      if (stable_ret != 0)
+         mesa_logw("[P0A-V19-FULLPLANE] complete metadata unavailable rc=%d; refusing guessed layout",
+                   stable_ret);
+      return stable_ret;
+   }
+
    if (is_hal_format_yuv(hnd->hal_format)) {
       int ret = fallback_gralloc_get_yuv_info(gralloc, hnd, out);
       /*
@@ -448,15 +523,6 @@ fallback_gralloc_get_buffer_info(struct u_gralloc *gralloc,
       out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
    }
 #endif
-
-
-
-   int stable_ret = panvk_v19_query_mapper(hnd->handle, out);
-   if (stable_ret != 0) {
-      mesa_logw("[P0A-V19-FULLPLANE] complete metadata unavailable rc=%d; refusing guessed layout",
-                stable_ret);
-      return stable_ret;
-   }
 
    return 0;
 }

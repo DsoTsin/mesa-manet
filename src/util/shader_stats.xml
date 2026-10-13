@@ -83,7 +83,7 @@
         <stat name="Load/store" display="LS" type="float">Estimated normalized Load/Store cycles</stat>
         <stat name="Code size">Binary size in bytes</stat>
         <stat name="Constant data size">Inline constant pool size in bytes</stat>
-        <stat name="Threads" more="better" type="u16">Maximum number of threads in flight on a compute unit</stat>
+        <stat name="Threads" more="better">Maximum number of threads in flight on a compute unit</stat>
         <stat name="Loops">Number of hardware loops</stat>
         <stat name="Spills">Number of spill instructions</stat>
         <stat name="Fills">Number of fill instructions</stat>

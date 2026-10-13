@@ -278,6 +278,28 @@ bool pan_nir_lower_image_64bit(nir_shader *shader);
 bool pan_nir_lower_var_special_pan(nir_shader *shader);
 bool pan_nir_lower_noperspective_vs(nir_shader *shader);
 
+static inline nir_def *
+pan_nir_viewport_transform(nir_builder *b, nir_def *pos, nir_def *scale,
+                           nir_def *offset)
+{
+   nir_def *w = nir_channel(b, pos, 3);
+   nir_def *w_recip = nir_fclamp(b, nir_frcp(b, w),
+                                 nir_imm_float(b, -(float)(1 << 15)),
+                                 nir_imm_float(b, (float)(1 << 15)));
+   nir_def *ndc = nir_fmul(b, nir_trim_vector(b, pos, 3), w_recip);
+   nir_def *z_inside = nir_fge(b, nir_fabs(b, w),
+                               nir_fabs(b, nir_channel(b, pos, 2)));
+   nir_def *z_ndc = nir_channel(b, ndc, 2);
+   z_ndc = nir_bcsel(b, z_inside, nir_fsat_signed(b, z_ndc), z_ndc);
+   ndc = nir_vector_insert_imm(b, ndc, z_ndc, 2);
+
+   nir_def *screen = nir_fadd(b, nir_fmul(b, ndc, scale), offset);
+   return nir_vec4(b, nir_channel(b, screen, 0), nir_channel(b, screen, 1),
+                   nir_channel(b, screen, 2), w_recip);
+}
+
+bool pan_nir_lower_viewport_transform(nir_shader *shader);
+
 bool pan_nir_lower_vs_inputs(nir_shader *shader, uint64_t gpu_id);
 
 bool pan_nir_lower_vs_outputs(nir_shader *shader, uint64_t gpu_id,
@@ -398,6 +420,7 @@ bool pan_nir_lower_fs_outputs(nir_shader *shader, bool skip_atest,
                               uint8_t trim_color_locs, bool early_atest);
 
 bool pan_nir_move_atest_after_discards(nir_shader *shader);
+bool pan_nir_fs_reads_zs_tile(nir_shader *shader);
 
 uint32_t pan_nir_collect_noperspective_varyings_fs(nir_shader *s);
 

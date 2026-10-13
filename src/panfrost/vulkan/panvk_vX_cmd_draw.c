@@ -6,6 +6,7 @@
  */
 
 #include "panvk_buffer.h"
+#include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_device_memory.h"
 #include "panvk_entrypoints.h"
@@ -536,8 +537,10 @@ render_state_set_zs_attachments(struct panvk_cmd_buffer *cmdbuf,
       }
 
       if (z_resolve.mode != VK_RESOLVE_MODE_NONE) {
+         const struct pan_image_view z_resolve_pview =
+            get_z_pan_image_view(z_resolve.dst_iview);
          const struct pan_image *z_resolve_pimage =
-            pan_image_view_get_zs_plane(&z_resolve.dst_iview->pview).image;
+            pan_image_view_get_zs_plane(&z_resolve_pview).image;
 
          if ((z_ms2ss || z_att->storeOp != VK_ATTACHMENT_STORE_OP_STORE) &&
              !avoid_direct_resolve_to(z_resolve_pimage)) {
@@ -563,8 +566,10 @@ render_state_set_zs_attachments(struct panvk_cmd_buffer *cmdbuf,
       }
 
       if (s_resolve.mode != VK_RESOLVE_MODE_NONE) {
+         const struct pan_image_view s_resolve_pview =
+            get_s_pan_image_view(s_resolve.dst_iview);
          const struct pan_image *s_resolve_pimage =
-            pan_image_view_get_s_plane(&s_resolve.dst_iview->pview).image;
+            pan_image_view_get_s_plane(&s_resolve_pview).image;
 
          if ((s_ms2ss || s_att->storeOp != VK_ATTACHMENT_STORE_OP_STORE) &&
              !avoid_direct_resolve_to(s_resolve_pimage)) {
@@ -870,11 +875,6 @@ prepare_iam_sysvals(struct panvk_cmd_buffer *cmdbuf, BITSET_WORD *dirty_sysvals)
       set_gfx_sysval(cmdbuf, dirty_sysvals, iam[i], iam[i]);
 }
 
-/* This value has been selected to get
- * dEQP-VK.draw.renderpass.inverted_depth_ranges.nodepthclamp_deltazero passing.
- */
-#define MIN_DEPTH_CLIP_RANGE 37.7E-06f
-
 void
 panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
                                          const struct panvk_draw_info *info,
@@ -887,9 +887,12 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
    set_gfx_sysval(cmdbuf, dirty_sysvals, vs.noperspective_varyings,
                   noperspective_varyings);
 
-   const struct panvk_shader_variant *clip_vs = panvk_shader_hw_variant(
-      cmdbuf->state.gfx.tess.tes.shader ? cmdbuf->state.gfx.tess.tes.shader
-                                        : cmdbuf->state.gfx.vs.shader);
+   const struct panvk_shader *gs = cmdbuf->state.gfx.gs.shader;
+   const struct panvk_shader_variant *clip_vs =
+      gs ? &gs->variants[PANVK_GS_VARIANT_RAST]
+         : panvk_shader_hw_variant(cmdbuf->state.gfx.tess.tes.shader
+                                      ? cmdbuf->state.gfx.tess.tes.shader
+                                      : cmdbuf->state.gfx.vs.shader);
    set_gfx_sysval(cmdbuf, dirty_sysvals, fs.clip_cull,
                   clip_vs ? clip_vs->info.vs.clip_distance_count |
                                (clip_vs->info.vs.cull_distance_count << 4)
@@ -923,69 +926,64 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
          &cmdbuf->vk.dynamic_graphics_state.rs;
       const struct vk_viewport_state *vp =
          &cmdbuf->vk.dynamic_graphics_state.vp;
-      const VkViewport *viewport = &vp->viewports[0];
+      float scale[3], offset[3];
 
-      /* Doing the viewport transform in the vertex shader and then depth
-       * clipping with the viewport depth range gets a similar result to
-       * clipping in clip-space, but loses precision when the viewport depth
-       * range is very small. When minDepth == maxDepth, this completely
-       * flattens the clip-space depth and results in never clipping.
-       *
-       * To work around this, set a lower limit on depth range when clipping is
-       * enabled. This results in slightly incorrect fragment depth values, and
-       * doesn't help with the precision loss, but at least clipping isn't
-       * completely broken.
-       */
-      float z_min = viewport->minDepth;
-      float z_max = viewport->maxDepth;
-      if (vk_rasterization_state_depth_clip_enable(rs) &&
-          fabsf(z_max - z_min) < MIN_DEPTH_CLIP_RANGE) {
-         float z_sign = z_min <= z_max ? 1.0f : -1.0f;
+      panvk_viewport_transform(rs, vp, &vp->viewports[0], scale, offset);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.x, scale[0]);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.y, scale[1]);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.z, scale[2]);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.x, offset[0]);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.y, offset[1]);
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.z, offset[2]);
+#if PAN_ARCH >= 12
+      cmdbuf->state.gfx.vp.transforms = 0;
+#endif
+   }
 
-         float z_center = 0.5f * (z_max + z_min);
-         /* Bump offset off-center if necessary, to not go out of range */
-         z_center = CLAMP(z_center, 0.5f * MIN_DEPTH_CLIP_RANGE,
-                          1.0f - 0.5f * MIN_DEPTH_CLIP_RANGE);
+   if (gs) {
+      const struct vk_rasterization_state *rs =
+         &cmdbuf->vk.dynamic_graphics_state.rs;
+      const struct panvk_graphics_sysvals *sv = &cmdbuf->state.gfx.sysvals;
+      const bool pos_ccw = sv->viewport.scale.x * sv->viewport.scale.y < 0.0f;
+      const bool pos_front =
+         pos_ccw == (rs->front_face == VK_FRONT_FACE_COUNTER_CLOCKWISE);
+      const uint32_t cull_front = !!(rs->cull_mode & VK_CULL_MODE_FRONT_BIT);
+      const uint32_t cull_back = !!(rs->cull_mode & VK_CULL_MODE_BACK_BIT);
+      const uint32_t cull_pos = pos_front ? cull_front : cull_back;
+      const uint32_t cull_neg = pos_front ? cull_back : cull_front;
+      set_gfx_sysval(cmdbuf, dirty_sysvals, vs.cull_det,
+                     cull_pos | (cull_neg << 1));
+   }
 
-         z_min = z_center - 0.5f * z_sign * MIN_DEPTH_CLIP_RANGE;
-         z_max = z_center + 0.5f * z_sign * MIN_DEPTH_CLIP_RANGE;
+#if PAN_ARCH >= 12
+   if (clip_vs && (clip_vs->info.outputs_written & VARYING_BIT_VIEWPORT)) {
+      if (!cmdbuf->state.gfx.vp.transforms) {
+         const struct vk_rasterization_state *rs =
+            &cmdbuf->vk.dynamic_graphics_state.rs;
+         const struct vk_viewport_state *vp =
+            &cmdbuf->vk.dynamic_graphics_state.vp;
+         struct pan_ptr mem = panvk_cmd_alloc_dev_mem(
+            cmdbuf, desc, MESA_VK_MAX_VIEWPORTS * 8 * sizeof(float), 16);
+
+         if (mem.gpu) {
+            float *transforms = mem.cpu;
+            const uint32_t last = MAX2(vp->viewport_count, 1) - 1;
+
+            for (uint32_t i = 0; i < MESA_VK_MAX_VIEWPORTS; i++) {
+               panvk_viewport_transform(rs, vp, &vp->viewports[MIN2(i, last)],
+                                        &transforms[i * 8],
+                                        &transforms[i * 8 + 4]);
+               transforms[i * 8 + 3] = 0.0f;
+               transforms[i * 8 + 7] = 0.0f;
+            }
+            cmdbuf->state.gfx.vp.transforms = mem.gpu;
+         }
       }
 
-      /* Upload the viewport scale. Defined as (px/2, py/2, pz) at the start of
-       * section 24.5 ("Controlling the Viewport") of the Vulkan spec. At the
-       * end of the section, the spec defines:
-       *
-       * px = width
-       * py = height
-       * pz = maxDepth - minDepth         if negativeOneToOne is false
-       * pz = (maxDepth - minDepth) / 2   if negativeOneToOne is true
-       */
-      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.x,
-                     0.5f * viewport->width);
-      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.y,
-                     0.5f * viewport->height);
-      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.scale.z,
-                     vp->depth_clip_negative_one_to_one ?
-                        0.5f * (z_max - z_min) : z_max - z_min);
-
-      /* Upload the viewport offset. Defined as (ox, oy, oz) at the start of
-       * section 24.5 ("Controlling the Viewport") of the Vulkan spec. At the
-       * end of the section, the spec defines:
-       *
-       * ox = x + width/2
-       * oy = y + height/2
-       * oz = minDepth                    if negativeOneToOne is false
-       * oz = (maxDepth + minDepth) / 2   if negativeOneToOne is true
-       */
-      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.x,
-                     (0.5f * viewport->width) + viewport->x);
-      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.y,
-                     (0.5f * viewport->height) + viewport->y);
-      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport.offset.z,
-                     vp->depth_clip_negative_one_to_one ?
-                        0.5f * (z_min + z_max) : z_min);
-
+      set_gfx_sysval(cmdbuf, dirty_sysvals, viewport_array,
+                     cmdbuf->state.gfx.vp.transforms);
    }
+#endif
 
    /* The map may stay unchanged across rendering instances, while the bound
     * attachments, their formats, or legacy dithering change. All of those

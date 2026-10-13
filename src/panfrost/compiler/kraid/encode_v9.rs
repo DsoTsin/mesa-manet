@@ -462,6 +462,11 @@ fn encode_flow(mut flow: FlowCtrl, arch: u8) -> FlowControlM {
         return FlowControlM::Discard;
     }
 
+    if flow.take_continue() {
+        assert!(flow == FlowCtrl::NONE);
+        return FlowControlM::Continue;
+    }
+
     if flow.take_wait_bit(FlowWaitBit::Barrier) {
         return FlowControlM::Wait;
     }
