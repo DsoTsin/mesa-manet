@@ -1062,6 +1062,26 @@ ir3_instr_remove(struct ir3_instruction *instr)
    }
 }
 
+struct ir3_instruction *
+ir3_instr_prev(struct ir3_instruction *instr)
+{
+   if (instr->node.prev == &instr->block->instr_list) {
+      return NULL;
+   }
+
+   return list_entry(instr->node.prev, struct ir3_instruction, node);
+}
+
+struct ir3_instruction *
+ir3_instr_next(struct ir3_instruction *instr)
+{
+   if (instr->node.next == &instr->block->instr_list) {
+      return NULL;
+   }
+
+   return list_entry(instr->node.next, struct ir3_instruction, node);
+}
+
 void
 ir3_instr_create_rpt(struct ir3_instruction **instrs, unsigned n)
 {
