@@ -444,6 +444,9 @@ static void
 handle_copies(struct ir3_shader_variant *v, struct ir3_instruction *instr,
               struct copy_entry *entries, unsigned entry_count)
 {
+   /* Needed for validation below. */
+   struct ir3_instruction *before = ir3_instr_prev(instr);
+
    struct copy_ctx ctx;
 
    /* handle shared copies first */
@@ -482,6 +485,8 @@ handle_copies(struct ir3_shader_variant *v, struct ir3_instruction *instr,
       }
       _handle_copies(v->compiler, instr, &ctx);
    }
+
+   ir3_lower_copies_validate(v, instr, before);
 }
 
 void

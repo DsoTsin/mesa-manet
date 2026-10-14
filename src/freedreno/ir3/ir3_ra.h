@@ -185,6 +185,9 @@ void ir3_ra_validate(struct ir3_shader_variant *v, unsigned full_size,
                      unsigned half_size, unsigned block_count, bool shared_ra);
 
 void ir3_lower_copies(struct ir3_shader_variant *v);
+void ir3_lower_copies_validate(struct ir3_shader_variant *v,
+                               struct ir3_instruction *copy_instr,
+                               struct ir3_instruction *before);
 
 /* Register interval datastructure
  *
