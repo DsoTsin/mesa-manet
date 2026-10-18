@@ -1132,8 +1132,9 @@ tu_get_physical_device_properties_1_3(struct tu_physical_device *pdevice,
    p->integerDotProduct8BitMixedSignednessAccelerated = false;
    p->integerDotProduct4x8BitPackedUnsignedAccelerated =
       pdevice->info->props.has_dp2acc;
-   /* TODO: we should be able to emulate 4x8BitPackedSigned fast enough */
-   p->integerDotProduct4x8BitPackedSignedAccelerated = false;
+   p->integerDotProduct4x8BitPackedSignedAccelerated =
+      pdevice->info->props.has_dp4acc &&
+      pdevice->info->props.has_compliant_dp4acc;
    p->integerDotProduct4x8BitPackedMixedSignednessAccelerated =
       pdevice->info->props.has_dp2acc;
    p->integerDotProduct16BitUnsignedAccelerated = false;
@@ -1150,8 +1151,9 @@ tu_get_physical_device_properties_1_3(struct tu_physical_device *pdevice,
    p->integerDotProductAccumulatingSaturating8BitMixedSignednessAccelerated = false;
    p->integerDotProductAccumulatingSaturating4x8BitPackedUnsignedAccelerated =
       pdevice->info->props.has_dp2acc;
-   /* TODO: we should be able to emulate Saturating4x8BitPackedSigned fast enough */
-   p->integerDotProductAccumulatingSaturating4x8BitPackedSignedAccelerated = false;
+   p->integerDotProductAccumulatingSaturating4x8BitPackedSignedAccelerated =
+      pdevice->info->props.has_dp4acc &&
+      pdevice->info->props.has_compliant_dp4acc;
    p->integerDotProductAccumulatingSaturating4x8BitPackedMixedSignednessAccelerated =
       pdevice->info->props.has_dp2acc;
    p->integerDotProductAccumulatingSaturating16BitUnsignedAccelerated = false;
