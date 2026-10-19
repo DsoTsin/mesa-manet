@@ -167,6 +167,8 @@ fn write_back_info(
 
     dst.tls_size = dst.tls_size.max(src.tls_size);
     dst.has_shader_clk_instr |= src.has_ld_gclk;
+    dst.contains_jump_ex |= src.contains_jump_ex;
+    dst.rt_frame_size = src.rt_frame_size;
 
     if model.arch() >= 9 {
         if nir.info.stage() == MESA_SHADER_FRAGMENT {
@@ -281,6 +283,7 @@ fn finish_shader(
     s.assign_registers(loop_exit_distance, const_pref, anti_frag, live_src);
     pass!(s.lower_copy());
     pass!(s.opt_redundant_movs());
+    pass!(s.lower_rt_frames());
     pass!(s.hoist_message_loads());
     pass!(s.schedule_after_ra());
     pass!(s.cluster_texture_messages());
@@ -304,6 +307,7 @@ fn finish_shader(
 
 fn allocation_better(c: &Shader, b: &Shader) -> bool {
     c.info.registers_used <= b.info.registers_used
+        && c.info.rt_frame_size <= b.info.rt_frame_size
         && c.spill_aware_cost() < b.spill_aware_cost()
 }
 
@@ -329,6 +333,7 @@ fn message_allocation_better(c: &Shader, b: &Shader) -> bool {
     let cc = message_allocation_cost(c);
     let bc = message_allocation_cost(b);
     c.info.registers_used <= b.info.registers_used
+        && c.info.rt_frame_size <= b.info.rt_frame_size
         && cc.iter().zip(&bc).all(|(c, b)| c <= b)
         && (cc[3] < bc[3] || allocation_better(c, b))
 }
@@ -600,6 +605,7 @@ pub extern "C" fn kraid_compile_nir(
     };
 
     let stats = if !s.is_empty() {
+        pass!(s.lower_rt_calls());
         let mut stats = s.get_stats(nir.scratch_size);
         s.write_instrumentation_counts();
         pass!(s.lower_blend_call());
@@ -624,11 +630,13 @@ pub extern "C" fn kraid_compile_nir(
         }
         stats
     } else {
+        let va_stats = valhall_stats {
+            threads: model.max_threads(0).into(),
+            ..Default::default()
+        };
         pan_stats {
             isa: PAN_STAT_VALHALL,
-            __bindgen_anon_1: pan_stats__bindgen_ty_1 {
-                valhall: valhall_stats::default(),
-            },
+            __bindgen_anon_1: pan_stats__bindgen_ty_1 { valhall: va_stats },
         }
     };
 
@@ -705,6 +713,21 @@ mod tests {
         info.registers_used = regs;
         Shader { model, ssa_alloc: Default::default(), phi_alloc: Default::default(),
                  blocks: cfg.as_cfg(false), info, constant_pool: None }
+    }
+
+    #[test]
+    fn allocation_does_not_trade_native_frame_size_for_instructions() {
+        let model = model_for_gpu_id(0x0f080000f0000000, 4).unwrap();
+        let mut baseline = cost_shader(model.as_ref(), [6, 0, 0, 0], 64);
+        baseline.info.rt_frame_size = 176;
+        let mut candidate = cost_shader(model.as_ref(), [5, 0, 0, 0], 64);
+        candidate.info.rt_frame_size = 176;
+        assert!(allocation_better(&candidate, &baseline));
+        candidate.info.rt_frame_size = 192;
+        assert!(!allocation_better(&candidate, &baseline));
+        let mut messages = cost_shader(model.as_ref(), [6, 0, 0, 1], 64);
+        messages.info.rt_frame_size = 176;
+        assert!(!message_allocation_better(&candidate, &messages));
     }
 
     #[test]

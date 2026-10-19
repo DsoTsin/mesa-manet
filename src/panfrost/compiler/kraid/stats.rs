@@ -42,6 +42,8 @@ pub fn exec_class(model: &dyn Model, op: &Op) -> Option<ExecClass> {
             | Op::LdTex(_)
             | Op::LeaTensor(_)
             | Op::Load(_)
+            | Op::LdMulti(_)
+            | Op::StMulti(_)
             | Op::StChecked(_)
             | Op::StCvt(_)
             | Op::Store(_) => ExecClass::LoadStore,
@@ -123,7 +125,8 @@ impl VaStatCount {
             }
         }
 
-        if matches!(&instr.op, Op::BlendCall(_) | Op::PilotJump(_)) {
+        if matches!(&instr.op, Op::BlendCall(_) | Op::PilotJump(_)
+                    | Op::RtCall(_) | Op::RtReturn(_)) {
             // This will get lowered later into a BLEND + prologue, both
             // should not be counted in the stats metrics
             return;

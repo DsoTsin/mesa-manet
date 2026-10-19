@@ -1,0 +1,89 @@
+OpCapability Shader
+OpCapability VulkanMemoryModel
+OpCapability GraphARM
+OpCapability TensorsARM
+OpExtension "SPV_ARM_graph"
+OpExtension "SPV_ARM_tensors"
+%tosa = OpExtInstImport "TOSA.001000.1"
+OpMemoryModel Logical Vulkan
+OpDecorate %in DescriptorSet 0
+OpDecorate %in Binding 0
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 1
+%u = OpTypeInt 32 0
+%f = OpTypeFloat 32
+%c0 = OpConstant %u 0
+%c1 = OpConstant %u 1
+%c2 = OpConstant %u 2
+%c3 = OpConstant %u 3
+%c4 = OpConstant %u 4
+%c5 = OpConstant %u 5
+%c6 = OpConstant %u 6
+%c7 = OpConstant %u 7
+%c8 = OpConstant %u 8
+%c9 = OpConstant %u 9
+%c10 = OpConstant %u 10
+%c11 = OpConstant %u 11
+%c12 = OpConstant %u 12
+%c13 = OpConstant %u 13
+%c14 = OpConstant %u 14
+%c15 = OpConstant %u 15
+%c16 = OpConstant %u 16
+%c17 = OpConstant %u 17
+%c18 = OpConstant %u 18
+%c19 = OpConstant %u 19
+%c20 = OpConstant %u 20
+%c21 = OpConstant %u 21
+%c22 = OpConstant %u 22
+%c23 = OpConstant %u 23
+%c24 = OpConstant %u 24
+%attr = OpTypeInt 32 1
+%a0 = OpConstant %attr 0
+%a1 = OpConstant %attr 1
+%a2 = OpConstant %attr 2
+%a3 = OpConstant %attr 3
+%a4 = OpConstant %attr 4
+%a5 = OpConstant %attr 5
+%a6 = OpConstant %attr 6
+%a7 = OpConstant %attr 7
+%a8 = OpConstant %attr 8
+%a9 = OpConstant %attr 9
+%a10 = OpConstant %attr 10
+%a11 = OpConstant %attr 11
+%a12 = OpConstant %attr 12
+%a13 = OpConstant %attr 13
+%a14 = OpConstant %attr 14
+%a15 = OpConstant %attr 15
+%a16 = OpConstant %attr 16
+%a17 = OpConstant %attr 17
+%a18 = OpConstant %attr 18
+%a19 = OpConstant %attr 19
+%a20 = OpConstant %attr 20
+%a21 = OpConstant %attr 21
+%a22 = OpConstant %attr 22
+%a23 = OpConstant %attr 23
+%a24 = OpConstant %attr 24
+%shape2 = OpTypeArray %u %c2
+%attrs2 = OpTypeArray %attr %c2
+%shape3 = OpTypeArray %u %c3
+%attrs3 = OpTypeArray %attr %c3
+%s_input = OpConstantComposite %shape3 %c2 %c3 %c4
+%t_input = OpTypeTensorARM %f %c3 %s_input
+%s_transpose = OpConstantComposite %shape3 %c4 %c2 %c3
+%t_transpose = OpTypeTensorARM %f %c3 %s_transpose
+%s_reshape = OpConstantComposite %shape2 %c6 %c4
+%t_reshape = OpTypeTensorARM %f %c2 %s_reshape
+%perms = OpConstantComposite %attrs3 %a2 %a0 %a1
+%reshape_shape = OpConstantComposite %attrs2 %a6 %a4
+%p_in = OpTypePointer UniformConstant %t_input
+%in = OpVariable %p_in UniformConstant
+%p_out = OpTypePointer UniformConstant %t_reshape
+%out = OpVariable %p_out UniformConstant
+%gt = OpTypeGraphARM 1 %t_input %t_reshape
+OpGraphEntryPointARM %graph "main" %in %out
+%graph = OpGraphARM %gt
+%source = OpGraphInputARM %t_input %c0
+%transposed = OpExtInst %t_transpose %tosa TRANSPOSE %perms %source
+%reshaped = OpExtInst %t_reshape %tosa RESHAPE %transposed %reshape_shape
+OpGraphSetOutputARM %reshaped %c0
+OpGraphEndARM

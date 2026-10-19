@@ -84,6 +84,7 @@ struct panvk_dispatch_info {
    } indirect;
 
    uint32_t wg_size_x;
+   uint32_t tls_size;
 
 #if PAN_ARCH >= 10
    enum panvk_csf_barrier barrier;
@@ -92,6 +93,7 @@ struct panvk_dispatch_info {
 
 #if PAN_ARCH >= 15
    bool infer_task_axis;
+   uint64_t rt_launch_size;
 #endif
 };
 

@@ -47,9 +47,19 @@ pub struct Kcpu {
 }
 
 #[repr(C)]
+pub struct L2CacheProps {
+    pub line_size: u32,
+    pub size_per_slice: u32,
+    pub slices: u32,
+}
+
+#[repr(C)]
 pub struct Dev {
     pub base: KmodDev,
     pub csf: bool,
+    pub has_neural: bool,
+    pub neural_present: u64,
+    pub l2_cache: L2CacheProps,
     pub csif: CsifInfo,
     pub mem_group: u8,
     pub defer_free_phys: bool,
@@ -122,7 +132,25 @@ impl Dev {
             Map::new(fd, 4096, libc::PROT_NONE, BASE_MEM_MAP_TRACKING_HANDLE)
                 .log_err("mmap(BASE_MEM_MAP_TRACKING_HANDLE)")?;
 
-        let mut props = dev_props(&gpuprops(fd)?);
+        let raw_props = gpuprops(fd)?;
+        let has_neural = raw_props.get(&gpuprop::RAW_GPU_FEATURES)
+            .is_some_and(|features| features & (1 << 4) != 0);
+        let neural_present = raw_props.get(&gpuprop::RAW_NEURAL_PRESENT)
+            .copied().unwrap_or(0);
+        let power = |key| {
+            raw_props.get(&key)
+                .and_then(|&value| u32::try_from(value).ok())
+                .and_then(|value| 1u32.checked_shl(value))
+                .unwrap_or(0)
+        };
+        let l2_cache = L2CacheProps {
+            line_size: power(gpuprop::L2_LOG2_LINE_SIZE),
+            size_per_slice: power(gpuprop::L2_LOG2_CACHE_SIZE),
+            slices: raw_props.get(&gpuprop::L2_NUM_L2_SLICES)
+                .and_then(|&value| u32::try_from(value).ok())
+                .unwrap_or(0),
+        };
+        let mut props = dev_props(&raw_props);
         if csf && (ver.major > 1 || (ver.major == 1 && ver.minor >= 9)) {
             props.supported_bo_flags |= PAN_KMOD_BO_FLAG_CAPTURE_REPLAY;
         }
@@ -201,6 +229,9 @@ impl Dev {
                 allocator,
             ),
             csf,
+            has_neural,
+            neural_present,
+            l2_cache,
             csif,
             mem_group,
             defer_free_phys: ioctl(fd, KBASE_IOCTL_DEFER_FREE_PHYS, 0u32)
@@ -325,7 +356,7 @@ fn dev_props(props: &HashMap<u32, u64>) -> DevProps {
             gpuprop::RAW_TEXTURE_FEATURES_3,
         ]
         .map(prop),
-        l2_features: 0,
+        l2_features: prop(gpuprop::RAW_L2_FEATURES),
         max_threads_per_core: max_threads,
         max_tasks_per_core: tasks.max(1) as u8,
         max_threads_per_wg: prop(gpuprop::RAW_THREAD_MAX_WORKGROUP_SIZE),

@@ -293,6 +293,47 @@ panvk_pool_upload_aligned(struct panvk_pool *pool, const void *data, size_t sz,
    return mem;
 }
 
+static inline uint64_t
+panvk_pool_boundary_offset(uint64_t address, uint64_t size, uint64_t boundary)
+{
+   assert(size && size <= boundary && util_is_power_of_two_nonzero64(boundary));
+   uint64_t remaining = boundary - (address & (boundary - 1));
+   return size > remaining ? remaining : 0;
+}
+
+static inline struct panvk_priv_mem
+panvk_pool_upload_aligned_boundary(struct panvk_pool *pool, const void *data,
+                                  size_t size, unsigned alignment,
+                                  uint64_t boundary)
+{
+   if (!size || size > UINT32_MAX / 2 || size > boundary)
+      return (struct panvk_priv_mem){0};
+
+   struct panvk_priv_mem mem = panvk_pool_alloc_mem(pool,
+      (struct panvk_pool_alloc_info){.size = size, .alignment = alignment});
+   if (!panvk_priv_mem_check_alloc(mem))
+      return mem;
+   uint64_t offset = panvk_pool_boundary_offset(
+      panvk_priv_mem_dev_addr(mem), size, boundary);
+   if (offset) {
+      panvk_pool_free_mem(&mem);
+      mem = panvk_pool_alloc_mem(pool, (struct panvk_pool_alloc_info){
+         .size = size * 2, .alignment = alignment});
+      if (!panvk_priv_mem_check_alloc(mem))
+         return mem;
+      offset = panvk_pool_boundary_offset(
+         panvk_priv_mem_dev_addr(mem), size, boundary);
+      assert(offset < size && !(offset & (alignment - 1)));
+      mem.offset += offset;
+   }
+   void *host = panvk_priv_mem_host_addr(mem);
+   if (host) {
+      memcpy(host, data, size);
+      panvk_priv_mem_flush(mem, 0, size);
+   }
+   return mem;
+}
+
 #define panvk_pool_alloc_desc(pool, name)                                      \
    panvk_pool_alloc_mem(pool, panvk_pool_descs_to_alloc_info(                  \
                                  PAN_DESC_AGGREGATE(PAN_DESC(name))))

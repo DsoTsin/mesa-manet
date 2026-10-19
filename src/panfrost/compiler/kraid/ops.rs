@@ -2866,6 +2866,91 @@ impl DisplayOp for OpJump {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Opcode)]
+pub struct OpRtCall {
+    #[dst_type(SR)]
+    pub dst: Dst,
+    pub arg_mask: u16,
+    pub tls_args: bool,
+    #[src_type(I32)]
+    pub target: Src,
+    #[src_type(I32)]
+    pub args: [Src; 16],
+    #[src_type(I64)]
+    pub stack: Src,
+}
+
+impl DisplayOp for OpRtCall {
+    fn fmt_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RT_CALL")
+    }
+
+    fn fmt_body(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.fmt_src(&self.target), self.fmt_src(&self.stack))?;
+        for (i, src) in self.args.iter().enumerate() {
+            if self.arg_mask & (1 << i) != 0 {
+                write!(f, " a{i}={}", self.fmt_src(src))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl VirtualOpcode for OpRtCall {
+    fn src_is_64bit(&self, src: &Src) -> bool {
+        std::ptr::eq(src, &self.stack)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Opcode)]
+pub struct OpRtFrameSize {
+    #[dst_type(I32)]
+    pub dst: Dst,
+}
+
+impl DisplayOp for OpRtFrameSize {
+    fn fmt_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RT_FRAME_SIZE")
+    }
+
+    fn fmt_body(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
+impl VirtualOpcode for OpRtFrameSize {}
+
+#[repr(C)]
+#[derive(Clone, Opcode)]
+pub struct OpRtReturn {
+    pub root: bool,
+    pub result_count: u8,
+    #[src_type(I32)]
+    pub values: [Src; 3],
+    #[src_type(I32)]
+    pub target: Src,
+    #[src_type(I64)]
+    pub stack: Src,
+}
+
+impl DisplayOp for OpRtReturn {
+    fn fmt_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RT_RETURN{}", bool_as_mod_str!(self.root, ".root"))
+    }
+
+    fn fmt_body(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.fmt_src(&self.target), self.fmt_src(&self.stack))
+    }
+}
+
+impl VirtualOpcode for OpRtReturn {
+    fn src_is_64bit(&self, src: &Src) -> bool {
+        std::ptr::eq(src, &self.stack)
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Default, Eq, Hash, PartialEq)]
 pub enum JumpStackMode {
@@ -3054,6 +3139,44 @@ impl DisplayOp for OpLdExp {
             self.fmt_src(&self.src),
             self.fmt_src(&self.scale),
         )
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Opcode)]
+pub struct OpLdMulti {
+    #[dst_type(SR)]
+    pub dst: Dst,
+    #[src_type(I64)]
+    pub addr: Src,
+    pub offset: i16,
+}
+
+impl DisplayOp for OpLdMulti {
+    fn fmt_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LD_MULTI")
+    }
+    fn fmt_body(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, " {} #{}", self.fmt_src(&self.addr), self.offset)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Opcode)]
+pub struct OpStMulti {
+    #[src_type(SR)]
+    pub data: Src,
+    #[src_type(I64)]
+    pub addr: Src,
+    pub offset: i16,
+}
+
+impl DisplayOp for OpStMulti {
+    fn fmt_name(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ST_MULTI")
+    }
+    fn fmt_body(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, " {} {} #{}", self.fmt_src(&self.data), self.fmt_src(&self.addr), self.offset)
     }
 }
 
@@ -5313,6 +5436,7 @@ pub enum Op {
     LdCvt(Box<OpLdCvt>),
     LdExp(Box<OpLdExp>),
     LdGClk(Box<OpLdGClk>),
+    LdMulti(Box<OpLdMulti>),
     LdPka(Box<OpLdPka>),
     LdTensor(Box<OpLdTensor>),
     LdTex(Box<OpLdTex>),
@@ -5343,12 +5467,16 @@ pub enum Op {
     PopCount(Box<OpPopCount>),
     RegIn(Box<OpRegIn>),
     RegOut(Box<OpRegOut>),
+    RtCall(Box<OpRtCall>),
+    RtFrameSize(Box<OpRtFrameSize>),
+    RtReturn(Box<OpRtReturn>),
     RtTrace(Box<OpRtTrace>),
     ScheduleBarrier(OpScheduleBarrier),
     ShAdd(Box<OpShAdd>),
     ShiftLop(Box<OpShiftLop>),
     StChecked(Box<OpStChecked>),
     StCvt(Box<OpStCvt>),
+    StMulti(Box<OpStMulti>),
     Store(Box<OpStore>),
     StTile(Box<OpStTile>),
     Swz(Box<OpSwz>),
@@ -5383,6 +5511,9 @@ impl Op {
     pub fn as_virtual(&self) -> Option<&dyn VirtualOpcode> {
         match self {
             Op::BlendCall(op) => Some(op.as_ref()),
+            Op::RtCall(op) => Some(op.as_ref()),
+            Op::RtFrameSize(op) => Some(op.as_ref()),
+            Op::RtReturn(op) => Some(op.as_ref()),
             Op::PilotJump(op) => Some(op.as_ref()),
             Op::Copy(op) => Some(op.as_ref()),
             Op::FMath(op) => Some(op.as_ref()),
@@ -5414,11 +5545,14 @@ impl Op {
                 | Op::Discard(_)
                 | Op::Jump(_)
                 | Op::JumpEx(_)
+                | Op::RtCall(_)
+                | Op::RtReturn(_)
                 | Op::RegOut(_)
                 | Op::RtTrace(_)
                 | Op::ScheduleBarrier(_)
                 | Op::StChecked(_)
                 | Op::Store(_)
+                | Op::StMulti(_)
                 | Op::StCvt(_)
                 | Op::StTile(_)
                 | Op::ZSEmit(_)
@@ -5439,6 +5573,7 @@ impl Op {
             Op::LdCvt(op) => read_with_access(op.access),
             Op::LdPka(op) => read_with_access(op.access),
             Op::Load(op) => read_with_access(op.access),
+            Op::LdMulti(_) => MemoryEffect::Read,
             Op::LdTensor(_) | Op::LdTex(_) | Op::LdTile(_) => {
                 MemoryEffect::Read
             }
@@ -5457,9 +5592,11 @@ impl Op {
             | Op::StChecked(_)
             | Op::StCvt(_)
             | Op::Store(_)
+            | Op::StMulti(_)
             | Op::StTile(_)
             | Op::ZSEmit(_) => MemoryEffect::Write,
-            Op::ACmpXchg(_) | Op::Atom(_) | Op::Atom1(_) | Op::RtTrace(_) => {
+            Op::ACmpXchg(_) | Op::Atom(_) | Op::Atom1(_) | Op::RtTrace(_)
+            | Op::RtCall(_) | Op::RtReturn(_) => {
                 MemoryEffect::ReadWrite
             }
             _ => MemoryEffect::None,

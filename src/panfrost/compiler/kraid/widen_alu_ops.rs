@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::builder::*;
+use crate::data_type::PartialDataType;
 use crate::ir::*;
 use crate::ops::*;
 
@@ -19,7 +20,7 @@ fn widen_op_pre_ra(b: &mut impl SSABuilder, op: &mut Op) {
     let dst_lanes = dst.lanes;
 
     // We can only widen if the destination is vectorized
-    if dst_raw_type.comps().is_some() {
+    if dst_raw_type == PartialDataType::SR || dst_raw_type.comps().is_some() {
         return;
     }
 

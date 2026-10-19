@@ -10,6 +10,7 @@
  */
 
 #include "genxml/gen_macros.h"
+#include "c11/threads.h"
 
 #ifdef PANVK_OFFLINE_ONLY
 #include "tools/kraidoc_context.h"
@@ -25,6 +26,7 @@
 #include "panvk_descriptor_set_layout.h"
 #include "panvk_image_formats.h"
 #include "panvk_nir.h"
+#include "panvk_nir_rt_pipeline.h"
 #if PAN_ARCH >= 15
 #include "panvk_ray_tracing.h"
 #include "panvk_rt_pipeline.h"
@@ -38,6 +40,7 @@
 #include "util/mesa-blake3.h"
 #include "util/shader_stats.h"
 #include "util/u_cpu_detect.h"
+#include "util/u_debug.h"
 #include "util/u_dynarray.h"
 #include "util/u_hexdump.h"
 #include "util/u_memory.h"
@@ -73,6 +76,14 @@
 #include "vk_util.h"
 
 #define FAU_WORD_COUNT 64
+
+static bool panvk_ubo_push;
+
+static void
+panvk_init_ubo_push(void)
+{
+   panvk_ubo_push = !debug_get_bool_option("PANVK_NO_UBO_PUSH", false);
+}
 
 struct panvk_lower_sysvals_context {
    struct panvk_shader_variant *shader;
@@ -1366,6 +1377,17 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
 {
    struct panvk_physical_device *pdev = to_panvk_physical_device(vk_pdev);
 
+   /* Lower mediump temporary vars before NIR has the chance to screw it up
+    * and delete the mediump information.  On the old back-end, this might be
+    * a performance regression because of all the extra f2f it may insert but
+    * Kraid is good enough at fusing float conversions into other ALU ops that
+    * it doesn't really matter.
+    */
+   if (pan_use_kraid(PAN_ARCH, nir->info.stage, nir->info.internal)) {
+      NIR_PASS(_, nir, nir_lower_mediump_vars,
+               nir_var_shader_temp | nir_var_function_temp);
+   }
+
    /* Ensure to regroup output variables at the same location */
    if (nir->info.stage == MESA_SHADER_FRAGMENT)
       NIR_PASS(_, nir, nir_opt_vectorize_io_vars, nir_var_shader_out);
@@ -1391,8 +1413,10 @@ panvk_preprocess_nir(struct vk_physical_device *vk_pdev,
    NIR_PASS(_, nir, nir_opt_combine_stores, nir_var_all);
    NIR_PASS(_, nir, nir_opt_loop);
 
-   NIR_PASS(_, nir, nir_opt_barrier_modes);
-   NIR_PASS(_, nir, nir_opt_acquire_release_barriers, SCOPE_DEVICE);
+   if (!panvk_nir_is_native_rt(nir)) {
+      NIR_PASS(_, nir, nir_opt_barrier_modes);
+      NIR_PASS(_, nir, nir_opt_acquire_release_barriers, SCOPE_DEVICE);
+   }
 
    /* Do texture lowering here. We need to lower texture stuff
     * now, before we call panvk_per_arch(nir_lower_descriptors)() because some
@@ -1767,6 +1791,10 @@ lower_load_push_consts(nir_shader *nir, struct panvk_shader_variant *shader)
    progress = false;
    NIR_PASS(progress, nir, nir_shader_intrinsics_pass, collect_push_constant,
             nir_metadata_all, shader);
+
+   if (PAN_ARCH >= 15 && panvk_nir_is_native_rt(nir))
+      BITSET_SET_RANGE(shader->fau.used_sysvals, 0,
+                       sizeof(struct panvk_compute_sysvals) / FAU_WORD_SIZE - 1);
 
    /* Some load_push_constant instructions might be eliminated after
     * scalarization+dead-code-elimination. Since these pass happen in
@@ -2162,18 +2190,18 @@ panvk_compile_nir(struct panvk_device *dev, nir_shader *nir,
    /* Reserve sysvals/push-const, the compiler may fill the remaining space with
     * promoted constants. */
    input.fau.reserved = shader->fau.total_count * 2;
-   input.fau.promote_immediates = true;
+   bool native_rt = PAN_ARCH >= 15 && panvk_nir_is_native_rt(nir);
+   input.fau.promote_immediates = !native_rt;
 
    struct pan_compile_preamble preamble = {
       .binary = UTIL_DYNARRAY_INIT,
    };
-   if (panvk_pilots_supported(nir, &input, shader_flags)) {
-      static int ubo_push = -1;
-      if (ubo_push < 0)
-         ubo_push = !debug_get_bool_option("PANVK_NO_UBO_PUSH", false);
+   if (!native_rt && panvk_pilots_supported(nir, &input, shader_flags)) {
+      static once_flag ubo_push_once = ONCE_FLAG_INIT;
+      call_once(&ubo_push_once, panvk_init_ubo_push);
 
       input.preamble = &preamble;
-      if (ubo_push) {
+      if (panvk_ubo_push) {
          input.fau.pushable_ubos = ~0u;
          input.fau.push_ubo_handles = true;
       }
@@ -2383,8 +2411,13 @@ panvk_shader_upload(struct panvk_device *dev,
    if (!shader->bin_size)
       return VK_SUCCESS;
 
+#if PAN_ARCH >= 9
+   shader->code_mem = panvk_pool_upload_aligned_boundary(
+      &dev->mempools.exec, shader->bin_ptr, shader->bin_size, 128, 1ull << 32);
+#else
    shader->code_mem = panvk_pool_upload_aligned(
       &dev->mempools.exec, shader->bin_ptr, shader->bin_size, 128);
+#endif
    if (!panvk_priv_mem_check_alloc(shader->code_mem))
       return panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
@@ -2431,6 +2464,7 @@ panvk_shader_upload(struct panvk_device *dev,
 
 #if PAN_ARCH >= 15
          cfg.register_count = shader->info.work_reg_count;
+         cfg.shader_contains_jump_ex = shader->info.contains_jump_ex;
          cfg.preload.r0_r15 = shader->info.preload;
 #else
          cfg.register_allocation =
@@ -3519,15 +3553,16 @@ panvk_compile_shader_impl(struct panvk_device *dev,
 
       nir_shader *nir = info->nir;
 
+      bool allow_merging_workgroups = false;
 #if PAN_ARCH >= 9
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
-      variant->info.cs.allow_merging_workgroups =
+      allow_merging_workgroups =
          valhall_can_merge_workgroups(nir);
 
       /* With merged workgroups, we need to use different divergence analysis
        * options to take into account that threads from different workgroups
        * may be in the same subgroup */
-      if (variant->info.cs.allow_merging_workgroups) {
+      if (allow_merging_workgroups) {
          nir->options = pan_get_nir_shader_compiler_options(
             PAN_ARCH, MESA_SHADER_COMPUTE, true);
          /* Invalidate the old divergence analysis */
@@ -3538,7 +3573,7 @@ panvk_compile_shader_impl(struct panvk_device *dev,
 
       panvk_lower_nir(dev, nir, info->set_layout_count, info->set_layouts,
                       info->robustness, state, &shader->desc_info,
-                      variant->info.cs.allow_merging_workgroups);
+                      allow_merging_workgroups);
 
       variant->own_bin = true;
 
@@ -3549,6 +3584,7 @@ panvk_compile_shader_impl(struct panvk_device *dev,
          panvk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
          return result;
       }
+      variant->info.cs.allow_merging_workgroups = allow_merging_workgroups;
       break;
    }
 
@@ -4452,7 +4488,7 @@ panvk_deserialize_shader_impl(struct vk_device *vk_dev, struct blob_reader *blob
 
    uint32_t version = blob_read_uint32(blob);
    mesa_shader_stage stage = blob_read_uint8(blob);
-   if (blob->overrun || version != 0x50414e04 ||
+   if (blob->overrun || version != 0x50414e05 ||
        stage > MESA_SHADER_COMPUTE)
       return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
@@ -4670,7 +4706,7 @@ panvk_shader_serialize(struct vk_device *vk_dev,
    struct panvk_shader *shader =
       container_of(vk_shader, struct panvk_shader, vk);
 
-   blob_write_uint32(blob, 0x50414e04);
+   blob_write_uint32(blob, 0x50414e05);
    blob_write_uint8(blob, vk_shader->stage);
 
    shader_desc_info_serialize(blob, shader);
@@ -5421,6 +5457,120 @@ VkResult panvk_per_arch(create_shader)(
 }
 
 #if PAN_ARCH >= 15
+VkResult
+panvk_per_arch(rt_link_native_shaders)(
+   struct panvk_device *dev, struct panvk_rt_pipeline *pipeline,
+   struct panvk_shader **functions, const VkAllocationCallbacks *alloc)
+{
+   struct panvk_shader *entry = pipeline->shader;
+   struct panvk_shader_variant *root = &entry->variants[0];
+   uint64_t size = ALIGN_POT((uint64_t)root->bin_size, 128);
+   uint32_t frame = 16;
+   pipeline->stage_entry_offsets = vk_zalloc2(&dev->vk.alloc, alloc,
+      pipeline->stage_count * sizeof(uint32_t), 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   if (!pipeline->stage_entry_offsets)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   for (unsigned i = 0; i < pipeline->stage_count; i++) {
+      const struct panvk_shader *func = functions[i];
+      const struct panvk_shader_variant *v = &func->variants[0];
+      if (size > UINT32_MAX || v->preamble ||
+          memcmp(&v->fau, &root->fau, sizeof(v->fau)) ||
+          memcmp(&func->desc_info.dyn_bufs, &entry->desc_info.dyn_bufs,
+                 sizeof(func->desc_info.dyn_bufs)))
+         return VK_ERROR_UNKNOWN;
+      pipeline->stage_entry_offsets[i] = size;
+      size += ALIGN_POT((uint64_t)v->bin_size, 128);
+      frame = MAX2(frame, v->info.rt_frame_size);
+      root->info.tls_size = MAX2(root->info.tls_size, v->info.tls_size);
+      root->info.work_reg_count = MAX2(root->info.work_reg_count, v->info.work_reg_count);
+      root->info.contains_barrier |= v->info.contains_barrier;
+      root->info.writes_global |= v->info.writes_global;
+      root->info.has_shader_clk_instr |= v->info.has_shader_clk_instr;
+      root->ray_query_slots = MAX2(root->ray_query_slots, v->ray_query_slots);
+      entry->desc_info.used_set_mask |= func->desc_info.used_set_mask;
+      struct valhall_stats *stats = &root->info.stats.valhall;
+      const struct valhall_stats *part = &v->info.stats.valhall;
+      stats->instrs += part->instrs;
+      stats->cycles += part->cycles;
+      stats->fma += part->fma;
+      stats->cvt += part->cvt;
+      stats->sfu += part->sfu;
+      stats->alu += part->alu;
+      stats->v += part->v;
+      stats->t += part->t;
+      stats->ls += part->ls;
+      stats->loops += part->loops;
+      stats->spills += part->spills;
+      stats->fills += part->fills;
+      stats->spill_cost += part->spill_cost;
+      stats->constant_data_size += part->constant_data_size;
+      stats->registers_used = MAX2(stats->registers_used, part->registers_used);
+      stats->uniforms_used = MAX2(stats->uniforms_used, part->uniforms_used);
+      stats->stack_alloca_bytes = MAX2(stats->stack_alloca_bytes, part->stack_alloca_bytes);
+      stats->stack_spill_bytes = MAX2(stats->stack_spill_bytes, part->stack_spill_bytes);
+      stats->threads = MIN2(stats->threads, part->threads);
+   }
+   if (size > UINT32_MAX)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   if (root->asm_str) {
+      char *assembly = NULL;
+      size_t assembly_size = 0;
+      struct u_memstream mem;
+      if (!u_memstream_open(&mem, &assembly, &assembly_size))
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      FILE *stream = u_memstream_get(&mem);
+      fprintf(stream, "RT entry at byte offset 0\n%s\n", root->asm_str);
+      for (unsigned i = 0; i < pipeline->stage_count; i++) {
+         const struct panvk_shader_variant *v = &functions[i]->variants[0];
+         fprintf(stream, "RT function %u at byte offset %u\n%s\n", i,
+                 pipeline->stage_entry_offsets[i], v->asm_str ?: "");
+      }
+      u_memstream_close(&mem);
+      free((void *)root->asm_str);
+      root->asm_str = assembly;
+   }
+   if (root->nir_str) {
+      char *text = ralloc_strdup(NULL, root->nir_str);
+      for (unsigned i = 0; text && i < pipeline->stage_count; i++) {
+         const char *part = functions[i]->variants[0].nir_str;
+         if (!ralloc_asprintf_append(&text, "\nRT function %u\n%s\n", i, part ?: "")) {
+            ralloc_free(text);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+         }
+      }
+      if (!text)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      ralloc_free((void *)root->nir_str);
+      root->nir_str = text;
+   }
+   void *code = calloc(1, size);
+   if (!code)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   memcpy(code, root->bin_ptr, root->bin_size);
+   for (unsigned i = 0; i < pipeline->stage_count; i++) {
+      const struct panvk_shader_variant *v = &functions[i]->variants[0];
+      memcpy((uint8_t *)code + pipeline->stage_entry_offsets[i], v->bin_ptr, v->bin_size);
+      pipeline->stage_stack_sizes[i] = v->info.rt_frame_size;
+   }
+   if (root->own_bin)
+      free((void *)root->bin_ptr);
+   root->bin_ptr = code;
+   root->bin_size = size;
+   root->own_bin = true;
+   root->info.contains_jump_ex = true;
+   root->info.stats.valhall.code_size = size;
+   pipeline->native_frame_stride = frame;
+   pipeline->compiled_stack_size = 0;
+   pipeline->native_tls_offset = ALIGN_POT(root->info.tls_size, 128);
+   entry->vk.scratch_size = root->info.tls_size;
+   panvk_pool_free_mem(&root->code_mem);
+   panvk_pool_free_mem(&root->spd);
+   VkResult result = panvk_shader_upload(dev, root, alloc);
+   if (result != VK_SUCCESS)
+      return result;
+   return VK_SUCCESS;
+}
+
 VkResult
 panvk_per_arch(rt_compile_nir)(
    struct panvk_device *dev, nir_shader *nir, struct vk_pipeline_layout *layout,

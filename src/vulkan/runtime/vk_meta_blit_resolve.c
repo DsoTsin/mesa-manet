@@ -1,5 +1,6 @@
 /*
  * Copyright © 2022 Collabora Ltd
+ * Copyright © 2026 Arm Ltd
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1016,7 +1017,11 @@ vk_meta_resolve_attachment(struct vk_command_buffer *cmd,
       u_foreach_bit(v, view_mask) {
          region.srcSubresource.baseArrayLayer = src_view->base_array_layer + v;
          region.srcSubresource.layerCount = 1;
-         region.dstSubresource.baseArrayLayer = dst_view->base_array_layer + v;
+         uint32_t dst_layer = src_view->base_array_layer + v;
+         if (dst_view->image->image_type == VK_IMAGE_TYPE_3D)
+            region.dstOffset.z = dst_layer;
+         else
+            region.dstSubresource.baseArrayLayer = dst_layer;
          region.dstSubresource.layerCount = 1;
 
          vk_meta_resolve_image(cmd, meta,
@@ -1027,7 +1032,10 @@ vk_meta_resolve_attachment(struct vk_command_buffer *cmd,
    } else {
       region.srcSubresource.baseArrayLayer = src_view->base_array_layer;
       region.srcSubresource.layerCount = layer_count;
-      region.dstSubresource.baseArrayLayer = dst_view->base_array_layer;
+      if (dst_view->image->image_type == VK_IMAGE_TYPE_3D)
+         region.dstOffset.z = dst_view->base_array_layer;
+      else
+         region.dstSubresource.baseArrayLayer = dst_view->base_array_layer;
       region.dstSubresource.layerCount = layer_count;
 
       vk_meta_resolve_image(cmd, meta,

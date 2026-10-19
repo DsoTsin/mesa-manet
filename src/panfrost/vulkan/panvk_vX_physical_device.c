@@ -309,6 +309,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .ARM_performance_counters_by_region = PAN_ARCH >= 15,
       .ARM_tensors = has_tensors(),
       .ARM_tensor_controls = has_tensors(),
+      .ARM_data_graph = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
    };
 }
 
@@ -762,6 +763,9 @@ panvk_per_arch(get_physical_device_features)(
       .shaderStorageTensorArrayNonUniformIndexing = false,
       .descriptorBindingStorageTensorUpdateAfterBind = false,
       .tensors = has_tensors(),
+      .dataGraph = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
+      .dataGraphSpecializationConstants = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
+      .dataGraphShaderModule = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
 
       /* VK_EXT_shader_tile_image */
       .shaderTileImageColorReadAccess = PAN_ARCH >= 9,

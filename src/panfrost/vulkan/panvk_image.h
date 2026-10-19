@@ -15,7 +15,7 @@
 #include "pan_image.h"
 #include "panvk_image_formats.h"
 
-#define PANVK_MAX_PLANES 3
+#include "panvk_descriptor_limits.h"
 
 struct panvk_device_memory;
 struct panvk_physical_device;

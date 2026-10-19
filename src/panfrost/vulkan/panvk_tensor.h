@@ -9,11 +9,12 @@
 #include <stdint.h>
 
 #include "panvk_macros.h"
+#include "panvk_descriptor_limits.h"
+#include "panvk_tensor_desc.h"
 
 #include "vk_object.h"
 
 #define PANVK_MAX_TENSOR_DIMS        4
-#define PANVK_TENSOR_DESCRIPTOR_SIZE 64
 
 struct panvk_cmd_buffer;
 struct panvk_physical_device;

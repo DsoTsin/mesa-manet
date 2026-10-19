@@ -545,6 +545,8 @@ replace_for_block(nir_builder *b, opt_preamble_ctx *ctx,
          }
       }
 
+      nir_instr_set_speculated(clone);
+
       if (state->replace) {
          nir_def *clone_def = nir_instr_def(clone);
          nir_store_preamble(b, clone_def, .base = state->offset,

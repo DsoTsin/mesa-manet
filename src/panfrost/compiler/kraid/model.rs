@@ -186,7 +186,7 @@ impl ValhallModel {
             BlendDescriptor5 => (0, 0b1000 | 5),
             BlendDescriptor6 => (0, 0b1000 | 6),
             BlendDescriptor7 => (0, 0b1000 | 7),
-            ThreadLocalPointer => (1, 0b0001),
+            ThreadLocalPointer | RtThreadLocalPointer => (1, 0b0001),
             WorkgroupLocalPointer => (1, 0b0011),
             ResourceTablePointer => (1, 0b0111),
             LaneId => (3, 0b0001),
@@ -368,6 +368,34 @@ impl Model for ValhallModel {
                     None
                 }
             }
+            Op::RtCall(op) => {
+                assert!(self.arch >= 15);
+                if ptr::eq(&op.target, src) {
+                    Some(RegRef::new(11, RegRange::Regs(1)))
+                } else if ptr::eq(&op.stack, src) {
+                    preg(PreloadReg::RtStack)
+                } else {
+                    let i = op.args.iter().position(|arg| ptr::eq(arg, src)).unwrap();
+                    (op.arg_mask & (1 << i) != 0).then(|| {
+                        let reg = if op.tls_args && i < 8 {
+                            [0, 4, 1, 5, 2, 6, 3, 7][i]
+                        } else if i < 8 { i } else { i + 4 };
+                        RegRef::new(reg as u8,
+                                    RegRange::Regs(1))
+                    })
+                }
+            }
+            Op::RtReturn(op) => {
+                if ptr::eq(&op.target, src) {
+                    preg(PreloadReg::RtReturn)
+                } else if ptr::eq(&op.stack, src) {
+                    preg(PreloadReg::RtStack)
+                } else {
+                    let i = op.values.iter().position(|v| ptr::eq(v, src)).unwrap();
+                    (i < usize::from(op.result_count))
+                        .then(|| RegRef::new(i as u8, RegRange::Regs(1)))
+                }
+            }
             _ => None,
         }
     }
@@ -376,6 +404,8 @@ impl Model for ValhallModel {
         let coverage =
             Some(self.preload_reg(PreloadReg::CumulativeCoverage).unwrap());
         match op {
+            Op::RtCall(_) => (dst.dst_ref.bytes_written() != 0)
+                .then(|| RegRef::new(0, RegRange::Regs(dst.dst_ref.bytes_written() / 4))),
             Op::ATest(op) => {
                 assert!(ptr::eq(&op.dst, dst));
                 coverage
@@ -418,6 +448,25 @@ impl Model for ValhallModel {
                 BlendReturnAddr => 10,
                 PilotFau => 0,
                 PilotSrt => 2,
+                RtFrame => 0,
+                RtFrameOffset => 0,
+                RtPayload => 2,
+                RtPayloadOffset => 1,
+                RtRoot => 4,
+                RtRootOffset => 2,
+                RtStack => 8,
+                RtReturn => 10,
+                RtRay => 6,
+                RtRayOffset => 3,
+                RtLaunch0 => 4,
+                RtLaunch1 => 5,
+                RtLaunch2 => 6,
+                RtRecord => 12,
+                RtShaderRecord => 14,
+                RtTmax => 16,
+                RtHitKind => 17,
+                RtDepth => 18,
+                RtFrameLayout => 19,
             }
         } else {
             match preload {
@@ -446,6 +495,11 @@ impl Model for ValhallModel {
                 BlendReturnAddr => 48,
                 PilotFau => 0,
                 PilotSrt => 2,
+                RtFrame | RtPayload | RtRoot | RtStack | RtReturn | RtRay
+                | RtRecord | RtShaderRecord | RtTmax | RtHitKind | RtDepth
+                | RtFrameLayout | RtFrameOffset | RtPayloadOffset
+                | RtRootOffset | RtRayOffset
+                | RtLaunch0 | RtLaunch1 | RtLaunch2 => return None,
             }
         };
 

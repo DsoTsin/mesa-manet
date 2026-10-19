@@ -65,7 +65,7 @@ if with_tests
     test('cs_cache_flush_tests_v' + arch,
       executable(
         'cs_cache_flush_tests_v' + arch,
-        ['test/cs_cache_flush.cpp'],
+        ['test/cs_cache_flush.cpp', 'test/cs_resources.cpp'],
         cpp_args : [cpp_msvc_compat_args, '-DPAN_ARCH=' + arch],
         gnu_symbol_visibility : 'hidden',
         include_directories: [inc_include, inc_src, inc_panfrost],

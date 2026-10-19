@@ -515,6 +515,8 @@ struct pan_shader_info {
    unsigned work_reg_count;
    unsigned tls_size;
    unsigned wls_size;
+   bool contains_jump_ex;
+   unsigned rt_frame_size;
 
    struct pan_stats stats, stats_idvs_varying;
 

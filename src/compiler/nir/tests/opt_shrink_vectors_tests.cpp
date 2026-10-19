@@ -70,6 +70,48 @@ static void check_swizzle(nir_alu_src * src, const char * swizzle)
    }
 }
 
+TEST_F(nir_opt_shrink_vectors_test, converted_load_demand)
+{
+   const nir_alu_type types[] = {
+      nir_type_float16, nir_type_float32, nir_type_uint16,
+      nir_type_uint32, nir_type_int16, nir_type_int32,
+   };
+   for (nir_alu_type type : types) {
+      for (unsigned mask = 1; mask < 16; mask++) {
+         for (bool volatile_access : {false, true}) {
+            for (bool shrink_start : {false, true}) {
+               nir_builder v = nir_builder_init_simple_shader(
+                  MESA_SHADER_COMPUTE, &options, NULL);
+               nir_def *address = nir_imm_int64(&v, 0x1000);
+               nir_def *conversion = nir_imm_int(&v, 0x76543210);
+               nir_def *load = nir_load_global_cvt_pan(&v, 4,
+                  nir_alu_type_get_type_size(type), address, conversion, type,
+                  volatile_access ? ACCESS_VOLATILE : ACCESS_NON_WRITEABLE);
+               nir_def *value = nir_imm_int(&v, 0);
+               for (unsigned i = 0; i < 4; i++) {
+                  if (mask & BITFIELD_BIT(i))
+                     value = nir_ixor(&v, value,
+                        nir_u2u32(&v, nir_channel(&v, load, i)));
+               }
+               nir_intrinsic_instr *store = nir_store_global(
+                  &v, value, nir_imm_int64(&v, 0x2000));
+               nir_intrinsic_set_align_mul(store, 4);
+               nir_opt_shrink_vectors(v.shader, shrink_start);
+               nir_validate_shader(v.shader, NULL);
+               auto *intr = nir_def_as_intrinsic(load);
+               unsigned expected = volatile_access ? 4 : util_last_bit(mask);
+               EXPECT_EQ(load->num_components, expected);
+               EXPECT_EQ(intr->num_components, expected);
+               EXPECT_EQ(nir_intrinsic_dest_type(intr), type);
+               EXPECT_EQ(intr->src[0].ssa, address);
+               EXPECT_EQ(intr->src[1].ssa, conversion);
+               ralloc_free(v.shader);
+            }
+         }
+      }
+   }
+}
+
 TEST_F(nir_opt_shrink_vectors_test, opt_shrink_vectors_load_const_trailing_component_only)
 {
    /* Test that opt_shrink_vectors correctly removes unused trailing channels

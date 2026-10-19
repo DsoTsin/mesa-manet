@@ -387,6 +387,9 @@ panvk_per_arch(CmdBindDescriptorSets2KHR)(
    if (pBindDescriptorSetsInfo->stageFlags & PANVK_RT_STAGE_FLAGS)
       cmd_desc_state_bind_sets(&cmdbuf->state.ray_tracing.desc_state,
                               pBindDescriptorSetsInfo);
+   if (pBindDescriptorSetsInfo->stageFlags & MESA_VK_SHADER_STAGE_DATA_GRAPH_BIT)
+      cmd_desc_state_bind_sets(&cmdbuf->state.data_graph.desc_state,
+                              pBindDescriptorSetsInfo);
 #endif
 }
 
@@ -439,6 +442,9 @@ panvk_per_arch(CmdPushDescriptorSet2KHR)(
 #if PAN_ARCH >= 15
    if (pPushDescriptorSetInfo->stageFlags & PANVK_RT_STAGE_FLAGS)
       push_desc_set_write(cmdbuf, &cmdbuf->state.ray_tracing.desc_state,
+                          pPushDescriptorSetInfo);
+   if (pPushDescriptorSetInfo->stageFlags & MESA_VK_SHADER_STAGE_DATA_GRAPH_BIT)
+      push_desc_set_write(cmdbuf, &cmdbuf->state.data_graph.desc_state,
                           pPushDescriptorSetInfo);
 #endif
 }

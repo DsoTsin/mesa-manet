@@ -937,6 +937,10 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
       break;
 
    /* Intrinsics which are always divergent */
+   case nir_intrinsic_load_rt_arg_pan:
+   case nir_intrinsic_load_rt_frame_size_pan:
+   case nir_intrinsic_load_rt_tls_base_pan:
+   case nir_intrinsic_rt_call_result_pan:
    case nir_intrinsic_inverse_ballot:
    case nir_intrinsic_load_color0_amd:
    case nir_intrinsic_load_color1_amd:

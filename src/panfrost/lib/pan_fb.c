@@ -204,7 +204,7 @@ fold_resolve_into_store_target(enum pipe_format format,
 
    fold_sample_0_image_load(&resolve->in_bounds, resolve->iview,
                             fb_sample_count);
-   fold_sample_0_image_load(&resolve->in_bounds, resolve->iview,
+   fold_sample_0_image_load(&resolve->border, resolve->iview,
                             fb_sample_count);
 
    if (!resolve_msaa_can_fold(resolve->in_bounds, self_op, format) ||
@@ -275,7 +275,7 @@ GENX(pan_fill_fb_info)(const struct pan_fb_desc_info *info,
                        struct pan_fb_info *fbinfo)
 {
    struct pan_bbox bbox = { 0, 0, 0, 0 };
-   if (info->fb->width_px > 0 && info->fb->width_px > 0) {
+   if (info->fb->width_px > 0 && info->fb->height_px > 0) {
       const struct pan_fb_bbox fb_area_px =
          pan_fb_bbox_from_xywh(0, 0, info->fb->width_px, info->fb->height_px);
 
@@ -316,7 +316,7 @@ GENX(pan_fill_fb_info)(const struct pan_fb_desc_info *info,
       .sample_positions = info->sample_pos_array_pointer,
       .sprite_coord_origin = info->sprite_coord_origin_max_y,
       .first_provoking_vertex = info->provoking_vertex_first,
-      .allow_hsr_prepass = info->provoking_vertex_first,
+      .allow_hsr_prepass = info->allow_hsr_prepass,
    };
 
    /* There are cases where we only want to fill out a partial fb_info */

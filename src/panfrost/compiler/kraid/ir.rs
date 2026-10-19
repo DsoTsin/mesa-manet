@@ -55,6 +55,7 @@ pub enum SpecialFAU {
     BlendDescriptor6,
     BlendDescriptor7,
     ThreadLocalPointer,
+    RtThreadLocalPointer,
     WorkgroupLocalPointer,
     ResourceTablePointer,
     LaneId,
@@ -91,7 +92,7 @@ impl fmt::Display for SpecialFAU {
             BlendDescriptor5 => "blend_descriptor5",
             BlendDescriptor6 => "blend_descriptor6",
             BlendDescriptor7 => "blend_descriptor7",
-            ThreadLocalPointer => "thread_local_pointer",
+            ThreadLocalPointer | RtThreadLocalPointer => "thread_local_pointer",
             WorkgroupLocalPointer => "workgroup_local_pointer",
             ResourceTablePointer => "resource_table_pointer",
             LaneId => "lane_id",
@@ -329,12 +330,42 @@ pub enum PreloadReg {
 
     PilotFau,
     PilotSrt,
+    RtFrame,
+    RtPayload,
+    RtRoot,
+    RtStack,
+    RtReturn,
+    RtRay,
+    RtRecord,
+    RtShaderRecord,
+    RtTmax,
+    RtHitKind,
+    RtDepth,
+    RtFrameLayout,
+    RtFrameOffset,
+    RtPayloadOffset,
+    RtRootOffset,
+    RtRayOffset,
+    RtLaunch0,
+    RtLaunch1,
+    RtLaunch2,
 }
 
 impl PreloadReg {
+    pub fn is_rt_arg(self) -> bool {
+        matches!(self, Self::RtFrame | Self::RtPayload | Self::RtRoot
+            | Self::RtStack | Self::RtReturn | Self::RtRay | Self::RtRecord
+            | Self::RtShaderRecord | Self::RtTmax | Self::RtHitKind
+            | Self::RtDepth | Self::RtFrameLayout | Self::RtFrameOffset
+            | Self::RtPayloadOffset | Self::RtRootOffset | Self::RtRayOffset
+            | Self::RtLaunch0 | Self::RtLaunch1 | Self::RtLaunch2)
+    }
+
     pub fn reg_size(&self) -> u8 {
         match self {
             Self::FrameArg | Self::PilotFau | Self::PilotSrt => 2,
+            Self::RtFrame | Self::RtPayload | Self::RtRoot | Self::RtStack
+            | Self::RtRay | Self::RtRecord | Self::RtShaderRecord => 2,
             Self::BlendInputSrc0 | Self::BlendInputSrc1 => 4,
             _ => 1,
         }
@@ -370,12 +401,31 @@ impl fmt::Display for PreloadReg {
             BlendReturnAddr => "BLEND_RETURN_ADDR",
             PilotFau => "PILOT_FAU",
             PilotSrt => "PILOT_SRT",
+            RtFrame => "RT_FRAME",
+            RtPayload => "RT_PAYLOAD",
+            RtRoot => "RT_ROOT",
+            RtStack => "RT_STACK",
+            RtReturn => "RT_RETURN",
+            RtRay => "RT_RAY",
+            RtRecord => "RT_RECORD",
+            RtShaderRecord => "RT_SHADER_RECORD",
+            RtTmax => "RT_TMAX",
+            RtHitKind => "RT_HIT_KIND",
+            RtDepth => "RT_DEPTH",
+            RtFrameLayout => "RT_FRAME_LAYOUT",
+            RtFrameOffset => "RT_FRAME_OFFSET",
+            RtPayloadOffset => "RT_PAYLOAD_OFFSET",
+            RtRootOffset => "RT_ROOT_OFFSET",
+            RtRayOffset => "RT_RAY_OFFSET",
+            RtLaunch0 => "RT_LAUNCH_0",
+            RtLaunch1 => "RT_LAUNCH_1",
+            RtLaunch2 => "RT_LAUNCH_2",
         };
         write!(f, "{name}")
     }
 }
 
-pub type PreloadRegSet = U8EnumSet<PreloadReg, 1>;
+pub type PreloadRegSet = U8EnumSet<PreloadReg, 2>;
 
 /// Handle referencing an external resource (e.g. sampler, texture, attribute,
 /// uniform buffer...).  It is just a pair of indices, one selecting a "table",
@@ -1986,7 +2036,7 @@ pub struct Instr {
 }
 
 impl Instr {
-    pub const MAX_SRC_COUNT: usize = 5;
+    pub const MAX_SRC_COUNT: usize = 18;
 }
 
 impl Deref for Instr {
@@ -2099,7 +2149,7 @@ impl BasicBlock {
 
     pub fn is_postlude_instr(instr: &Instr) -> bool {
         match &instr.op {
-            Op::Branch(_) | Op::PhiSrc(_) | Op::RegOut(_) => true,
+            Op::Branch(_) | Op::PhiSrc(_) | Op::RegOut(_) | Op::RtReturn(_) => true,
             Op::Nop(_) => instr.flow.get_end_shader(),
             _ => false,
         }
@@ -2253,6 +2303,11 @@ pub struct ShaderInfo {
     pub fixed_function_blend: u8,
     pub hsr: HsrInfo,
     pub cross_invocation: bool,
+    pub contains_jump_ex: bool,
+    pub rt_frame_size: u32,
+    pub rt_frame_prefix: u32,
+    pub rt_frame_tls: bool,
+    pub rt_frame_multi: bool,
 }
 
 impl ShaderInfo {

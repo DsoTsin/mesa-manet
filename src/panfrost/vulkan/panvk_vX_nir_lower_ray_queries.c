@@ -68,6 +68,7 @@ struct lower_rq_ctx {
    nir_def *lane_index;
    nir_def *lane_count;
    uint32_t slot_count;
+   uint32_t frame_offset;
 };
 
 static const struct glsl_type *
@@ -152,6 +153,12 @@ rq_deref(nir_builder *b, struct lower_rq_ctx *ctx, nir_def *def,
 static nir_def *
 rq_state_addr(nir_builder *b, struct lower_rq_ctx *ctx, nir_def *slot)
 {
+   if (ctx->frame_offset) {
+      nir_def *root = nir_load_rt_arg_pan(b, 64, .base = 2);
+      nir_def *base = nir_iand_imm(b, nir_load_rt_arg_pan(b, 32, .base = 12), 0xffff);
+      return panvk_nir_rt_state_addr(b, root,
+         nir_iadd(b, base, nir_iadd_imm(b, slot, 1)));
+   }
    nir_def *index =
       nir_iadd(b, nir_imul(b, slot, ctx->lane_count), ctx->lane_index);
 
@@ -851,12 +858,13 @@ analyze_rq(nir_function_impl *impl, struct lower_rq_ctx *ctx)
    }
 }
 
-uint32_t
-panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir, uint32_t slot_base)
+static uint32_t
+lower_ray_queries(nir_shader *nir, uint32_t slot_base, uint32_t frame_offset)
 {
    struct lower_rq_ctx ctx = {
       .vars = _mesa_pointer_hash_table_create(NULL),
       .slot_count = slot_base,
+      .frame_offset = frame_offset,
    };
 
    nir_foreach_variable_in_shader(var, nir) {
@@ -958,4 +966,17 @@ panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir, uint32_t slot_base)
 
    ralloc_free(ctx.vars);
    return ctx.slot_count;
+}
+
+uint32_t
+panvk_per_arch(nir_lower_ray_queries)(nir_shader *nir, uint32_t slot_base)
+{
+   return lower_ray_queries(nir, slot_base, 0);
+}
+
+uint32_t
+panvk_per_arch(nir_lower_rt_ray_queries)(nir_shader *nir, uint32_t frame_offset)
+{
+   assert(frame_offset && frame_offset % PANVK_RAY_QUERY_STATE_SIZE == 0);
+   return lower_ray_queries(nir, 0, frame_offset);
 }

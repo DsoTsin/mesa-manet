@@ -182,7 +182,26 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_uid(
     group_handle: *mut u32,
     group_uid: *mut u32,
 ) -> c_int {
+    kbase_kmod_csf_group_create_with_neural(dev, cs_queue_count, tiler_oom_handler,
+        max_cores, dvs_buf, compute_priority, false, group_handle, group_uid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kbase_kmod_csf_group_create_with_neural(
+    dev: *mut KmodDev,
+    cs_queue_count: u32,
+    tiler_oom_handler: bool,
+    max_cores: u32,
+    dvs_buf: u64,
+    compute_priority: bool,
+    neural: bool,
+    group_handle: *mut u32,
+    group_uid: *mut u32,
+) -> c_int {
     let d = unsafe { Dev::get(dev) };
+    if neural && (!d.has_neural || !d.version_at_least(1, 19)) {
+        return -1;
+    }
     let cores = if max_cores == 0 {
         64
     } else {
@@ -201,11 +220,13 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_uid(
         tiler_max: 1,
         fragment_max: cores,
         compute_max: cores,
+        neural_max: if neural { 64 } else { 0 },
+        neural_mask: if neural { !0 } else { 0 },
         ..Default::default()
     };
 
     let mut attempts = Vec::new();
-    if d.version_at_least(1, 25) {
+    if d.version_at_least(1, if neural { 19 } else { 25 }) {
         let req = if d.version_at_least(1, 36) {
             KBASE_IOCTL_CS_QUEUE_GROUP_CREATE
         } else {
@@ -214,7 +235,7 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_uid(
         for pri in (0..=compute_priority as u8).rev() {
             let create = GroupCreate {
                 csi_handlers,
-                cs_fault_report_enable: 1,
+                cs_fault_report_enable: d.version_at_least(1, 25) as u8,
                 dvs_buf,
                 comp_pri_threshold: 4 * pri,
                 comp_pri_ratio: 3 * pri,
@@ -223,14 +244,14 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_uid(
             attempts.push((req, create));
         }
     }
-    if dvs_buf == 0 && d.version_at_least(1, 18) {
+    if !neural && dvs_buf == 0 && d.version_at_least(1, 18) {
         let create = GroupCreate {
             csi_handlers,
             ..base
         };
         attempts.push((KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_18, create));
     }
-    if dvs_buf == 0 && !tiler_oom_handler {
+    if !neural && dvs_buf == 0 && !tiler_oom_handler {
         attempts.push((KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_6, base));
     }
 
@@ -261,6 +282,33 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_uid(
         );
     }
     -1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kbase_kmod_csf_has_neural(dev: *const KmodDev) -> bool {
+    unsafe { Dev::get(dev) }.has_neural
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kbase_kmod_csf_neural_core_count(dev: *const KmodDev) -> u32 {
+    let d = unsafe { Dev::get(dev) };
+    if d.has_neural { d.neural_present.count_ones() } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kbase_kmod_get_l2_cache_props(
+    dev: *const KmodDev,
+    props: *mut crate::dev::L2CacheProps,
+) -> bool {
+    let d = unsafe { Dev::get(dev) };
+    let Some(props) = (unsafe { props.as_mut() }) else { return false };
+    if d.l2_cache.line_size == 0 || d.l2_cache.size_per_slice == 0 || d.l2_cache.slices == 0 {
+        return false;
+    }
+    props.line_size = d.l2_cache.line_size;
+    props.size_per_slice = d.l2_cache.size_per_slice;
+    props.slices = d.l2_cache.slices;
+    true
 }
 
 #[unsafe(no_mangle)]

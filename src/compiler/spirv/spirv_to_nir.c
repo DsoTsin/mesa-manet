@@ -7736,6 +7736,161 @@ vtn_create_builder(const uint32_t *words, size_t word_count,
    return NULL;
 }
 
+static void
+vtn_emit_specialized_constant(struct vtn_builder *b, struct util_dynarray *out,
+                              const struct vtn_type *type,
+                              const nir_constant *value, uint32_t id,
+                              uint32_t *bound)
+{
+   if (type->base_type == vtn_base_type_scalar) {
+      if (glsl_type_is_boolean(type->type)) {
+         util_dynarray_append_typed(out, uint32_t,
+                              (3u << 16) | (value->values[0].b ?
+                                 SpvOpConstantTrue : SpvOpConstantFalse));
+         util_dynarray_append_typed(out, uint32_t, type->id);
+         util_dynarray_append_typed(out, uint32_t, id);
+      } else {
+         unsigned bits = glsl_get_bit_size(type->type);
+         util_dynarray_append_typed(out, uint32_t,
+                              ((3 + DIV_ROUND_UP(bits, 32)) << 16) |
+                                 SpvOpConstant);
+         util_dynarray_append_typed(out, uint32_t, type->id);
+         util_dynarray_append_typed(out, uint32_t, id);
+         uint64_t literal = nir_const_value_as_uint(value->values[0], bits);
+         util_dynarray_append_typed(out, uint32_t, (uint32_t)literal);
+         if (bits == 64)
+            util_dynarray_append_typed(out, uint32_t, (uint32_t)(literal >> 32));
+      }
+      return;
+   }
+   unsigned count = type->length;
+   vtn_fail_if(count > UINT16_MAX - 3 || *bound > UINT32_MAX - count,
+               "Specialized constant exceeds SPIR-V limits");
+   uint32_t first = *bound;
+   *bound += count;
+   for (unsigned i = 0; i < count; i++) {
+      const struct vtn_type *element = type->base_type == vtn_base_type_struct ?
+         type->members[i] : type->array_element;
+      nir_constant scalar = {0};
+      const nir_constant *child;
+      if (type->base_type == vtn_base_type_vector) {
+         scalar.values[0] = value->values[i];
+         child = &scalar;
+      } else {
+         child = value->elements[i];
+      }
+      vtn_emit_specialized_constant(b, out, element, child, first + i, bound);
+   }
+   util_dynarray_append_typed(out, uint32_t, ((count + 3) << 16) |
+                                      SpvOpConstantComposite);
+   util_dynarray_append_typed(out, uint32_t, type->id);
+   util_dynarray_append_typed(out, uint32_t, id);
+   for (unsigned i = 0; i < count; i++)
+      util_dynarray_append_typed(out, uint32_t, first + i);
+}
+
+uint32_t *
+spirv_specialize(void *mem_ctx, const uint32_t *words, size_t word_count,
+                 struct nir_spirv_specialization *specialization,
+                 size_t *specialized_word_count)
+{
+   *specialized_word_count = 0;
+   const struct spirv_to_nir_options options = {
+      .environment = NIR_SPIRV_VULKAN,
+      .skip_os_break_in_debug_build = true,
+   };
+   struct vtn_builder *b = vtn_create_builder(words, word_count,
+                                             MESA_SHADER_COMPUTE, "main", &options);
+   if (!b)
+      return NULL;
+   if (setjmp(b->fail_jump)) {
+      ralloc_free(b);
+      return NULL;
+   }
+   b->shader = nir_shader_create(b, MESA_SHADER_COMPUTE, NULL);
+   b->specialization = specialization;
+   struct util_dynarray *out = rzalloc(b, struct util_dynarray);
+   util_dynarray_init(out, b);
+   util_dynarray_append_array(out, uint32_t, words, 5);
+   for (size_t i = 5; i < word_count;) {
+      const uint32_t *w = words + i;
+      unsigned n = w[0] >> 16;
+      SpvOp op = w[0] & 0xffff;
+      vtn_fail_if(!n || n > word_count - i, "Invalid SPIR-V instruction size");
+      if ((op == SpvOpDecorate && n == 4 && w[2] == SpvDecorationSpecId) ||
+          op == SpvOpDecorationGroup || op == SpvOpGroupDecorate)
+         vtn_handle_decoration(b, op, w, n);
+      i += n;
+   }
+   uint32_t bound = words[3];
+   for (size_t i = 5; i < word_count;) {
+      const uint32_t *w = words + i;
+      unsigned n = w[0] >> 16;
+      SpvOp op = w[0] & 0xffff;
+      bool constant = false, spec = false;
+      switch (op) {
+      case SpvOpTypeBool:
+      case SpvOpTypeInt:
+      case SpvOpTypeFloat:
+      case SpvOpTypeVector:
+      case SpvOpTypeMatrix:
+      case SpvOpTypeArray:
+      case SpvOpTypeStruct:
+         vtn_handle_type(b, op, w, n);
+         break;
+      case SpvOpSpecConstantTrue:
+      case SpvOpSpecConstantFalse:
+      case SpvOpSpecConstant:
+      case SpvOpSpecConstantComposite:
+      case SpvOpSpecConstantCompositeReplicateEXT:
+      case SpvOpSpecConstantOp:
+         spec = true;
+         FALLTHROUGH;
+      case SpvOpConstantTrue:
+      case SpvOpConstantFalse:
+      case SpvOpConstant:
+      case SpvOpConstantNull:
+      case SpvOpConstantComposite:
+      case SpvOpConstantCompositeReplicateEXT:
+         vtn_fail_if(n < 3 || w[1] >= b->value_id_bound,
+                     "Invalid constant type");
+         constant = b->values[w[1]].value_type == vtn_value_type_type;
+         if (constant) {
+            vtn_set_instruction_result_type(b, op, w, n);
+            vtn_handle_constant(b, op, w, n);
+         }
+         break;
+      default:
+         break;
+      }
+      if (spec && constant) {
+         struct vtn_value *value = vtn_value(b, w[2], vtn_value_type_constant);
+         vtn_emit_specialized_constant(b, out, value->type, value->constant,
+                                       w[2], &bound);
+      } else if (spec) {
+         vtn_fail_if(op != SpvOpSpecConstantComposite &&
+                     op != SpvOpSpecConstantCompositeReplicateEXT,
+                     "Unsupported specialization type");
+         util_dynarray_append_typed(out, uint32_t, (n << 16) |
+            (op == SpvOpSpecConstantComposite ? SpvOpConstantComposite :
+                                              SpvOpConstantCompositeReplicateEXT));
+         util_dynarray_append_array(out, uint32_t, w + 1, n - 1);
+      } else if (!(op == SpvOpDecorate && n == 4 &&
+                    w[2] == SpvDecorationSpecId)) {
+         util_dynarray_append_array(out, uint32_t, w, n);
+      }
+      i += n;
+   }
+   uint32_t *result = ralloc_array(mem_ctx, uint32_t, out->size / sizeof(uint32_t));
+   if (result) {
+      memcpy(result, out->data, out->size);
+      result[3] = bound;
+      *specialized_word_count = out->size / sizeof(uint32_t);
+   }
+   ralloc_free(b);
+   return result;
+}
+
 /* See glsl_type_add_to_function_params and vtn_ssa_value_add_to_call_params */
 static void
 vtn_emit_kernel_entry_point_wrapper_struct_param(struct nir_builder *b,

@@ -223,6 +223,11 @@ fn merge_end(shader: &mut Shader) {
             continue;
         }
 
+        if block.instrs.iter().rev().nth(1).is_some_and(|i|
+            matches!(i.op, Op::RtCall(_) | Op::RtReturn(_))) {
+            continue;
+        }
+
         let nop_end = block.instrs.pop().unwrap();
 
         while block

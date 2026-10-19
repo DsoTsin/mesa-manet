@@ -42,6 +42,35 @@ fn execute(instrs: &[Instr], values: &mut [u8; 128]) {
                     values[usize::from(d)] ^= tmp[i % tmp.len()];
                 }
             }
+            Op::IAdd(_) | Op::ISub(_) => {
+                let (dst, ty, srcs, subtract) = match &instr.op {
+                    Op::IAdd(op) => {
+                        assert!(!op.saturate);
+                        (&op.dst, op.dst_type, &op.srcs, false)
+                    }
+                    Op::ISub(op) => (&op.dst, op.dst_type, &op.srcs, true),
+                    _ => unreachable!(),
+                };
+                let read = |src: &Src| {
+                    assert!(src.src_mod.is_none() && src.swizzle.is_none());
+                    let r = src.src_ref.as_reg().unwrap().byte_range();
+                    values[usize::from(r.start)..usize::from(r.end)].to_vec()
+                };
+                let a = read(&srcs[0]);
+                let b = read(&srcs[1]);
+                let dst = dst.dst_ref.as_reg().unwrap().byte_range();
+                let width = usize::from(ty.bits() / 8);
+                for (c, d) in values[usize::from(dst.start)..usize::from(dst.end)]
+                    .chunks_exact_mut(width).enumerate() {
+                    let mut av = [0_u8; 8];
+                    let mut bv = [0_u8; 8];
+                    av[..width].copy_from_slice(&a[c * width..(c + 1) * width]);
+                    bv[..width].copy_from_slice(&b[c * width..(c + 1) * width]);
+                    let (av, bv) = (u64::from_le_bytes(av), u64::from_le_bytes(bv));
+                    let value = if subtract { av.wrapping_sub(bv) } else { av.wrapping_add(bv) };
+                    d.copy_from_slice(&value.to_le_bytes()[..width]);
+                }
+            }
             _ => panic!("unexpected copy instruction: {instr}"),
         }
     }

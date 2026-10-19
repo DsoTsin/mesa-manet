@@ -102,9 +102,13 @@ pub mod gpuprop {
     pub const VERSION_STATUS: u32 = 2;
     pub const MINOR_REVISION: u32 = 3;
     pub const MAJOR_REVISION: u32 = 4;
+    pub const L2_LOG2_LINE_SIZE: u32 = 13;
+    pub const L2_LOG2_CACHE_SIZE: u32 = 14;
+    pub const L2_NUM_L2_SLICES: u32 = 15;
     pub const MAX_REGISTERS: u32 = 21;
     pub const MAX_TASK_QUEUE: u32 = 22;
     pub const RAW_SHADER_PRESENT: u32 = 25;
+    pub const RAW_L2_FEATURES: u32 = 29;
     pub const RAW_CORE_FEATURES: u32 = 30;
     pub const RAW_MEM_FEATURES: u32 = 31;
     pub const RAW_MMU_FEATURES: u32 = 32;
@@ -113,6 +117,8 @@ pub mod gpuprop {
     pub const RAW_TEXTURE_FEATURES_1: u32 = 53;
     pub const RAW_TEXTURE_FEATURES_2: u32 = 54;
     pub const RAW_GPU_ID: u32 = 55;
+    pub const RAW_GPU_FEATURES: u32 = 85;
+    pub const RAW_NEURAL_PRESENT: u32 = 87;
     pub const RAW_THREAD_MAX_THREADS: u32 = 56;
     pub const RAW_THREAD_MAX_WORKGROUP_SIZE: u32 = 57;
     pub const RAW_THREAD_FEATURES: u32 = 59;

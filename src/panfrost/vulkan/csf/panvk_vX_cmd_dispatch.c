@@ -437,8 +437,10 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
    };
    bool indirect = info->indirect.buffer_dev_addr != 0;
 
-   uint64_t tsd =
-      panvk_per_arch(cmd_dispatch_prepare_tls)(cmdbuf, cs, &dim, indirect);
+   struct panvk_shader_variant tls_shader = *cs;
+   tls_shader.info.tls_size = MAX2(cs->info.tls_size, info->tls_size);
+   uint64_t tsd = panvk_per_arch(cmd_dispatch_prepare_tls)(
+      cmdbuf, &tls_shader, &dim, indirect);
    if (!tsd)
       return;
 
@@ -462,6 +464,20 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
    if (result != VK_SUCCESS)
       return;
    cmdbuf->state.compute.push_uniforms = push_uniforms.gpu;
+#if PAN_ARCH >= 15
+   if (info->rt_launch_size && shader_uses_sysval(cs, compute, rt_launch_size)) {
+      struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+      cs_move64_to(b, cs_scratch_reg64(b, 0), info->rt_launch_size);
+      cs_load_to(b, cs_scratch_reg_tuple(b, 2, 3), cs_scratch_reg64(b, 0),
+                 BITFIELD_MASK(3), 0);
+      cs_move64_to(b, cs_scratch_reg64(b, 0), push_uniforms.gpu);
+      for (unsigned c = 0; c < 3; c++)
+         cs_store32(b, cs_scratch_reg32(b, 2 + c), cs_scratch_reg64(b, 0),
+                    shader_remapped_sysval_offset(cs,
+                       sysval_offset(compute, rt_launch_size) + c * 4));
+      cs_flush_stores(b);
+   }
+#endif
    if (cs->preamble)
       compute_state_set_dirty(cmdbuf, PUSH_UNIFORMS);
 
@@ -476,7 +492,7 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
    struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
 
    /* Copy the global TLS pointer and size to the per-job TSD. */
-   if (cs->info.tls_size) {
+   if (tls_shader.info.tls_size) {
       cs_move64_to(b, cs_scratch_reg64(b, 0), cmdbuf->state.tls.desc.gpu);
       cs_load32_to(b, cs_scratch_reg32(b, 4), cs_scratch_reg64(b, 0), 0);
       cs_load64_to(b, cs_scratch_reg64(b, 2), cs_scratch_reg64(b, 0), 8);
@@ -516,7 +532,8 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf,
 void
 panvk_per_arch(cmd_dispatch_rt)(
    struct panvk_cmd_buffer *cmdbuf, const struct panvk_shader *shader,
-   const struct panvk_dispatch_info *info, uint64_t dispatch_addr)
+   const struct panvk_dispatch_info *info, uint64_t dispatch_addr,
+   const struct panvk_rt_dispatch_params *params)
 {
    const struct panvk_cmd_compute_state saved = cmdbuf->state.compute;
    const struct panvk_cond_render_state saved_cond = cmdbuf->state.cond_render;
@@ -524,12 +541,15 @@ panvk_per_arch(cmd_dispatch_rt)(
       .shader = shader,
       .desc_state = cmdbuf->state.ray_tracing.desc_state,
       .sysvals.rt_dispatch = dispatch_addr,
+       .sysvals.rt_dispatch_params = *params,
    };
    cmdbuf->state.cond_render.enabled = false;
    cmdbuf->state.cond_render.inherited = false;
    BITSET_SET_RANGE(cmdbuf->state.compute.dirty, 0,
                     PANVK_CMD_COMPUTE_DIRTY_STATE_COUNT - 1);
-   cmd_dispatch(cmdbuf, info);
+   struct panvk_dispatch_info dispatch = *info;
+   dispatch.rt_launch_size = dispatch_addr + 88;
+   cmd_dispatch(cmdbuf, &dispatch);
    cmdbuf->state.cond_render = saved_cond;
    cmdbuf->state.ray_tracing.desc_state = cmdbuf->state.compute.desc_state;
    cmdbuf->state.compute = saved;

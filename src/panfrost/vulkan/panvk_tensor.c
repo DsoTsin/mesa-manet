@@ -28,6 +28,9 @@ static const struct panvk_tensor_format tensor_formats[] = {
    {VK_FORMAT_R32_UINT, 4, true},    {VK_FORMAT_R32_SINT, 4, true},
    {VK_FORMAT_R32_SFLOAT, 4, false}, {VK_FORMAT_R64_UINT, 8, false},
    {VK_FORMAT_R64_SINT, 8, false},
+   {VK_FORMAT_R16_SFLOAT_FPENCODING_BFLOAT16_ARM, 2, false},
+   {VK_FORMAT_R8_SFLOAT_FPENCODING_FLOAT8E4M3_ARM, 1, false},
+   {VK_FORMAT_R8_SFLOAT_FPENCODING_FLOAT8E5M2_ARM, 1, false},
 };
 
 static const struct panvk_tensor_format *
@@ -93,21 +96,28 @@ panvk_get_tensor_format_features(const struct panvk_physical_device *pdev,
    const VkFormatFeatureFlags2 transfer =
       VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT |
       VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT;
+   const VkFormatFeatureFlags2 graph =
+      pdev->vk.supported_features.dataGraph &&
+      (tiling == VK_TENSOR_TILING_LINEAR_ARM ||
+       tiling == VK_TENSOR_TILING_OPTIMAL_ARM) &&
+      (fmt->size == 4 || format == VK_FORMAT_R8_SINT ||
+       format == VK_FORMAT_R8_UINT)
+         ? VK_FORMAT_FEATURE_2_TENSOR_DATA_GRAPH_BIT_ARM : 0;
 
    enum panvk_tensor_tiling ptiling = get_tensor_tiling(tiling);
    switch (ptiling) {
    case PANVK_TENSOR_TILING_LINEAR:
-      return transfer | VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM |
+      return graph | transfer | VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM |
              VK_FORMAT_FEATURE_2_TENSOR_IMAGE_ALIASING_BIT_ARM;
    case PANVK_TENSOR_TILING_BRICK_16:
    case PANVK_TENSOR_TILING_BRICK_8:
    case PANVK_TENSOR_TILING_BRICK_4:
       return 64 / brick_width(ptiling) / fmt->size
-                ? VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM
+                ? graph | VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM
                 : 0;
    case PANVK_TENSOR_TILING_BLOCK_U:
    case PANVK_TENSOR_TILING_BLOCK_U_64K:
-      return fmt->block_u ? transfer | VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM
+      return fmt->block_u ? graph | transfer | VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM
                           : 0;
    }
 

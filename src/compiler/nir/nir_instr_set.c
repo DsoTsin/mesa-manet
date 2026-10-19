@@ -243,7 +243,8 @@ normalized_intrinsic_const_indices(const nir_intrinsic_instr *instr,
    const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];
 
    if (!nir_intrinsic_has_fp_math_ctrl(instr) &&
-       !nir_intrinsic_has_io_semantics(instr))
+       !nir_intrinsic_has_io_semantics(instr) &&
+       !nir_intrinsic_has_access(instr))
       return instr->const_index;
 
    memcpy(const_index, instr->const_index,
@@ -260,6 +261,10 @@ normalized_intrinsic_const_indices(const nir_intrinsic_instr *instr,
       nir_io_semantics sem = nir_intrinsic_io_semantics(instr);
       sem.no_signed_zero = false;
       memcpy(&const_index[offset], &sem, sizeof(sem));
+   }
+   if (nir_intrinsic_has_access(instr)) {
+      unsigned offset = info->index_map[NIR_INTRINSIC_ACCESS] - 1;
+      const_index[offset] = nir_intrinsic_access(instr) & ~ACCESS_IS_SPECULATED;
    }
 
    return const_index;
@@ -865,6 +870,11 @@ nir_instr_set_add_or_rewrite(struct set *instr_set, nir_instr *instr,
             unsigned fp_math_ctrl = nir_intrinsic_fp_math_ctrl(match_intr);
             fp_math_ctrl |= nir_intrinsic_fp_math_ctrl(intr);
             nir_intrinsic_set_fp_math_ctrl(match_intr, fp_math_ctrl);
+         }
+         if (nir_intrinsic_has_access(intr)) {
+            enum gl_access_qualifier access = nir_intrinsic_access(match_intr);
+            access |= nir_intrinsic_access(intr);
+            nir_intrinsic_set_access(match_intr, access);
          }
       }
 

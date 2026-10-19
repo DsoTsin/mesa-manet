@@ -8,10 +8,24 @@
 #include "pan_props.h"
 #include "vk_log.h"
 #include "util/u_math.h"
+#include "util/u_debug.h"
+
+struct rt_native_entry {
+   uint32_t id;
+   uint32_t stage;
+   uint32_t address;
+   uint32_t frame_size;
+};
+
+static int
+compare_native_entry(const void *a, const void *b)
+{
+   const struct rt_native_entry *x = a, *y = b;
+   return (x->id > y->id) - (x->id < y->id);
+}
 
 static VkResult
-get_stack(struct panvk_cmd_buffer *cmdbuf, uint64_t size,
-          uint64_t *base, uint64_t *stride)
+get_stack(struct panvk_cmd_buffer *cmdbuf, uint64_t size, uint64_t *base)
 {
    const struct panvk_physical_device *pdev =
       to_panvk_physical_device(cmdbuf->vk.base.device->physical);
@@ -34,7 +48,6 @@ get_stack(struct panvk_cmd_buffer *cmdbuf, uint64_t size,
       state->stack_stride = size;
    }
    *base = state->stack_base;
-   *stride = state->stack_stride;
    return VK_SUCCESS;
 }
 
@@ -126,8 +139,41 @@ trace_rays(struct panvk_cmd_buffer *cmdbuf,
    uint64_t stack_size = pipeline->compiled_stack_size;
    if (cmdbuf->state.ray_tracing.stack_size_set)
       stack_size = MAX2(stack_size, cmdbuf->state.ray_tracing.stack_size);
-   VkResult result = get_stack(cmdbuf, stack_size, &record.stack_base,
-                               &record.stack_stride);
+   if (!stack_size || stack_size > UINT32_MAX - 127) {
+      vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return;
+   }
+   record.params.stack_stride = ALIGN_POT(stack_size, 128);
+   bool native_tls = pipeline->native_frame_stride && pipeline->native_tls;
+   uint64_t external_size = native_tls ? 0 : record.params.stack_stride;
+   uint32_t tls_size = 0;
+   record.params.stack_tls_offset = UINT64_MAX;
+   record.params.external_state_scale = 1;
+   if (pipeline->native_frame_stride) {
+      external_size += pipeline->external_frame_size;
+      const struct panvk_physical_device *pdev =
+         to_panvk_physical_device(cmdbuf->vk.base.device->physical);
+      const struct pan_kmod_dev_props *props = &pdev->kmod.dev->props;
+      record.params.external_state_scale = (uint64_t)pan_query_core_id_range(props) *
+                                    props->max_threads_per_core;
+   }
+   if (native_tls) {
+      if (record.params.stack_stride > UINT32_MAX - pipeline->native_tls_offset) {
+         vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         return;
+      }
+      tls_size = pipeline->native_tls_offset + record.params.stack_stride;
+      const struct panvk_physical_device *pdev =
+         to_panvk_physical_device(cmdbuf->vk.base.device->physical);
+      const struct pan_kmod_dev_props *props = &pdev->kmod.dev->props;
+      if (!panvk_rt_tls_allocation_fits(tls_size,
+             pan_query_thread_tls_alloc(props), pan_query_core_id_range(props))) {
+         vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         return;
+      }
+      record.params.stack_tls_offset = pipeline->native_tls_offset;
+   }
+   VkResult result = get_stack(cmdbuf, external_size, &record.params.stack_base);
    if (result != VK_SUCCESS) {
       vk_command_buffer_set_error(&cmdbuf->vk, result);
       return;
@@ -137,14 +183,32 @@ trace_rays(struct panvk_cmd_buffer *cmdbuf,
       sizeof(cmdbuf->state.ray_tracing.push_constants), 8);
    if (!push.gpu)
       return;
-   record.push_constants = push.gpu;
-   struct pan_ptr ids = panvk_cmd_alloc_dev_mem(
-      cmdbuf, desc, pipeline->stage_count * sizeof(uint32_t), 4);
-   if (!ids.gpu)
-      return;
-   for (uint32_t i = 0; i < pipeline->stage_count; i++)
-      ((uint32_t *)ids.cpu)[i] = pipeline->stages[i].id;
-   record.stage_ids = ids.gpu;
+   record.params.push_constants = push.gpu;
+   if (!pipeline->native_direct_sbt) {
+      struct pan_ptr ids = panvk_cmd_alloc_dev_mem(
+         cmdbuf, desc, pipeline->stage_count *
+            (pipeline->native_frame_stride ? sizeof(struct rt_native_entry) : sizeof(uint32_t)), 8);
+      if (!ids.gpu)
+         return;
+      if (pipeline->native_frame_stride) {
+         uint64_t base = panvk_shader_variant_get_dev_addr(&pipeline->shader->variants[0]);
+         struct rt_native_entry *entries = ids.cpu;
+         for (uint32_t i = 0; i < pipeline->stage_count; i++) {
+            entries[i] = (struct rt_native_entry){
+               .id = pipeline->stages[i].id,
+               .stage = pipeline->stages[i].stage,
+               .address = base + pipeline->stage_entry_offsets[i],
+               .frame_size = pipeline->stage_stack_sizes[i],
+            };
+         }
+         qsort(entries, pipeline->stage_count, sizeof(*entries), compare_native_entry);
+      } else {
+         for (uint32_t i = 0; i < pipeline->stage_count; i++)
+            ((uint32_t *)ids.cpu)[i] = pipeline->stages[i].id;
+      }
+      record.params.stage_ids = ids.gpu;
+   }
+   record.params.native_frame_stride = pipeline->native_frame_stride;
    struct pan_ptr launch = panvk_cmd_upload_dev_mem(
       cmdbuf, desc, &record, sizeof(record), 8);
    if (!launch.gpu)
@@ -153,6 +217,7 @@ trace_rays(struct panvk_cmd_buffer *cmdbuf,
    struct panvk_dispatch_info info = {
       .direct.wg_count = {DIV_ROUND_UP(width, 16), height, depth},
       .barrier = PANVK_CSF_BARRIER_SYNC,
+      .tls_size = tls_size,
    };
    if (indirect) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
@@ -163,7 +228,7 @@ trace_rays(struct panvk_cmd_buffer *cmdbuf,
       if (!info.indirect.buffer_dev_addr)
          return;
    }
-   panvk_per_arch(cmd_dispatch_rt)(cmdbuf, pipeline->shader, &info, launch.gpu);
+   panvk_per_arch(cmd_dispatch_rt)(cmdbuf, pipeline->shader, &info, launch.gpu, &record.params);
 }
 
 VKAPI_ATTR void VKAPI_CALL

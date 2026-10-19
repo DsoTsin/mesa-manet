@@ -54,6 +54,23 @@ int kbase_kmod_csf_group_create_with_uid(struct pan_kmod_dev *dev,
                                 uint64_t dvs_buf,
                                 bool compute_priority,
                                 uint32_t *group_handle, uint32_t *group_uid);
+int kbase_kmod_csf_group_create_with_neural(struct pan_kmod_dev *dev,
+                                uint32_t cs_queue_count,
+                                bool tiler_oom_handler,
+                                uint32_t max_cores,
+                                uint64_t dvs_buf,
+                                bool compute_priority,
+                                bool neural,
+                                uint32_t *group_handle, uint32_t *group_uid);
+bool kbase_kmod_csf_has_neural(const struct pan_kmod_dev *dev);
+uint32_t kbase_kmod_csf_neural_core_count(const struct pan_kmod_dev *dev);
+struct kbase_kmod_l2_cache_props {
+   uint32_t line_size;
+   uint32_t size_per_slice;
+   uint32_t slices;
+};
+bool kbase_kmod_get_l2_cache_props(const struct pan_kmod_dev *dev,
+                                 struct kbase_kmod_l2_cache_props *props);
 void kbase_kmod_csf_group_destroy(struct pan_kmod_dev *dev,
                                   uint32_t group_handle);
 

@@ -530,11 +530,26 @@ print_cs_instr(FILE *fp, const uint64_t *instr)
       break;
    }
 
+#if PAN_ARCH >= 15
+   case MALI_CS_OPCODE_RUN_NEURAL: {
+      cs_unpack(instr, CS_RUN_NEURAL, I);
+      fprintf(fp, "RUN_NEURAL r%u, #%u, #%u", I.base_register, I.icnt,
+              I.staging_count);
+      break;
+   }
+#endif
+
    case MALI_CS_OPCODE_REQ_RESOURCE: {
       cs_unpack(instr, CS_REQ_RESOURCE, I);
       fprintf(fp, "REQ_RESOURCE%s%s%s%s", I.compute ? ".compute" : "",
               I.fragment ? ".fragment" : "", I.tiler ? ".tiler" : "",
               I.idvs ? ".idvs" : "");
+#if PAN_ARCH >= 15
+      if (I.rt)
+         fputs(".rt", fp);
+      if (I.neural)
+         fputs(".neural", fp);
+#endif
       break;
    }
 

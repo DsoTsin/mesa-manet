@@ -164,7 +164,8 @@ fn can_carry_discard(instr: &Instr) -> bool {
     flow == FlowCtrl::NONE
         && !matches!(
             instr.op,
-            Op::Branch(_) | Op::Jump(_) | Op::BlendCall(_) | Op::PilotJump(_)
+            Op::Branch(_) | Op::Jump(_) | Op::JumpEx(_) | Op::BlendCall(_)
+            | Op::PilotJump(_) | Op::RtCall(_) | Op::RtReturn(_)
         )
 }
 

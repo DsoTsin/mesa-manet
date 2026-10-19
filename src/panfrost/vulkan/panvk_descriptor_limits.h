@@ -1,0 +1,17 @@
+#ifndef PANVK_DESCRIPTOR_LIMITS_H
+#define PANVK_DESCRIPTOR_LIMITS_H
+
+#include "util/macros.h"
+
+#define PANVK_DESCRIPTOR_SIZE 32
+#define PANVK_TENSOR_DESCRIPTOR_SIZE 64
+#define PANVK_MAX_PLANES 3
+#define PANVK_MAX_DESCS_PER_SAMPLER 2
+#define MAX_PUSH_DESCS 32
+#define PANVK_MAX_PUSH_DESC_SLOTS_PER_DESC                                   \
+   MAX2(PANVK_MAX_PLANES + PANVK_MAX_DESCS_PER_SAMPLER,                       \
+        2 * (PANVK_TENSOR_DESCRIPTOR_SIZE / PANVK_DESCRIPTOR_SIZE) - 1)
+#define PANVK_MAX_PUSH_DESC_SLOTS                                            \
+   (MAX_PUSH_DESCS * PANVK_MAX_PUSH_DESC_SLOTS_PER_DESC)
+
+#endif

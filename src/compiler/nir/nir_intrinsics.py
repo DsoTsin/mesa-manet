@@ -144,6 +144,8 @@ index("int", "base")
 
 # For store instructions, a writemask for the store.
 index("unsigned", "write_mask")
+index("unsigned", "rt_arg_mask")
+index("unsigned", "rt_call_flags")
 
 # Same as write_mask, but can be 0 and still have side effects
 index("unsigned", "enabled_channels")
@@ -1909,6 +1911,18 @@ intrinsic("lea_attr_pan", [1, 1, 1], dest_comp=3, bit_sizes=[32],
 
 # src[] = { handle, index }
 intrinsic("lea_buf_pan", [1, 1], dest_comp=2, bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
+intrinsic("load_rt_arg_pan", dest_comp=1, bit_sizes=[32, 64], indices=[BASE],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("rt_call_pan", src_comp=[1, 4, 8, 1, 1], indices=[BASE, RT_ARG_MASK, RT_CALL_FLAGS])
+intrinsic("rt_call_result_pan", src_comp=[1, 4, 8, 1, 1], dest_comp=0,
+          bit_sizes=[32], indices=[BASE, RT_ARG_MASK, RT_CALL_FLAGS])
+intrinsic("rt_return_pan", src_comp=[1, 1], indices=[BASE, STACK_SIZE])
+intrinsic("rt_return_value_pan", src_comp=[1, 1, 0], indices=[BASE, STACK_SIZE])
+intrinsic("load_rt_frame_size_pan", dest_comp=1, bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("load_rt_tls_base_pan", dest_comp=1, bit_sizes=[64],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
 intrinsic("rt_trace_begin_pan", [1, 1, 3, 3, 1, 1, 1, 1], dest_comp=2,

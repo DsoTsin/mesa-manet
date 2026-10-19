@@ -237,4 +237,24 @@ mod tests {
         "JUMP_EX.wait02.not.return k0, r10, pc.w1",
         15u8
     );
+    disasm_case!(
+        0x033900dc180424c0,
+        "LEA_TENSOR_IMM.i32.slot0 @r4:r5:r6:r7, @r0:r1:r2:r3, k0, #0x2, #0x4",
+        15u8
+    );
+    disasm_case!(
+        0x073d00c4180004c0,
+        "LD_TENSOR_IMM.i32.slot0.wait0 @r0, @r0:r1:r2:r3, k0, #0x0, #0x4",
+        15u8
+    );
+    disasm_case!(
+        0x033d00dc380404c0,
+        "LD_TENSOR_IMM.i128.slot0 @r4:r5:r6:r7, @r0:r1:r2:r3, k0, #0x0, #0x4",
+        15u8
+    );
+    disasm_case!(
+        0x073900dc380024c0,
+        "LEA_TENSOR_IMM.i128.slot0.wait0 @r0:r1:r2:r3, @r0:r1:r2:r3, k0, #0x2, #0x4",
+        15u8
+    );
 }

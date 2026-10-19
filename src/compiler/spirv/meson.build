@@ -97,6 +97,29 @@ endif
 
 if with_tests and not with_nir_headers_only
   test(
+    'spirv_specialize',
+    executable(
+      'spirv_specialize',
+      files('tests/specialize.c'),
+      c_args : [c_msvc_compat_args, no_override_init_args],
+      include_directories : [inc_include, inc_src],
+      dependencies : [dep_m, idep_vtn, idep_nir, idep_mesautil],
+    ),
+    suite : ['compiler', 'spirv'],
+  )
+  test(
+    'spirv_tensor',
+    executable(
+      'spirv_tensor',
+      files('tests/tensor.c'),
+      c_args : [c_msvc_compat_args, no_override_init_args],
+      gnu_symbol_visibility : 'hidden',
+      include_directories : [inc_include, inc_src],
+      dependencies : [dep_m, idep_vtn, idep_nir, idep_mesautil],
+    ),
+    suite : ['compiler', 'spirv'],
+  )
+  test(
     'spirv_tests',
     executable(
       'spirv_tests',

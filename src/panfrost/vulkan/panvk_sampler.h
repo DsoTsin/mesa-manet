@@ -13,11 +13,11 @@
 #include <stdint.h>
 
 #include "vk_sampler.h"
+#include "panvk_descriptor_limits.h"
 
 /* We use 2 sampler planes for YCbCr conversion with different filters for
  * the Y and CbCr components.
  */
-#define PANVK_MAX_DESCS_PER_SAMPLER 2
 
 struct panvk_sampler {
    struct vk_sampler vk;

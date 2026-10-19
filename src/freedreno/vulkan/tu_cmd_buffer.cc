@@ -391,10 +391,14 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    if (flushes & TU_CMD_FLAG_CACHE_INVALIDATE)
       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
    if (flushes & TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE) {
-      tu_cs_emit_regs(cs, SP_UPDATE_CNTL(CHIP,
-            .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
-            .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,
-      ));
+      if (CHIP < A8XX) {
+         tu_cs_emit_regs(cs, SP_UPDATE_CNTL(CHIP,
+               .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
+               .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,
+         ));
+      }
+      tu_cs_emit_regs(cs, A6XX_SP_CS_BINDLESS_INVALIDATE(1));
+      tu_cs_emit_regs(cs, A6XX_SP_GFX_BINDLESS_INVALIDATE(1));
    }
 
    /* SUBPASS_SLICE_FENCE is a weaker version of:

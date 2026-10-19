@@ -311,6 +311,124 @@ mark_speculatable_uniform_loads(nir_function_impl *impl,
    }
 }
 
+static bool
+lower_preamble_select(nir_builder *b, nir_alu_instr *alu, void *data)
+{
+   if (alu->op != nir_op_bcsel)
+      return false;
+   b->cursor = nir_before_instr(&alu->instr);
+   nir_def *cond = nir_ssa_for_alu_src(b, alu, 0);
+   nir_src_rewrite(&alu->src[0].src, nir_i2iN(b, cond, alu->def.bit_size));
+   for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++)
+      alu->src[0].swizzle[i] = i;
+   alu->op = nir_op_bcsel_pan;
+   return true;
+}
+
+static bool
+opt_preamble_select(nir_shader *nir,
+                     const nir_opt_peephole_select_options *opts)
+{
+   if (!nir_opt_peephole_select(nir, opts))
+      return false;
+   nir_shader_alu_pass(nir, lower_preamble_select, nir_metadata_control_flow,
+                      NULL);
+   return true;
+}
+
+static void
+prepare_uniform_branches(nir_shader *nir, struct preamble_ctx *ctx)
+{
+   const nir_opt_peephole_select_options opts = {
+      .limit = 64,
+      .collapse_limit = 64,
+   };
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   bool tensor = false;
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type == nir_instr_type_intrinsic) {
+            nir_intrinsic_op op = nir_instr_as_intrinsic(instr)->intrinsic;
+            tensor |= op == nir_intrinsic_load_tensor_pan ||
+                      op == nir_intrinsic_store_tensor_pan;
+         }
+      }
+   }
+   if (!tensor)
+      return;
+   bool progress;
+   do {
+      nir_index_ssa_defs(impl);
+      ctx->allowed = calloc(impl->ssa_alloc, 1);
+      if (!ctx->allowed)
+         return;
+      nir_divergence_analysis(nir);
+      mark_speculatable_uniform_loads(impl, ctx);
+      nir_foreach_block(block, impl) {
+         nir_if *nif = nir_block_get_following_if(block);
+         if (!nif || nif->control != nir_selection_control_dont_flatten ||
+             nir_src_is_divergent(&nif->condition) ||
+             !allowed_def(nif->condition.ssa, ctx) ||
+             exec_list_length(&nif->then_list) != 3 ||
+             !nir_cf_list_is_empty_block(&nif->else_list))
+            continue;
+
+         bool allowed = true;
+         nir_foreach_instr(instr, nir_if_first_then_block(nif)) {
+            nir_def *def = nir_instr_def(instr);
+            if (!def || !nir_instr_can_speculate(instr) ||
+                !allowed_def(def, ctx)) {
+               allowed = false;
+               break;
+            }
+         }
+         if (allowed)
+            nif->control = nir_selection_control_none;
+      }
+      free(ctx->allowed);
+      ctx->allowed = NULL;
+      progress = false;
+      NIR_PASS(progress, nir, opt_preamble_select, &opts);
+      NIR_PASS(progress, nir, nir_opt_copy_prop);
+      NIR_PASS(progress, nir, nir_opt_constant_folding);
+      NIR_PASS(progress, nir, nir_opt_cse);
+      NIR_PASS(progress, nir, nir_opt_dce);
+      NIR_PASS(progress, nir, nir_opt_dead_cf);
+   } while (progress);
+}
+
+static void
+prune_pilot_outputs(nir_shader *main, nir_shader *pilot, unsigned slots)
+{
+   bool *used = calloc(MAX2(slots, 1), sizeof(bool));
+   if (!used)
+      return;
+   nir_foreach_block(block, nir_shader_get_entrypoint(main)) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic == nir_intrinsic_load_preamble) {
+            assert(nir_intrinsic_base(intr) < slots);
+            used[nir_intrinsic_base(intr)] = true;
+         }
+      }
+   }
+   nir_foreach_block(block, nir_shader_get_entrypoint(pilot)) {
+      nir_foreach_instr_safe(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic == nir_intrinsic_store_preamble) {
+            assert(nir_intrinsic_base(intr) < slots);
+            if (!used[nir_intrinsic_base(intr)])
+               nir_instr_remove(instr);
+         }
+      }
+   }
+   free(used);
+}
+
 struct pilot_values {
    struct pan_fau_virtual *virt;
    int16_t *value_of_base;
@@ -974,6 +1092,11 @@ pan_nir_opt_preamble(nir_shader *nir, const struct pan_compile_inputs *inputs,
    if (buffer_addresses)
       NIR_PASS(_, clone, nir_shader_intrinsics_pass, split_buffer_load,
                nir_metadata_control_flow, NULL);
+   struct preamble_ctx branch_ctx = {
+      .inputs = inputs,
+      .buffer_addresses = buffer_addresses,
+   };
+   prepare_uniform_branches(clone, &branch_ctx);
    nir_index_ssa_defs(main);
    struct preamble_ctx ctx = {
       .inputs = inputs,
@@ -1096,7 +1219,34 @@ pan_nir_opt_preamble(nir_shader *nir, const struct pan_compile_inputs *inputs,
    NIR_PASS(_, pilot, nir_opt_constant_folding);
    NIR_PASS(_, pilot, nir_opt_cse);
 
+   bool cf_progress;
+   do {
+      cf_progress = false;
+      NIR_PASS(cf_progress, clone, nir_opt_dce);
+      NIR_PASS(cf_progress, clone, nir_opt_dead_cf);
+   } while (cf_progress);
+   prune_pilot_outputs(clone, pilot, slots);
+   NIR_PASS(_, pilot, nir_opt_dce);
+   bool live_outputs = false;
+   nir_foreach_block(block, nir_shader_get_entrypoint(pilot)) {
+      nir_foreach_instr(instr, block) {
+         live_outputs |= instr->type == nir_instr_type_intrinsic &&
+                         nir_instr_as_intrinsic(instr)->intrinsic ==
+                            nir_intrinsic_store_preamble;
+      }
+   }
+   if (!live_outputs) {
+      ralloc_free(pilot);
+      ralloc_free(clone);
+      return NULL;
+   }
+
    int16_t *value_of_base = malloc(MAX2(slots, 1) * sizeof(int16_t));
+   if (!value_of_base) {
+      ralloc_free(pilot);
+      ralloc_free(clone);
+      return NULL;
+   }
    memset(value_of_base, 0xff, MAX2(slots, 1) * sizeof(int16_t));
    struct pilot_values pv = {
       .virt = virt,

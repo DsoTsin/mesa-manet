@@ -116,9 +116,6 @@ fn instr_extra_clobber_reg_bytes(model: &dyn Model, instr: &Instr) -> u8 {
         return 0;
     }
 
-    // Call instructions don't have destinations
-    assert!(instr.dsts().is_empty());
-
     let mut clobbered = RegByteSet::new();
     for reg in clobber_regs {
         clobbered.insert_range(reg.byte_range());
@@ -139,6 +136,15 @@ fn instr_extra_clobber_reg_bytes(model: &dyn Model, instr: &Instr) -> u8 {
         let ssa_bytes = reg_bytes.start..ssa_end;
 
         clobbered.remove_range(ssa_bytes);
+    }
+
+    for dst in instr.dsts() {
+        let DstRef::SSA(vec) = &dst.dst_ref else {
+            continue;
+        };
+        let reg = model.op_fixed_dst_reg(&instr.op, dst).unwrap();
+        let start = reg.byte_range().start;
+        clobbered.remove_range(start..start + u16::from(vec.bytes()));
     }
 
     clobbered.len().try_into().unwrap()

@@ -1048,6 +1048,13 @@ binop("fmin", tfloat, _2src_commutative + associative, ("util_min_num(src0, src1
 binop("fmax", tfloat, _2src_commutative + associative, ("util_max_num(src0, src1)"),
       valid_fp_math_ctrl = preserve_sz_inf_nan)
 
+binop("fmin_nan_pan", tfloat32, _2src_commutative + associative,
+      "(isnan(src0) || isnan(src1)) ? NAN : util_min_num(src0, src1)",
+      valid_fp_math_ctrl = preserve_sz_inf_nan)
+binop("fmax_nan_pan", tfloat32, _2src_commutative + associative,
+      "(isnan(src0) || isnan(src1)) ? NAN : util_max_num(src0, src1)",
+      valid_fp_math_ctrl = preserve_sz_inf_nan)
+
 binop("imin", tint, _2src_commutative + associative, "MIN2(src0, src1)")
 binop("umin", tuint, _2src_commutative + associative, "MIN2(src0, src1)")
 binop("imax", tint, _2src_commutative + associative, "MAX2(src0, src1)")

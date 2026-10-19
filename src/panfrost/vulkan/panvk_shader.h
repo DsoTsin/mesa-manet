@@ -253,6 +253,19 @@ static_assert((offsetof(struct panvk_graphics_sysvals, desc) % FAU_WORD_SIZE) ==
               "panvk_graphics_sysvals::desc must be 8-byte aligned");
 #endif
 
+struct panvk_rt_dispatch_params {
+   uint64_t stack_base;
+   uint64_t stack_stride;
+   uint64_t push_constants;
+   uint64_t stage_ids;
+   uint64_t native_frame_stride;
+   uint64_t stack_tls_offset;
+   uint64_t external_state_scale;
+};
+
+static_assert(sizeof(struct panvk_rt_dispatch_params) == 56,
+              "ray tracing dispatch parameters size");
+
 struct panvk_compute_sysvals {
    struct {
       uint32_t x, y, z;
@@ -275,12 +288,29 @@ struct panvk_compute_sysvals {
 
    aligned_u64 rt_dispatch;
 
+#if PAN_ARCH >= 15
+   struct panvk_rt_dispatch_params rt_dispatch_params;
+   struct {
+      uint32_t x, y, z, pad;
+   } rt_launch_size;
+#endif
+
 #if PAN_ARCH < 9
    struct {
       aligned_u64 sets[PANVK_DESC_TABLE_COMPUTE_COUNT];
    } desc;
 #endif
 } __attribute__((aligned(FAU_WORD_SIZE)));
+
+#if PAN_ARCH >= 15
+static_assert(offsetof(struct panvk_compute_sysvals, rt_dispatch_params) ==
+                 offsetof(struct panvk_compute_sysvals, rt_dispatch) + 8,
+              "ray tracing dispatch parameters follow dispatch pointer");
+static_assert(offsetof(struct panvk_compute_sysvals, rt_launch_size) ==
+                 offsetof(struct panvk_compute_sysvals, rt_dispatch_params) +
+                    sizeof(struct panvk_rt_dispatch_params),
+              "ray tracing launch size follows dispatch parameters");
+#endif
 
 static_assert(offsetof(struct panvk_compute_sysvals, common) ==
                  offsetof(struct panvk_common_sysvals, common),

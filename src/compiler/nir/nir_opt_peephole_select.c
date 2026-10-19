@@ -345,11 +345,14 @@ get_options_for_if(nir_if *if_stmt,
 }
 
 /* If we're moving discards or other conditional intrinsics
- * out of the if we need to add the if's condition to it
+ * out of the if we need to add the if's condition to it, and we need to mark
+ * loads as speculated.
  */
 static void
-rewrite_intrinsic_conds(nir_instr *instr, nir_def *if_cond, bool is_else)
+rewrite_instr(nir_instr *instr, nir_def *if_cond, bool is_else)
 {
+   nir_instr_set_speculated(instr);
+
    if (instr->type != nir_instr_type_intrinsic)
       return;
    nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
@@ -489,7 +492,7 @@ nir_opt_collapse_if(nir_if *if_stmt, nir_shader *shader,
 
    /* combine condition with potential demote/terminate */
    nir_foreach_instr_safe(instr, first)
-      rewrite_intrinsic_conds(instr, parent_if->condition.ssa, false);
+      rewrite_instr(instr, parent_if->condition.ssa, false);
 
    /* combine the if conditions */
    struct nir_builder b = nir_builder_at(nir_before_cf_node(&if_stmt->cf_node));
@@ -568,14 +571,14 @@ nir_opt_peephole_select_block(nir_block *block, nir_shader *shader,
       exec_node_remove(&instr->node);
       instr->block = prev_block;
       exec_list_push_tail(&prev_block->instr_list, &instr->node);
-      rewrite_intrinsic_conds(instr, if_stmt->condition.ssa, false);
+      rewrite_instr(instr, if_stmt->condition.ssa, false);
    }
 
    nir_foreach_instr_safe(instr, else_block) {
       exec_node_remove(&instr->node);
       instr->block = prev_block;
       exec_list_push_tail(&prev_block->instr_list, &instr->node);
-      rewrite_intrinsic_conds(instr, if_stmt->condition.ssa, true);
+      rewrite_instr(instr, if_stmt->condition.ssa, true);
    }
 
    nir_foreach_phi_safe(phi, block) {

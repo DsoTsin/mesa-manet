@@ -118,6 +118,9 @@ move_src(nir_src *src, void *_state)
    if (instr->pass_flags & PASS_FLAG_MOVED)
       return true; /* already moved */
 
+   if (instr->block != nir_start_block(b->impl))
+      nir_instr_set_speculated(instr);
+
    nir_foreach_src(instr, move_src, b);
    nir_instr_move(b->cursor, instr);
    b->cursor = nir_after_instr(instr);

@@ -681,6 +681,11 @@ fn legalize_fau_srcs(
     if !ctx.slots.is_empty() {
         if b.model().op_is_message(op) {
             ctx.legalize_message();
+            // BLEND and ATEST act either as ALU or as message instructions
+            // depending on state so we have to legalize both ways.
+            if matches!(op, Op::Blend(_) | Op::BlendCall(_) | Op::ATest(_)) {
+                ctx.legalize_execution_unit();
+            }
         } else {
             ctx.legalize_execution_unit();
         }

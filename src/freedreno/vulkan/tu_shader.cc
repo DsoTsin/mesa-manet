@@ -672,7 +672,7 @@ build_texel_buffer_as_image_coords(nir_builder *b,
 {
    nir_def *base_offset = nullptr;
    nir_def *real_size = build_texel_buffer_size(b, desc, &base_offset);
-   nir_def *oob = nir_ige(b, offset, real_size);
+   nir_def *oob = nir_uge(b, offset, real_size);
 
    offset = nir_iadd(b, offset, base_offset);
 
@@ -1367,7 +1367,6 @@ gather_push_constants(nir_shader *shader, struct tu_shader *tu_shader)
             uint32_t range = nir_intrinsic_range(intrin);
             min = MIN2(min, base);
             max = MAX2(max, base + range);
-            break;
          }
       }
    }

@@ -11,6 +11,10 @@
 
 #include "util/bitscan.h"
 
+#if PAN_ARCH >= 15
+#include "data_graph/panvk_data_graph_csf.h"
+#endif
+
 VKAPI_ATTR void VKAPI_CALL
 panvk_per_arch(CmdResetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
                                VkPipelineStageFlags2 stageMask)
@@ -149,12 +153,20 @@ panvk_per_arch(CmdSetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
             struct panvk_cache_flush_info cache_flush = deps.src[i].cache_flush;
 
             if (!panvk_cache_flush_is_nop(&cache_flush)) {
-               /* We rely on r88 being zero since we're in the if (r88 == 0)
-                * branch. */
-               cs_flush_caches_with_neural(
-                  b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
-                  cache_flush.neural, seqno,
-                  cs_defer(sb_mask, SB_ID(DEFERRED_FLUSH)));
+#if PAN_ARCH >= 15
+               if (cache_flush.neural) {
+                  const struct panvk_device *dev =
+                     to_panvk_device(cmdbuf->vk.base.device);
+                  panvk_cs_neural_invalidate(b, dev->csf.sb.all_iters_mask,
+                                             seqno, SB_ID(IMM_FLUSH));
+               }
+#endif
+               if (cache_flush.l2 != MALI_CS_FLUSH_MODE_NONE ||
+                   cache_flush.lsc != MALI_CS_FLUSH_MODE_NONE ||
+                   cache_flush.others != MALI_CS_OTHER_FLUSH_MODE_NONE)
+                  cs_flush_caches(b, cache_flush.l2, cache_flush.lsc,
+                                  cache_flush.others, seqno,
+                                  cs_defer(sb_mask, SB_ID(DEFERRED_FLUSH)));
             }
 
             cs_move32_to(b, seqno, 1);
@@ -233,12 +245,23 @@ cmd_wait_event(struct panvk_cmd_buffer *cmdbuf, struct panvk_event *event,
       if (!panvk_cache_flush_is_nop(&cache_flush)) {
          struct cs_index flush_id = cs_scratch_reg32(b, 0);
 
-         cs_move32_to(b, flush_id, 0);
-         cs_flush_caches_with_neural(
-            b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
-            cache_flush.neural, flush_id,
-            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
-         cs_wait_slot(b, SB_ID(IMM_FLUSH));
+#if PAN_ARCH >= 15
+         if (cache_flush.neural) {
+            const struct panvk_device *dev =
+               to_panvk_device(cmdbuf->vk.base.device);
+            panvk_cs_neural_invalidate(b, dev->csf.sb.all_iters_mask, flush_id,
+                                       SB_ID(IMM_FLUSH));
+         }
+#endif
+         if (cache_flush.l2 != MALI_CS_FLUSH_MODE_NONE ||
+             cache_flush.lsc != MALI_CS_FLUSH_MODE_NONE ||
+             cache_flush.others != MALI_CS_OTHER_FLUSH_MODE_NONE) {
+            cs_move32_to(b, flush_id, 0);
+            cs_flush_caches(b, cache_flush.l2, cache_flush.lsc,
+                            cache_flush.others, flush_id,
+                            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+            cs_wait_slot(b, SB_ID(IMM_FLUSH));
+         }
       }
 
       for (uint32_t i = 0; i < crc.count; i++)

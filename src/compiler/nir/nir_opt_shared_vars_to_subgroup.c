@@ -1349,6 +1349,7 @@ move_instr_to_block(nir_def *def, nir_block *block)
 
    nir_foreach_src(instr, move_to_block_cb, block);
 
+   nir_instr_set_speculated(instr);
    nir_instr_move(nir_after_block(block), instr);
 }
 

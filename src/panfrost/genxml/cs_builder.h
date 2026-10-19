@@ -1552,7 +1552,25 @@ enum cs_res_id {
    CS_TILER_RES = BITFIELD_BIT(2),
    CS_IDVS_RES = BITFIELD_BIT(3),
    CS_RT_RES = BITFIELD_BIT(4),
+   CS_NEURAL_RES = BITFIELD_BIT(5),
 };
+
+#if PAN_ARCH >= 15
+static inline void
+cs_run_neural(struct cs_builder *b, uint8_t base_register, uint8_t icnt,
+              uint8_t staging_count)
+{
+   assert((unsigned)base_register + staging_count <= b->conf.nr_registers);
+   cs_resolve_others_inv(b, false);
+   cs_flush_loads(b);
+   b->req_resource_mask |= CS_NEURAL_RES;
+   cs_emit(b, RUN_NEURAL, I) {
+      I.base_register = base_register;
+      I.icnt = icnt;
+      I.staging_count = staging_count;
+   }
+}
+#endif
 
 static inline void
 cs_run_compute_job(struct cs_builder *b, unsigned task_increment,
@@ -2390,6 +2408,9 @@ cs_jump(struct cs_builder *b, struct cs_index address, struct cs_index length)
 static inline void
 cs_req_res(struct cs_builder *b, uint32_t res_mask)
 {
+#if PAN_ARCH < 15
+   assert(!(res_mask & CS_NEURAL_RES));
+#endif
    cs_emit(b, REQ_RESOURCE, I) {
       I.compute = res_mask & CS_COMPUTE_RES;
       I.tiler = res_mask & CS_TILER_RES;
@@ -2397,6 +2418,7 @@ cs_req_res(struct cs_builder *b, uint32_t res_mask)
       I.fragment = res_mask & CS_FRAG_RES;
 #if PAN_ARCH >= 15
       I.rt = res_mask & CS_RT_RES;
+      I.neural = res_mask & CS_NEURAL_RES;
 #endif
    }
 }

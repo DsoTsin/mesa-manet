@@ -60,7 +60,7 @@ panvk_shader_res_table_count(struct panvk_shader_desc_state *shader_desc_state)
 struct panvk_push_set {
    struct panvk_cmd_pool_obj base;
    struct panvk_descriptor_set set;
-   struct panvk_opaque_desc descs[MAX_PUSH_DESCS];
+   struct panvk_opaque_desc descs[PANVK_MAX_PUSH_DESC_SLOTS];
 };
 
 struct panvk_descriptor_state {

@@ -416,7 +416,9 @@ fn op_encode_sr_write(op: &impl Opcode, dst: &Dst) -> SrWrite {
     };
 
     let data_type = op.dst_type(dst);
-    if data_type.total_bits() == 16 {
+    if data_type == DataType::SR {
+        assert_eq!(dst.lanes, ir::DstLanes::All);
+    } else if data_type.total_bits() == 16 {
         assert_eq!(dst.lanes, ir::DstLanes::H0);
     } else {
         debug_assert!(data_type.total_bits() >= 32);
@@ -2721,6 +2723,36 @@ impl V9Instr for OpLdPka {
     }
 }
 
+impl V9Instr for OpLdMulti {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(LdMulti::get_info((), arch), src_map! { src0: addr })
+    }
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(LdMulti {
+            access: MemAccess::None.into(),
+            message_slot_index: e.get_msg_slot_idx().unwrap(),
+            sr_dst: op_encode_sr_write(self, &self.dst),
+            src0: op_encode_src(self, &self.addr, e.arch),
+            offset: self.offset,
+        })
+    }
+}
+
+impl V9Instr for OpStMulti {
+    fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
+        V9InstrInfo::from_isa(StMulti::get_info((), arch), src_map! { sr_src: data, src0: addr })
+    }
+    fn encode(&self, e: V9Encoder) -> EncodedInstr {
+        e.encode(StMulti {
+            access: MemAccess::Force.into(),
+            message_slot_index: e.get_msg_slot_idx().unwrap(),
+            sr_src: op_encode_sr_read(self, &self.data),
+            src0: op_encode_src(self, &self.addr, e.arch),
+            offset: self.offset,
+        })
+    }
+}
+
 impl V9Instr for OpLdTensor {
     fn get_info(&self, arch: u8) -> Option<V9InstrInfo> {
         V9InstrInfo::from_isa(
@@ -2732,18 +2764,33 @@ impl V9Instr for OpLdTensor {
         )
     }
 
-    fn src_supports_imm32(&self, src: &Src, _arch: u8, _imm: u32) -> bool {
-        std::ptr::eq(src, &self.oob)
+    fn src_supports_imm32(&self, src: &Src, _arch: u8, imm: u32) -> bool {
+        ptr_eq(src, &self.oob)
+            || (ptr_eq(src, &self.handle)
+                && ResHandle::from_bits(imm).fits_imm_op(4))
     }
 
     fn encode(&self, e: V9Encoder) -> EncodedInstr {
-        e.encode(LdTensor {
-            variant: self.width.try_into().unwrap(),
-            message_slot_index: e.get_msg_slot_idx().unwrap(),
-            sr_dst: op_encode_sr_write(self, &self.dst),
-            sr_src: op_encode_sr_read(self, &self.coords),
-            src0: op_encode_src(self, &self.handle, e.arch),
-        })
+        if let Ok(tensor) = ResHandle::try_from(&self.handle) {
+            assert!(tensor.fits_imm_op(4));
+            e.encode(LdTensorImm {
+                variant: self.width.try_into().unwrap(),
+                message_slot_index: e.get_msg_slot_idx().unwrap(),
+                sr_dst: op_encode_sr_write(self, &self.dst),
+                sr_src: op_encode_sr_read(self, &self.coords),
+                src0: encode_typed_src(&SrcRef::Zero.into(), DataType::I32, e.arch),
+                tensor_index: tensor.index as u8,
+                tensor_table_index: tensor.table,
+            })
+        } else {
+            e.encode(LdTensor {
+                variant: self.width.try_into().unwrap(),
+                message_slot_index: e.get_msg_slot_idx().unwrap(),
+                sr_dst: op_encode_sr_write(self, &self.dst),
+                sr_src: op_encode_sr_read(self, &self.coords),
+                src0: op_encode_src(self, &self.handle, e.arch),
+            })
+        }
     }
 }
 
@@ -3227,14 +3274,31 @@ impl V9Instr for OpLeaTensor {
         )
     }
 
+    fn src_supports_imm32(&self, src: &Src, _arch: u8, imm: u32) -> bool {
+        ptr_eq(src, &self.handle) && ResHandle::from_bits(imm).fits_imm_op(4)
+    }
+
     fn encode(&self, e: V9Encoder) -> EncodedInstr {
-        e.encode(LeaTensor {
-            variant: self.width.try_into().unwrap(),
-            message_slot_index: e.get_msg_slot_idx().unwrap(),
-            sr_dst: op_encode_sr_write(self, &self.dst),
-            sr_src: op_encode_sr_read(self, &self.coords),
-            src0: op_encode_src(self, &self.handle, e.arch),
-        })
+        if let Ok(tensor) = ResHandle::try_from(&self.handle) {
+            assert!(tensor.fits_imm_op(4));
+            e.encode(LeaTensorImm {
+                variant: self.width.try_into().unwrap(),
+                message_slot_index: e.get_msg_slot_idx().unwrap(),
+                sr_dst: op_encode_sr_write(self, &self.dst),
+                sr_src: op_encode_sr_read(self, &self.coords),
+                src0: encode_typed_src(&SrcRef::Zero.into(), DataType::I32, e.arch),
+                tensor_index: tensor.index as u8,
+                tensor_table_index: tensor.table,
+            })
+        } else {
+            e.encode(LeaTensor {
+                variant: self.width.try_into().unwrap(),
+                message_slot_index: e.get_msg_slot_idx().unwrap(),
+                sr_dst: op_encode_sr_write(self, &self.dst),
+                sr_src: op_encode_sr_read(self, &self.coords),
+                src0: op_encode_src(self, &self.handle, e.arch),
+            })
+        }
     }
 }
 
@@ -4307,6 +4371,7 @@ macro_rules! v9_op_match_else {
             Op::LeaTensor($x) => $y,
             Op::LeaTex($x) => $y,
             Op::Load($x) => $y,
+            Op::LdMulti($x) => $y,
             Op::MkVecV2I8I16($x) => $y,
             Op::MkVecV2I16($x) => $y,
             Op::MMulF16($x) => $y,
@@ -4321,6 +4386,7 @@ macro_rules! v9_op_match_else {
             Op::StChecked($x) => $y,
             Op::StCvt($x) => $y,
             Op::Store($x) => $y,
+            Op::StMulti($x) => $y,
             Op::StTile($x) => $y,
             Op::TexDual($x) => $y,
             Op::TexFetch($x) => $y,
@@ -4645,6 +4711,29 @@ mod tests {
             encode_one(&jump_ex(JumpStackMode::Return, 10)),
             0xc6ad001000ff8ac0
         );
+    }
+
+    #[test]
+    fn multi_matches_vendor_preservation() {
+        let mut store: Instr = OpStMulti {
+            data: RegRef::new(20, RegRange::Regs(10)).into(),
+            addr: RegRef::new(8, RegRange::Regs(2)).into(),
+            offset: -160,
+        }.into();
+        store.flow.set_msg_slot_idx(2);
+        let model = model_for_gpu_id(0x0f080000f0000000, 4).unwrap();
+        assert!(matches!(crate::stats::exec_class(model.as_ref(), &store.op),
+            Some(crate::stats::ExecClass::LoadStore)));
+        assert_eq!(encode_one(&store), 0x0324148983ff6008);
+        let mut load: Instr = OpLdMulti {
+            dst: RegRef::new(20, RegRange::Regs(2)).into(),
+            addr: RegRef::new(8, RegRange::Regs(2)).into(),
+            offset: 0,
+        }.into();
+        load.flow.set_msg_slot_idx(1);
+        assert!(matches!(crate::stats::exec_class(model.as_ref(), &load.op),
+            Some(crate::stats::ExecClass::LoadStore)));
+        assert_eq!(encode_one(&load), 0x0324140140000008);
     }
 
     #[test]

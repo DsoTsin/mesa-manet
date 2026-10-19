@@ -63,6 +63,7 @@
     <value name="S64" value="14"/>
     <value name="F16" value="26"/>
     <value name="F32" value="28"/>
+    <value name="Rescale Coefficients" value="31"/>
   </enum>
 
   <enum name="Tensor Tiling">
@@ -566,6 +567,7 @@
     <value name="FINISH_TILING" value="9"/>
     <value name="FINISH_FRAGMENT" value="11"/>
     <value name="RUN_IDVS2" value="12"/>
+    <value name="RUN_NEURAL" value="13"/>
     <value name="RUN_FRAGMENT2" value="14"/>
     <value name="ARITH_IMM32" value="16"/>
     <value name="ARITH_IMM64" value="17"/>
@@ -840,6 +842,13 @@
     <field name="Opcode" size="8" start="56" type="CS Opcode" default="RUN_IDVS2"/>
   </struct>
 
+  <struct name="CS RUN_NEURAL" size="2">
+    <field name="ICNT" size="8" start="16" type="uint" default="16"/>
+    <field name="Staging Count" size="8" start="24" type="uint" default="36"/>
+    <field name="Base Register" size="8" start="48" type="uint" default="0"/>
+    <field name="Opcode" size="8" start="56" type="CS Opcode" default="RUN_NEURAL"/>
+  </struct>
+
   <struct name="CS RUN_FRAGMENT2" size="2">
     <field name="Enable TEM" size="1" start="0" type="bool"/>
     <field name="Tile Order" size="4" start="4" type="Tile Render Order"/>
@@ -968,6 +977,7 @@
     <field name="Tiler" size="1" start="2" type="bool"/>
     <field name="IDVS" size="1" start="3" type="bool"/>
     <field name="RT" size="1" start="4" type="bool"/>
+    <field name="Neural" size="1" start="5" type="bool"/>
     <field name="Opcode" size="8" start="56" type="CS Opcode" default="REQ_RESOURCE"/>
   </struct>
 

@@ -45,6 +45,14 @@
 #include "vk_format.h"
 #include "vk_synchronization.h"
 
+#if PAN_ARCH >= 15
+#include "data_graph/panvk_data_graph_csf.h"
+#endif
+
+#if PAN_ARCH >= 15 && defined(HAVE_PAN_KMOD_KBASE)
+#include "kmod/kbase_kmod.h"
+#endif
+
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_frag_others_inv,
                            "PANVK_CSF_OPT_FRAG_OTHERS_INV", PAN_ARCH >= 15)
 DEBUG_GET_ONCE_BOOL_OPTION(panvk_csf_opt_batch_others_inv,
@@ -547,6 +555,14 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    uint32_t wait_masks[PANVK_SUBQUEUE_COUNT] = {0};
    add_execution_dependency(wait_masks, src.stages, dst.stages);
+#if PAN_ARCH >= 15 && defined(HAVE_PAN_KMOD_KBASE)
+   if (dev->vk.enabled_features.dataGraph &&
+       to_panvk_physical_device(dev->vk.physical)->kbase_node_path[0] &&
+       kbase_kmod_csf_has_neural(dev->kmod.dev) &&
+       ((src.stages | dst.stages) & VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM) &&
+       (src.access || dst.access))
+      deps->src[PANVK_SUBQUEUE_COMPUTE].cache_flush.neural = true;
+#endif
 
    if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       if (info->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT) {
@@ -604,6 +620,17 @@ normalize_dependency(struct panvk_sync_scope *src,
                      struct panvk_sync_scope *dst,
                      uint32_t src_qfi, uint32_t dst_qfi)
 {
+   struct panvk_sync_scope *scopes[] = {src, dst};
+   for (unsigned i = 0; i < ARRAY_SIZE(scopes); i++) {
+      struct panvk_sync_scope *s = scopes[i];
+      if (!(s->stages & VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM))
+         continue;
+      s->stages |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+      if (s->access & VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM)
+         s->access |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+      if (s->access & VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM)
+         s->access |= VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+   }
    /* Perform queue family ownership transfer if src and dst are unequal. */
    if (src_qfi != dst_qfi) {
       /* queue family acquire operation */
@@ -872,12 +899,20 @@ emit_barrier_csf(struct panvk_cmd_buffer *cmdbuf, struct panvk_cs_deps deps)
 
          panvk_per_arch(panvk_instr_begin_work)(
             i, cmdbuf, PANVK_INSTR_WORK_TYPE_FLUSH_CACHE);
-         cs_move32_to(b, flush_id, 0);
-         cs_flush_caches_with_neural(
-            b, cache_flush.l2, cache_flush.lsc, cache_flush.others,
-            cache_flush.neural, flush_id,
-            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
-         cs_wait_slot(b, SB_ID(IMM_FLUSH));
+#if PAN_ARCH >= 15
+         if (cache_flush.neural)
+            panvk_cs_neural_invalidate(b, dev->csf.sb.all_iters_mask, flush_id,
+                                       SB_ID(IMM_FLUSH));
+#endif
+         if (cache_flush.l2 != MALI_CS_FLUSH_MODE_NONE ||
+             cache_flush.lsc != MALI_CS_FLUSH_MODE_NONE ||
+             cache_flush.others != MALI_CS_OTHER_FLUSH_MODE_NONE) {
+            cs_move32_to(b, flush_id, 0);
+            cs_flush_caches(b, cache_flush.l2, cache_flush.lsc,
+                            cache_flush.others, flush_id,
+                            cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
+            cs_wait_slot(b, SB_ID(IMM_FLUSH));
+         }
          struct panvk_instr_end_args instr_info_flush = {
             .flush_cache = {
                .l2 = cache_flush.l2,

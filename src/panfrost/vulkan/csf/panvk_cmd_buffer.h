@@ -668,6 +668,10 @@ struct panvk_cmd_buffer {
       struct panvk_cmd_graphics_state gfx;
       struct panvk_cmd_compute_state compute;
       struct panvk_cmd_ray_tracing_state ray_tracing;
+      struct {
+         const struct vk_pipeline *pipeline;
+         struct panvk_descriptor_state desc_state;
+      } data_graph;
       struct panvk_push_constant_state push_constants;
       struct panvk_cs_state cs[PANVK_SUBQUEUE_COUNT];
       struct panvk_tls_state tls;
@@ -766,6 +770,9 @@ panvk_cmd_get_desc_state(struct panvk_cmd_buffer *cmdbuf,
 
    case VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR:
       return &cmdbuf->state.ray_tracing.desc_state;
+
+   case VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM:
+      return &cmdbuf->state.data_graph.desc_state;
 
    default:
       assert(!"Unsupported bind point");
@@ -1107,6 +1114,7 @@ panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)
              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR |
              VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT |
+             VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM |
              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
    default:
       UNREACHABLE("Invalid subqueue id");

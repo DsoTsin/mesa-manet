@@ -207,11 +207,205 @@ fn emit_reduction_alu(
     dst
 }
 
+#[cfg(test)]
+mod wide_constant_tests {
+    use super::*;
+    use crate::model::model_for_gpu_id;
+
+    unsafe extern "C" {
+        fn ralloc_free(ptr: *mut std::ffi::c_void);
+    }
+
+    #[test]
+    fn wide_nir_constants_preserve_all_words() {
+        let model = model_for_gpu_id(0x0f080000f0000000, 4).unwrap();
+        for (bits, comps) in [(32, 1), (32, 8), (32, 16), (64, 4), (64, 8), (16, 16)] {
+            unsafe {
+                let options = nir_shader_compiler_options::default();
+                let nir = nir_shader_create(std::ptr::null_mut(), MESA_SHADER_COMPUTE,
+                    &options);
+                assert!(!nir.is_null());
+                let load = nir_load_const_instr_create(nir, comps, bits);
+                for (i, value) in (*load).value.as_mut_slice(comps as usize).iter_mut().enumerate() {
+                    value.u64_ = (i as u64).wrapping_mul(0x0123456789abcdef);
+                }
+                let inputs = pan_compile_inputs::default();
+                let mut parser = ShaderFromNir::new(model.as_ref(), &*nir, &inputs);
+                let mut alloc = SSAValueAllocator::default();
+                let mut b = SSAInstrBuilder::new(model.as_ref(), &mut alloc);
+                parser.parse_const(&mut b, &*load);
+                let words = (u16::from((*load).def.bit_size) *
+                             u16::from((*load).def.num_components)).div_ceil(32);
+                assert_eq!(parser.get_ssa(&(*load).def).len(), usize::from(words));
+                assert!(!b.into_vec().is_empty());
+                drop(parser);
+                ralloc_free(nir.cast());
+            }
+        }
+    }
+
+    unsafe fn address_add(nir: *mut nir_shader, x: *mut nir_def, y: *mut nir_def,
+                          bits: u8) -> *mut nir_def {
+        unsafe {
+            let alu = nir_alu_instr_create(nir, nir_op_iadd);
+            let srcs = (*alu).src.as_mut_slice(2);
+            srcs[0].src.ssa = x;
+            srcs[1].src.ssa = y;
+            (*alu).def.num_components = 1;
+            (*alu).def.bit_size = bits;
+            &mut (*alu).def
+        }
+    }
+
+    fn evaluate_address(def: &nir_def, values: &[u64]) -> u64 {
+        if let Some(value) = def.comp_as_uint(0) {
+            return value;
+        }
+        if let Some(alu) = def.parent_instr().as_alu() {
+            assert!(alu.op == nir_op_iadd);
+            return evaluate_address(alu.get_src(0).src.as_def(), values).wrapping_add(
+                evaluate_address(alu.get_src(1).src.as_def(), values));
+        }
+        values[def.index as usize]
+    }
+
+    #[test]
+    fn nested_memory_offsets_preserve_64bit_carry_and_immediate_limits() {
+        unsafe {
+            let options = nir_shader_compiler_options::default();
+            let nir = nir_shader_create(std::ptr::null_mut(), MESA_SHADER_COMPUTE, &options);
+            let vars: Vec<_> = (0..5).map(|i| {
+                let var = nir_undef_instr_create(nir, 1, 64);
+                (*var).def.index = i;
+                &mut (*var).def as *mut nir_def
+            }).collect();
+            for offset in [0_i64, 1, -1, 127, 128, 255, 256,
+                           -32769, -32768, 32767, 32768, i64::MIN, i64::MAX] {
+                let load = nir_load_const_instr_create(nir, 1, 64);
+                (*load).value.as_mut_slice(1)[0].u64_ = offset as u64;
+                let inner = address_add(nir, vars[1], &mut (*load).def, 64);
+                let root = address_add(nir, vars[0], inner, 64);
+                let mut split = MemoryAddress::default();
+                assert!(split.collect(&*root, 0));
+                assert_eq!(split.count, 2);
+                assert_eq!(split.immediate(16, true).is_some(),
+                           (-32768..=32767).contains(&offset));
+                assert_eq!(split.immediate(8, false).is_some(),
+                           (0..=255).contains(&offset));
+                for a in [0_u64, u32::MAX as u64, 1_u64 << 32, u64::MAX] {
+                    for b in [0_u64, 1, u32::MAX as u64, u64::MAX] {
+                        let values = [a, b];
+                        let result = split.terms[..split.count].iter().fold(
+                            split.offset, |sum, term| sum.wrapping_add(
+                                evaluate_address(term.unwrap().0, &values)));
+                        assert_eq!(result, evaluate_address(&*root, &values));
+                    }
+                }
+            }
+            let mut wide = vars[0];
+            for var in &vars[1..] {
+                wide = address_add(nir, wide, *var, 64);
+            }
+            assert!(!MemoryAddress::default().collect(&*wide, 0));
+            let zero = nir_load_const_instr_create(nir, 1, 64);
+            (*zero).value.as_mut_slice(1)[0].u64_ = 0;
+            let mut deep = vars[0];
+            for _ in 0..20 {
+                deep = address_add(nir, deep, &mut (*zero).def, 64);
+            }
+            assert!(!MemoryAddress::default().collect(&*deep, 0));
+            let narrow = nir_undef_instr_create(nir, 1, 32);
+            assert!(!MemoryAddress::default().collect(&(*narrow).def, 0));
+            ralloc_free(nir.cast());
+        }
+    }
+
+    #[test]
+    fn normalized_memory_bases_are_shared_within_a_block() {
+        let model = model_for_gpu_id(0x0f080000f0000000, 4).unwrap();
+        unsafe {
+            let options = nir_shader_compiler_options::default();
+            let nir = nir_shader_create(std::ptr::null_mut(), MESA_SHADER_COMPUTE, &options);
+            let x = nir_undef_instr_create(nir, 1, 64);
+            let y = nir_undef_instr_create(nir, 1, 64);
+            (*y).def.index = 1;
+            let load = nir_load_const_instr_create(nir, 1, 64);
+            (*load).value.as_mut_slice(1)[0].u64_ = 28;
+            let inner = address_add(nir, &mut (*y).def, &mut (*load).def, 64);
+            let root = address_add(nir, &mut (*x).def, inner, 64);
+            let inputs = pan_compile_inputs::default();
+            let mut parser = ShaderFromNir::new(model.as_ref(), &*nir, &inputs);
+            let mut alloc = SSAValueAllocator::default();
+            let mut b = SSAInstrBuilder::new(model.as_ref(), &mut alloc);
+            parser.alloc_ssa(&mut b, &(*x).def);
+            parser.alloc_ssa(&mut b, &(*y).def);
+            let mut source = nir_src::default();
+            source.ssa = root;
+            let (first, offset) = parser.get_src_add_imm(&mut b, &source, 16, true);
+            let (second, _) = parser.get_src_add_imm(&mut b, &source, 16, true);
+            assert_eq!(offset, 28);
+            assert!(first.src_ref.as_ssa() == second.src_ref.as_ssa());
+            parser.memory_addresses.clear();
+            let (other, _) = parser.get_src_add_imm(&mut b, &source, 16, true);
+            assert!(first.src_ref.as_ssa() != other.src_ref.as_ssa());
+            assert_eq!(b.into_vec().len(), 2);
+            drop(parser);
+            ralloc_free(nir.cast());
+        }
+    }
+}
+
+#[derive(Default)]
+struct MemoryAddress<'a> {
+    terms: [Option<(&'a nir_def, u8)>; 4],
+    count: usize,
+    offset: u64,
+    nodes: u8,
+}
+
+impl<'a> MemoryAddress<'a> {
+    fn collect(&mut self, def: &'a nir_def, comp: u8) -> bool {
+        if self.nodes == 16 || def.bit_size != 64 {
+            return false;
+        }
+        self.nodes += 1;
+        if let Some(value) = def.comp_as_uint(comp) {
+            self.offset = self.offset.wrapping_add(value);
+            return true;
+        }
+        if let Some(alu) = def.parent_instr().as_alu() {
+            if alu.op == nir_op_iadd {
+                return alu.srcs_as_slice().iter().all(|src| {
+                    self.collect(src.src.as_def(), src.swizzle[usize::from(comp)])
+                });
+            }
+        }
+        if self.count == self.terms.len() {
+            return false;
+        }
+        self.terms[self.count] = Some((def, comp));
+        self.count += 1;
+        true
+    }
+
+    fn immediate(&self, bits: u8, signed: bool) -> Option<i64> {
+        let value = self.offset as i64;
+        let fits = if signed {
+            let bound = 1_i64 << (bits - 1);
+            value >= -bound && value < bound
+        } else {
+            self.offset < (1_u64 << bits)
+        };
+        fits.then_some(value)
+    }
+}
+
 struct ShaderFromNir<'a> {
     model: &'a dyn Model,
     nir: &'a nir_shader,
     ssa_map: FxHashMap<u32, Vec<SSAValue>>,
     preload_map: FxHashMap<RegRef, (PreloadRegSet, SSARef)>,
+    memory_addresses: FxHashMap<([(u32, u8); 4], usize), Src>,
     rtz_fp16: bool,
     rtz_fp32: bool,
     ftz_fp32: bool,
@@ -238,6 +432,7 @@ impl<'a> ShaderFromNir<'a> {
             nir,
             ssa_map: Default::default(),
             preload_map: Default::default(),
+            memory_addresses: Default::default(),
             rtz_fp16,
             rtz_fp32,
             ftz_fp32,
@@ -256,7 +451,7 @@ impl<'a> ShaderFromNir<'a> {
     }
 
     fn alloc_ssa(&mut self, b: &mut impl SSABuilder, def: &nir_def) -> SSARef {
-        let bits = def.bit_size * def.num_components;
+        let bits = u16::from(def.bit_size) * u16::from(def.num_components);
         let ssa = b.alloc_ref(bits.into());
         self.set_ssa(def, ssa.iter().copied().collect());
         ssa
@@ -348,13 +543,47 @@ impl<'a> ShaderFromNir<'a> {
     }
 
     fn get_src_add_imm(
-        &self,
+        &mut self,
+        b: &mut impl SSABuilder,
         src: &nir_src,
         imm_bits: u8,
         imm_sign: bool,
     ) -> (Src, i64) {
         unsafe {
             let add_imm = pan_nir_def_as_add_imm(src.ssa, imm_bits, imm_sign);
+            if self.model.arch() >= 15 && add_imm.imm == 0 && src.bit_size() == 64 {
+                let mut address = MemoryAddress::default();
+                if address.collect(src.as_def(), 0) && address.count > 0 &&
+                    address.offset != 0
+                {
+                    if let Some(offset) = address.immediate(imm_bits, imm_sign) {
+                        let mut terms = [(0, 0); 4];
+                        for (key, term) in terms.iter_mut().zip(&address.terms[..address.count]) {
+                            let (def, comp) = term.unwrap();
+                            *key = (def.index, comp);
+                        }
+                        terms[..address.count].sort_unstable();
+                        let key = (terms, address.count);
+                        if let Some(base) = self.memory_addresses.get(&key) {
+                            return (base.clone(), offset);
+                        }
+                        let (def, comp) = address.terms[0].unwrap();
+                        let mut base = self.get_swiz_src(def, &[comp]);
+                        for term in &address.terms[1..address.count] {
+                            let (def, comp) = term.unwrap();
+                            let dst = b.alloc_ref(64);
+                            b.push_op(OpIAdd {
+                                dst: dst.clone().into(), dst_type: DataType::U64,
+                                saturate: false,
+                                srcs: [base, self.get_swiz_src(def, &[comp])],
+                            });
+                            base = dst.into();
+                        }
+                        self.memory_addresses.insert(key, base.clone());
+                        return (base, offset);
+                    }
+                }
+            }
             let src = self.get_swiz_src(&*add_imm.def, &[add_imm.def_comp]);
             (src, add_imm.imm)
         }
@@ -439,7 +668,7 @@ impl<'a> ShaderFromNir<'a> {
             bit_size => panic!("Unsupported bit size: {bit_size}"),
         }
 
-        let bits = load.def.bit_size * load.def.num_components;
+        let bits = u16::from(load.def.bit_size) * u16::from(load.def.num_components);
         assert_eq!(imm_u32.len(), usize::from(bits.div_ceil(32)));
 
         if bits == 8 {
@@ -1288,20 +1517,20 @@ impl<'a> ShaderFromNir<'a> {
                     round: FRound::NearestEven,
                 });
             }
-            nir_op_fmin => {
+            nir_op_fmin | nir_op_fmin_nan_pan => {
                 b.push_op(OpFMin {
                     dst: dst.into(),
                     dst_type: dst_type(NumericType::Float),
-                    propagate_nan: false,
+                    propagate_nan: alu.op == nir_op_fmin_nan_pan,
                     clamp: FClamp::None,
                     srcs: [srcs(0), srcs(1)],
                 });
             }
-            nir_op_fmax => {
+            nir_op_fmax | nir_op_fmax_nan_pan => {
                 b.push_op(OpFMax {
                     dst: dst.into(),
                     dst_type: dst_type(NumericType::Float),
-                    propagate_nan: false,
+                    propagate_nan: alu.op == nir_op_fmax_nan_pan,
                     clamp: FClamp::None,
                     srcs: [srcs(0), srcs(1)],
                 });
@@ -2112,7 +2341,7 @@ impl<'a> ShaderFromNir<'a> {
                     self.alloc_ssa(b, &intrin.def).into()
                 };
 
-                let (addr, offset) = self.get_src_add_imm(&srcs[0], 8, false);
+                let (addr, offset) = self.get_src_add_imm(b, &srcs[0], 8, false);
                 let data = self.get_src(&srcs[1]);
                 if let Some(atom1_op) =
                     srcs[1].as_int().and_then(|data| atom_op.as_atom1(data))
@@ -2136,7 +2365,7 @@ impl<'a> ShaderFromNir<'a> {
                 }
             }
             nir_intrinsic_global_atomic_swap => {
-                let (addr, offset) = self.get_src_add_imm(&srcs[0], 8, false);
+                let (addr, offset) = self.get_src_add_imm(b, &srcs[0], 8, false);
                 let cmpr = self.get_src_ssa(&srcs[1]);
                 let data = self.get_src_ssa(&srcs[2]);
                 let data = SSARef::from_iter(
@@ -2224,7 +2453,7 @@ impl<'a> ShaderFromNir<'a> {
             }
             nir_intrinsic_load_global | nir_intrinsic_load_global_constant => {
                 let bits = intrin.def.bit_size * intrin.def.num_components;
-                let (addr, offset) = self.get_src_add_imm(&srcs[0], 16, true);
+                let (addr, offset) = self.get_src_add_imm(b, &srcs[0], 16, true);
                 let is_const =
                     intrin.intrinsic == nir_intrinsic_load_global_constant;
                 let dst = self.alloc_ssa(b, &intrin.def).into();
@@ -2273,7 +2502,7 @@ impl<'a> ShaderFromNir<'a> {
                     intrin.def.bit_size,
                 );
 
-                let (addr, offset) = self.get_src_add_imm(&srcs[0], 8, false);
+                let (addr, offset) = self.get_src_add_imm(b, &srcs[0], 8, false);
                 let cvt = self.get_src(&srcs[1]);
                 let dst = self.alloc_ssa(b, &intrin.def).into();
                 b.push_op(OpLdCvt {
@@ -2299,6 +2528,89 @@ impl<'a> ShaderFromNir<'a> {
                     label,
                 });
                 b.copy_i32_to(ssa[1].into(), pc.word(1).into());
+            }
+            nir_intrinsic_load_rt_frame_size_pan => {
+                let dst = self.alloc_ssa(b, &intrin.def).into();
+                b.push_op(OpRtFrameSize { dst });
+            }
+            nir_intrinsic_load_rt_tls_base_pan => {
+                let fau = self.special_fau(SpecialFAU::RtThreadLocalPointer);
+                let dst = self.alloc_ssa(b, &intrin.def).into();
+                b.copy_i64_to(dst, fau.into());
+            }
+            nir_intrinsic_load_rt_arg_pan => {
+                assert!(self.model.arch() >= 15);
+                let reg = match intrin.base() {
+                    0 => PreloadReg::RtFrame,
+                    2 => PreloadReg::RtRoot,
+                    3 => PreloadReg::RtStack,
+                    4 => PreloadReg::RtReturn,
+                    5 => PreloadReg::RtPayload,
+                    6 => PreloadReg::RtRay,
+                    7 => PreloadReg::RtRecord,
+                    8 => PreloadReg::RtShaderRecord,
+                    9 => PreloadReg::RtTmax,
+                    10 => PreloadReg::RtHitKind,
+                    11 => PreloadReg::RtDepth,
+                    12 => PreloadReg::RtFrameLayout,
+                    13 => PreloadReg::RtFrameOffset,
+                    14 => PreloadReg::RtPayloadOffset,
+                    15 => PreloadReg::RtRootOffset,
+                    16 => PreloadReg::RtRayOffset,
+                    17 => PreloadReg::RtLaunch0,
+                    18 => PreloadReg::RtLaunch1,
+                    19 => PreloadReg::RtLaunch2,
+                    _ => panic!("Invalid RT argument"),
+                };
+                assert_eq!(intrin.def.bit_size, reg.reg_size() * 32);
+                let ssa = self.preload(b, reg);
+                self.set_ssa(&intrin.def, ssa.to_vec());
+            }
+            nir_intrinsic_rt_call_pan | nir_intrinsic_rt_call_result_pan => {
+                assert!(self.model.arch() >= 15);
+                self.info.contains_jump_ex = true;
+                let arg_mask = intrin.get_const_index(NIR_INTRINSIC_RT_ARG_MASK) as u16;
+                let dst = if intrin.intrinsic == nir_intrinsic_rt_call_result_pan {
+                    self.alloc_ssa(b, &intrin.def).into()
+                } else {
+                    DstRef::None.into()
+                };
+                let words = [self.get_ssa(srcs[1].as_def()),
+                             self.get_ssa(srcs[2].as_def())];
+                b.push_op(OpRtCall {
+                    dst,
+                    arg_mask,
+                    tls_args: intrin.get_const_index(NIR_INTRINSIC_RT_CALL_FLAGS) & 1 != 0,
+                    target: self.get_src(&srcs[0]),
+                    args: std::array::from_fn(|i| {
+                        if arg_mask & (1 << i) == 0 {
+                            0_u32.into()
+                        } else {
+                            words[i / 8][i % 8].into()
+                        }
+                    }),
+                    stack: self.get_src(&srcs[3]),
+                });
+            }
+            nir_intrinsic_rt_return_pan | nir_intrinsic_rt_return_value_pan => {
+                assert!(self.model.arch() >= 15);
+                self.info.contains_jump_ex = true;
+                self.info.rt_frame_multi |= intrin.base() & 2 != 0;
+                self.info.rt_frame_prefix = intrin.get_const_index(NIR_INTRINSIC_STACK_SIZE);
+                b.push_op(OpRtReturn {
+                    root: intrin.base() & 1 != 0,
+                    result_count: if intrin.intrinsic == nir_intrinsic_rt_return_value_pan {
+                        intrin.num_components
+                    } else { 0 },
+                    values: std::array::from_fn(|i| {
+                        if intrin.intrinsic == nir_intrinsic_rt_return_value_pan
+                            && i < usize::from(intrin.num_components) {
+                            self.get_ssa(srcs[2].as_def())[i].into()
+                        } else { 0_u32.into() }
+                    }),
+                    target: self.get_src(&srcs[0]),
+                    stack: self.get_src(&srcs[1]),
+                });
             }
             nir_intrinsic_load_scratch_base_ptr => {
                 assert_eq!(intrin.def.bit_size, 64);
@@ -2612,7 +2924,7 @@ impl<'a> ShaderFromNir<'a> {
                 } else if bits == 16 {
                     data = data.half(0);
                 }
-                let (addr, offset) = self.get_src_add_imm(&srcs[1], 16, true);
+                let (addr, offset) = self.get_src_add_imm(b, &srcs[1], 16, true);
                 let is_psiz =
                     intrin.intrinsic == nir_intrinsic_store_global_psiz_pan;
                 b.push_op(OpStore {
@@ -2642,7 +2954,7 @@ impl<'a> ShaderFromNir<'a> {
                 } else if bits == 16 {
                     data = data.half(0);
                 }
-                let (addr, offset) = self.get_src_add_imm(&srcs[1], 8, false);
+                let (addr, offset) = self.get_src_add_imm(b, &srcs[1], 8, false);
                 let cvt = self.get_src(&srcs[2]);
                 b.push_op(OpStCvt {
                     src_type,
@@ -3326,6 +3638,7 @@ impl<'a> ShaderFromNir<'a> {
         block_map: &BlockLabelMap,
         nb: &nir_block,
     ) {
+        self.memory_addresses.clear();
         let mut b = SSAInstrBuilder::new(self.model, ssa_alloc);
         let label = block_map.get(nb);
 
@@ -3438,7 +3751,9 @@ impl<'a> ShaderFromNir<'a> {
         preloaded
             .into_iter()
             .flat_map(|(reg, (preloads, ssa))| {
-                self.info.add_preload(&reg);
+                if preloads.iter().any(|p| !p.is_rt_arg()) {
+                    self.info.add_preload(&reg);
+                }
 
                 // Split preloads into multiple registers, we don't have any vec
                 // shrink pass and they might pollute liveness
@@ -3695,4 +4010,102 @@ pub fn ld_tile_lane_local(nir: &nir_shader) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod nan_minmax_tests {
+    use super::*;
+    use crate::model::model_for_gpu_id;
+
+    unsafe extern "C" {
+        fn ralloc_free(ptr: *mut std::ffi::c_void);
+    }
+
+    #[test]
+    fn typed_nan_minmax_preserves_propagation_mode() {
+        let model = model_for_gpu_id(0x0f080000f0000000, 4).unwrap();
+        for (op, maximum, propagate) in [
+            (nir_op_fmin, false, false),
+            (nir_op_fmax, true, false),
+            (nir_op_fmin_nan_pan, false, true),
+            (nir_op_fmax_nan_pan, true, true),
+        ] {
+            unsafe {
+                let options = nir_shader_compiler_options::default();
+                let nir = nir_shader_create(std::ptr::null_mut(), MESA_SHADER_COMPUTE, &options);
+                let a = nir_load_const_instr_create(nir, 1, 32);
+                let b = nir_load_const_instr_create(nir, 1, 32);
+                (*a).def.index = 0;
+                (*b).def.index = 1;
+                (*a).value.as_mut_slice(1)[0].u32_ = 0x7fc12345;
+                (*b).value.as_mut_slice(1)[0].u32_ = 0x80000000;
+                let alu = nir_alu_instr_create(nir, op);
+                (*alu).def.index = 2;
+                (*alu).def.num_components = 1;
+                (*alu).def.bit_size = 32;
+                let sources = (*alu).src.as_mut_slice(2);
+                sources[0].src.ssa = &mut (*a).def;
+                sources[1].src.ssa = &mut (*b).def;
+                let inputs = pan_compile_inputs::default();
+                let mut parser = ShaderFromNir::new(model.as_ref(), &*nir, &inputs);
+                let mut alloc = SSAValueAllocator::default();
+                let mut builder = SSAInstrBuilder::new(model.as_ref(), &mut alloc);
+                parser.parse_const(&mut builder, &*a);
+                parser.parse_const(&mut builder, &*b);
+                parser.parse_alu(&mut builder, &*alu);
+                let outer = nir_alu_instr_create(nir, op);
+                (*outer).def.index = 3;
+                (*outer).def.num_components = 1;
+                (*outer).def.bit_size = 32;
+                let sources = (*outer).src.as_mut_slice(2);
+                sources[0].src.ssa = &mut (*alu).def;
+                sources[1].src.ssa = &mut (*a).def;
+                parser.parse_alu(&mut builder, &*outer);
+                let output = parser.get_ssa(&(*outer).def)[0];
+                let mut instructions = builder.into_vec();
+                match &instructions.last().unwrap().op {
+                    Op::FMax(result) => {
+                        assert!(maximum);
+                        assert_eq!(result.propagate_nan, propagate);
+                        assert_eq!(result.dst_type, DataType::F32);
+                        assert!(result.clamp == FClamp::None);
+                    }
+                    Op::FMin(result) => {
+                        assert!(!maximum);
+                        assert_eq!(result.propagate_nan, propagate);
+                        assert_eq!(result.dst_type, DataType::F32);
+                        assert!(result.clamp == FClamp::None);
+                    }
+                    _ => panic!("Expected floating-point min/max"),
+                }
+                instructions.push(OpRegOut {
+                    reg: RegRef::new(0, RegRange::Regs(1)),
+                    src_type: DataType::I32,
+                    src: output.into(),
+                }.into());
+                let mut cfg: CFGBuilder<usize, BasicBlock, FxBuildHasher> = CFGBuilder::new();
+                cfg.add_node(0, BasicBlock {
+                    label: LabelAllocator::default().alloc(),
+                    instrs: instructions,
+                });
+                let mut shader = Shader {
+                    model: model.as_ref(),
+                    ssa_alloc: alloc,
+                    phi_alloc: Default::default(),
+                    blocks: cfg.as_cfg(false),
+                    info: ShaderInfo::default(),
+                    constant_pool: None,
+                };
+                shader.opt_exec_units();
+                let ternary: Vec<_> = shader.blocks[0].instrs.iter().filter_map(|i| {
+                    if let Op::FMinMax3(op) = &i.op { Some(op) } else { None }
+                }).collect();
+                assert_eq!(ternary.len(), 1);
+                assert_eq!(ternary[0].propagate_nan, propagate);
+                assert!(ternary[0].op == if maximum { FMinMax3Op::Max } else { FMinMax3Op::Min });
+                drop(parser);
+                ralloc_free(nir.cast());
+            }
+        }
+    }
 }

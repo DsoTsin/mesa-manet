@@ -17,6 +17,7 @@
 #endif
 #include "panvk_sampler.h"
 #include "panvk_shader.h"
+#include "panvk_nir_rt_pipeline.h"
 
 #include "vk_format.h"
 #include "vk_graphics_state.h"
@@ -1523,6 +1524,21 @@ panvk_per_arch(nir_lower_descriptors)(
 
    for (uint32_t i = 0; i < set_layout_count; i++)
       ctx.set_layouts[i] = to_panvk_descriptor_set_layout(set_layouts[i]);
+
+   if (PAN_ARCH >= 15 && panvk_nir_is_native_rt(nir)) {
+      for (uint32_t set = 0; set < set_layout_count; set++) {
+         const struct panvk_descriptor_set_layout *layout = ctx.set_layouts[set];
+         if (!layout)
+            continue;
+         for (uint32_t binding = 0; binding < layout->binding_count; binding++) {
+            if (!layout->bindings[binding].desc_count ||
+                !vk_descriptor_type_is_dynamic(layout->bindings[binding].type))
+               continue;
+            record_binding(&ctx, set, binding, NO_SUBDESC, UINT32_MAX);
+            progress = true;
+         }
+      }
+   }
 
    NIR_PASS(progress, nir, nir_shader_instructions_pass,
             collect_instr_desc_access, nir_metadata_all, &ctx);

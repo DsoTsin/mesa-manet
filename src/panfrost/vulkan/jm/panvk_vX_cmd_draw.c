@@ -1060,26 +1060,7 @@ panvk_draw_prepare_tiler_job(struct panvk_cmd_buffer *cmdbuf,
                              struct panvk_draw_data *draw)
 {
    struct panvk_batch *batch = cmdbuf->cur_batch;
-   struct pan_ptr ptr;
-
-   if (cmdbuf->state.gfx.fs.required) {
-      const struct panvk_shader_desc_info *fs_desc_info =
-         &cmdbuf->state.gfx.fs.shader->desc_info;
-      struct panvk_shader_desc_state *fs_desc_state =
-         &cmdbuf->state.gfx.fs.desc;
-      VkResult result = panvk_per_arch(meta_get_copy_desc_job)(
-         cmdbuf, fs_desc_info, &cmdbuf->state.gfx.desc_state,
-         fs_desc_state, 0, &ptr);
-      if (result != VK_SUCCESS)
-         return result;
-   }
-
-   if (ptr.cpu)
-      util_dynarray_append(&batch->jobs, ptr.cpu);
-
-   draw->jobs.frag_copy_desc = ptr;
-
-   ptr = panvk_cmd_alloc_desc(cmdbuf, TILER_JOB);
+   struct pan_ptr ptr = panvk_cmd_alloc_desc(cmdbuf, TILER_JOB);
    util_dynarray_append(&batch->jobs, ptr.cpu);
    draw->jobs.tiler = ptr;
 

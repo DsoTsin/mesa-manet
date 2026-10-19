@@ -30,6 +30,10 @@
 #include "vk_log.h"
 #include "vk_sync.h"
 
+#if PAN_ARCH >= 15
+#include "data_graph/panvk_data_graph_csf.h"
+#endif
+
 #ifdef HAVE_PAN_KMOD_KBASE
 #include <inttypes.h>
 #include <unistd.h>
@@ -61,7 +65,7 @@
 /* Worst-case size of one ring entry, in bytes. Diagnostic breadcrumbs add a
  * few extra LS stores, so keep this conservatively above the normal panthor
  * kernel ring slot size. */
-#define KBASE_RING_JOB_BASE_SIZE 512
+#define KBASE_RING_JOB_BASE_SIZE (512 + (PAN_ARCH >= 15 ? 64 : 0))
 /* Each GPU-side dependency adds MOVE64 + MOVE64 + SYNC_WAIT64 (3 x 8 bytes)
  * to the ring entry. */
 #define KBASE_RING_WAIT_SIZE 24
@@ -166,6 +170,12 @@ get_resource_mask(const struct panvk_device *dev,
    case PANVK_SUBQUEUE_FRAGMENT:
       return mask | CS_FRAG_RES;
    case PANVK_SUBQUEUE_COMPUTE:
+#if PAN_ARCH >= 15 && defined(HAVE_PAN_KMOD_KBASE)
+      if (dev->vk.enabled_features.dataGraph &&
+          gpu_queue_uses_kbase(dev) &&
+          kbase_kmod_csf_has_neural(dev->kmod.dev))
+         mask |= CS_NEURAL_RES;
+#endif
       return mask | CS_COMPUTE_RES;
    default:
       UNREACHABLE("Unknown subqueue");
@@ -646,11 +656,15 @@ kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
    }
 
    if (stream_size) {
+#if PAN_ARCH >= 15
+      panvk_cs_neural_invalidate(&b, dev->csf.sb.all_iters_mask, val32,
+                                 SB_ID(IMM_FLUSH));
+#endif
       cs_move32_to(&b, val32, flush_id);
-      cs_flush_caches_with_neural(
+      cs_flush_caches(
          &b, MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE,
          MALI_CS_FLUSH_MODE_CLEAN_AND_INVALIDATE,
-         MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, PAN_ARCH >= 15, val32,
+         MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, val32,
          cs_defer(0, SB_ID(IMM_FLUSH)));
       cs_wait_slot(&b, SB_ID(IMM_FLUSH));
 
@@ -685,10 +699,12 @@ kbase_subqueue_emit_job(struct panvk_gpu_queue *queue, uint32_t subqueue,
    cs_move64_to(&b, addr64, seqno_addr);
    cs_wait_slots(&b, dev->csf.sb.all_mask);
 #if PAN_ARCH >= 15
+   panvk_cs_neural_invalidate(&b, dev->csf.sb.all_iters_mask, val32,
+                              SB_ID(IMM_FLUSH));
    cs_move32_to(&b, val32, 0);
-   cs_flush_caches_with_neural(
+   cs_flush_caches(
       &b, MALI_CS_FLUSH_MODE_CLEAN, MALI_CS_FLUSH_MODE_CLEAN,
-      MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, true, val32,
+      MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, val32,
       cs_defer(0, SB_ID(IMM_FLUSH)));
    if (!deferred_tail)
       cs_wait_slot(&b, SB_ID(IMM_FLUSH));
@@ -1127,11 +1143,13 @@ kbase_create_csf_group(struct panvk_gpu_queue *queue, uint32_t cs_count,
                        uint64_t dvs_buf, uint32_t *handle, uint32_t *uid)
 {
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   const bool neural = PAN_ARCH >= 15 && dev->vk.enabled_extensions.ARM_data_graph &&
+                       kbase_kmod_csf_has_neural(dev->kmod.dev);
 
    if (dvs_buf &&
-       !kbase_kmod_csf_group_create_with_uid(dev->kmod.dev, cs_count, oom_handler,
+       !kbase_kmod_csf_group_create_with_neural(dev->kmod.dev, cs_count, oom_handler,
                                     shader_core_count, dvs_buf,
-                                    PAN_ARCH >= 14, handle, uid))
+                                    PAN_ARCH >= 14, neural, handle, uid))
       return 0;
 
    if (dev->dvs_enabled && PAN_ARCH >= 12) {
@@ -1140,9 +1158,9 @@ kbase_create_csf_group(struct panvk_gpu_queue *queue, uint32_t cs_count,
       dev->dvs_enabled = false;
    }
 
-   return kbase_kmod_csf_group_create_with_uid(dev->kmod.dev, cs_count, oom_handler,
+   return kbase_kmod_csf_group_create_with_neural(dev->kmod.dev, cs_count, oom_handler,
                                       shader_core_count, 0, PAN_ARCH >= 14,
-                                      handle, uid);
+                                      neural, handle, uid);
 }
 
 static VkResult

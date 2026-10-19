@@ -464,6 +464,9 @@ init_shader_caches(struct panvk_physical_device *device,
       pan_get_compiler_flags(pan_arch(device->kmod.dev->props.gpu_id));
    _mesa_blake3_update(&blake3_ctx, &driver_flags, sizeof(driver_flags));
 
+   uint32_t shader_info_size = sizeof(struct pan_shader_info);
+   _mesa_blake3_update(&blake3_ctx, &shader_info_size, sizeof(shader_info_size));
+
    unsigned char blake3[BLAKE3_KEY_LEN];
    _mesa_blake3_final(&blake3_ctx, blake3);
 
@@ -1684,6 +1687,7 @@ panvk_GetPhysicalDeviceQueueFamilyProperties2(
       [PANVK_QUEUE_FAMILY_GPU] = {
          .queueFlags =
             VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT |
+            (physical_device->vk.supported_features.dataGraph ? VK_QUEUE_DATA_GRAPH_BIT_ARM : 0) |
             (physical_device->vk.supported_features.sparseBinding
                 ? VK_QUEUE_SPARSE_BINDING_BIT
                 : 0),
@@ -1717,6 +1721,39 @@ panvk_GetPhysicalDeviceQueueFamilyProperties2(
             panvk_fill_global_priority(physical_device, family, prio);
       }
    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+panvk_GetPhysicalDeviceQueueFamilyDataGraphPropertiesARM(
+   VkPhysicalDevice device, uint32_t family, uint32_t *count,
+   VkQueueFamilyDataGraphPropertiesARM *properties)
+{
+   VK_FROM_HANDLE(panvk_physical_device, pdev, device);
+   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyDataGraphPropertiesARM, out, properties, count);
+   if (family == PANVK_QUEUE_FAMILY_GPU && pdev->vk.supported_features.dataGraph) {
+      vk_outarray_append_typed(VkQueueFamilyDataGraphPropertiesARM, &out, p) {
+         p->engine = (VkPhysicalDeviceDataGraphProcessingEngineARM){
+            .type = VK_PHYSICAL_DEVICE_DATA_GRAPH_PROCESSING_ENGINE_TYPE_DEFAULT_ARM,
+            .isForeign = false,
+         };
+         p->operation = (VkPhysicalDeviceDataGraphOperationSupportARM){
+            .operationType = VK_PHYSICAL_DEVICE_DATA_GRAPH_OPERATION_TYPE_SPIRV_EXTENDED_INSTRUCTION_SET_ARM,
+            .name = "TOSA.001000.1",
+            .version = 0,
+         };
+      }
+   }
+   return vk_outarray_status(&out);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_GetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM(
+   VkPhysicalDevice device,
+   const VkPhysicalDeviceQueueFamilyDataGraphProcessingEngineInfoARM *info,
+   VkQueueFamilyDataGraphProcessingEnginePropertiesARM *properties)
+{
+   properties->foreignMemoryHandleTypes = 0;
+   properties->foreignSemaphoreHandleTypes = 0;
 }
 
 struct panvk_cmat_config {

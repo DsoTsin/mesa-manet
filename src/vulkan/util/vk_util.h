@@ -350,6 +350,7 @@ mesa_to_vk_shader_stage(mesa_shader_stage mesa_stage)
 
 /* this needs spec fixes */
 #define MESA_VK_SHADER_STAGE_WORKGRAPH_HACK_BIT_FIXME (1<<30)
+#define MESA_VK_SHADER_STAGE_DATA_GRAPH_BIT (1u << 29)
 
 /* Internal version of VK_SHADER_STAGE_ALL which only includes valid bits. */
 #define MESA_VK_SHADER_STAGE_ALL (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT |              \
@@ -368,6 +369,8 @@ vk_shader_stages_from_bind_point(VkPipelineBindPoint pipelineBindPoint)
 #endif
    case VK_PIPELINE_BIND_POINT_COMPUTE:
       return VK_SHADER_STAGE_COMPUTE_BIT;
+   case VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM:
+      return MESA_VK_SHADER_STAGE_DATA_GRAPH_BIT;
    case VK_PIPELINE_BIND_POINT_GRAPHICS:
       return VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
    case VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR:

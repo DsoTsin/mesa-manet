@@ -189,6 +189,11 @@ vtn_add_specialization_entry(struct nir_spirv_specialization *spec, uint32_t slo
 
 void vtn_free_specialization(struct nir_spirv_specialization *spec);
 
+uint32_t *spirv_specialize(void *mem_ctx, const uint32_t *words,
+                           size_t word_count,
+                           struct nir_spirv_specialization *specialization,
+                           size_t *specialized_word_count);
+
 #ifdef __cplusplus
 }
 #endif

@@ -767,8 +767,9 @@ fixup_load_const_ir3_instr(struct nir_builder *b, nir_instr *instr, void *arg)
    const unsigned base_offset_limit = (1 << 9); /* 9 bits */
    unsigned base_offset = nir_intrinsic_base(intr);
 
-   /* Or cases were base offset is lower than the hw limit: */
-   if (base_offset < base_offset_limit)
+   /* Or cases where base offset for each component (because we scalarize the
+    * intrinsic when emitting ir3) fits in the hw limit: */
+   if (base_offset <= base_offset_limit - intr->num_components)
       return NULL;
 
    b->cursor = nir_before_instr(instr);
@@ -795,6 +796,28 @@ fixup_load_const_ir3_instr(struct nir_builder *b, nir_instr *instr, void *arg)
     */
    unsigned new_base_offset = base_offset % base_offset_limit;
 
+   /* If the vector components straddle the hardware limit, we scalarize the
+    * intrinsic so that nir_opt_offsets is able to see which offset additions
+    * for individual components are safe to fold back into the base offset.
+    */
+   if (new_base_offset > base_offset_limit - intr->num_components) {
+      nir_def *results[NIR_MAX_VEC_COMPONENTS];
+      for (unsigned i = 0; i < intr->def.num_components; i++) {
+         unsigned component_base_offset = base_offset + i;
+         new_base_offset = component_base_offset % base_offset_limit;
+
+         results[i] = nir_load_const_ir3(
+            b, 1, intr->def.bit_size,
+            nir_iadd_imm(b, offset, component_base_offset - new_base_offset),
+            .base = new_base_offset);
+      }
+
+      nir_def *result = nir_vec(b, results, intr->def.num_components);
+
+      return result;
+   }
+
+   /* All components fit, just update the existing intrinsic: */
    nir_intrinsic_set_base(intr, new_base_offset);
    offset = nir_iadd_imm(b, offset, base_offset - new_base_offset);
 

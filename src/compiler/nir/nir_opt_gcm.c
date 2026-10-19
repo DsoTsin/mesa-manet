@@ -1601,6 +1601,7 @@ gcm_schedule_late_def(nir_def *def, void *void_state)
       if (!pays_for_itself)
          gcm_charge_loop_hoist(state, instr, best_block);
 
+      nir_instr_set_speculated(instr);
       state->progress = true;
    }
 
