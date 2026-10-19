@@ -816,7 +816,7 @@ class Parser(object):
                         if reg == vreg:
                             d[(usage, sanitize_variant(variant))].append(reg)
                 else:
-                    for variant in self.variants:
+                    for variant in sorted(self.variants):
                         d[(usage, sanitize_variant(variant))].append(reg)
 
         print("#ifdef __cplusplus")
