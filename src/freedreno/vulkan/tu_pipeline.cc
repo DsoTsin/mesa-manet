@@ -1207,12 +1207,12 @@ tu6_patch_control_points_size(struct tu_device *dev,
    if (dev->physical_device->info->props.load_shader_consts_via_preamble) {
 #define EMIT_CONST_DWORDS(const_dwords) (6 + const_dwords + 4)
       return EMIT_CONST_DWORDS(4) +
-         EMIT_CONST_DWORDS(HS_PARAMS_SIZE) + 2 + 2;
+         EMIT_CONST_DWORDS(HS_PARAMS_SIZE) + 2 + 2 + 2;
 #undef EMIT_CONST_DWORDS
    } else {
 #define EMIT_CONST_DWORDS(const_dwords) (4 + const_dwords)
       return EMIT_CONST_DWORDS(4) +
-         EMIT_CONST_DWORDS(HS_PARAMS_SIZE) + 2 + 2;
+         EMIT_CONST_DWORDS(HS_PARAMS_SIZE) + 2 + 2 + 2;
 #undef EMIT_CONST_DWORDS
    }
 }
@@ -1266,6 +1266,8 @@ tu6_emit_patch_control_points(struct tu_cs *cs,
 
    const uint32_t wavesize = 64;
    const uint32_t vs_hs_local_mem_size = 16384;
+
+   tu_cs_emit_regs(cs, PC_HS_PARAM_0(CHIP, MAX2(tcs->variant->tess.tcs_vertices_out, patch_control_points)));
 
    uint32_t max_patches_per_wave;
    if (dev->physical_device->info->props.tess_use_shared) {

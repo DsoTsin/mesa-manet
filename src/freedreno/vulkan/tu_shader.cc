@@ -2964,10 +2964,6 @@ tu6_emit_hs(struct tu_cs *cs,
    tu_cs_emit_pkt4(cs, REG_A6XX_VFD_CNTL_2, 1);
    tu_cs_emit(cs, A6XX_VFD_CNTL_2_REGID_HSRELPATCHID(hs_rel_patch_regid) |
                   A6XX_VFD_CNTL_2_REGID_INVOCATIONID(hs_invocation_regid));
-
-   if (hs) {
-      tu_cs_emit_regs(cs, PC_HS_PARAM_0(CHIP, hs->tess.tcs_vertices_out));
-   }
 }
 TU_GENX(tu6_emit_hs);
 
