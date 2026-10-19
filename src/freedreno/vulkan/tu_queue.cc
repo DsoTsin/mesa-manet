@@ -288,6 +288,7 @@ resolve_vis_stream_patchpoints(struct tu_queue *queue,
 
          struct tu_cs_entry entry = tu_cs_end_sub_stream(&cs, &sub_cs);
          submit_add_entries(queue->device, submit, dump_cmds, &entry, 1);
+         tu_cs_finish(&cs);
       }
 
       render_pass_idx += cmd_buffers[i]->state.tile_render_pass_count;
