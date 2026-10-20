@@ -2432,10 +2432,11 @@ tu6_emit_cs_config(struct tu_cs *cs,
       ir3_const_state(v)->push_consts_type == IR3_PUSH_CONSTS_SHARED;
 
    with_crb (cs) {
-      tu6_emit_shared_consts_enable<CHIP>(crb, shared_consts_enable);
-
+      /* A6XX: SP_UPDATE_CNTL must happen before HLSQ_SHARED_CONSTS(), see tu6_emit_program_config */
       crb.add(SP_UPDATE_CNTL(CHIP, .cs_state = true, .cs_uav = true,
-                             .cs_shared_const = shared_consts_enable));
+                             .cs_shared_const = CHIP == A6XX));
+
+      tu6_emit_shared_consts_enable<CHIP>(crb, shared_consts_enable);
       tu6_emit_xs_config<CHIP>(crb, { .cs = v });
       tu6_emit_xs<CHIP>(crb, cs->device, MESA_SHADER_COMPUTE, v, pvtmem, binary_iova);
    }
