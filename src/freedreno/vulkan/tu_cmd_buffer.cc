@@ -10783,6 +10783,17 @@ tu_CmdBeginConditionalRenderingEXT(VkCommandBuffer commandBuffer,
 
    cmd->state.predication_active = true;
 
+   /* Conditional rendering inside a renderpass predicates only some of its draws,
+    * which hangs hw binning with some a630_sqe.fw versions (see predicated_binning_quirk).
+    * XFB and primitives-generated queries require hw binning, and gmem rendering without
+    * binning almost never makes sense anyway.
+    */
+   if (cmd->state.pass && cmd->device->physical_device->info->props.predicated_binning_quirk &&
+       !cmd->state.rp.disable_gmem) {
+      cmd->state.rp.disable_gmem = true;
+      cmd->state.rp.force_render_mode_reason = "Conditional rendering inside a renderpass with buggy a630_sqe.fw";
+   }
+
    struct tu_cs *cs = cmd->state.pass ? &cmd->draw_cs : &cmd->cs;
 
    /* Wait for any writes to the predicate to land */

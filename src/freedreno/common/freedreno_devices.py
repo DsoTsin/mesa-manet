@@ -171,6 +171,7 @@ a6xx_gen1_low = GPUProps(
         instr_cache_size = 64,
         indirect_draw_wfm_quirk = True,
         draw_auto_stale_stride_quirk = True,
+        predicated_binning_quirk = True,
         depth_bounds_require_depth_test_quirk = True,
 
         has_gmem_fast_clear = False,
@@ -191,6 +192,7 @@ a6xx_gen1 = GPUProps(
         instr_cache_size = 64,
         indirect_draw_wfm_quirk = True,
         draw_auto_stale_stride_quirk = True,
+        predicated_binning_quirk = True,
         depth_bounds_require_depth_test_quirk = True,
     )
 
@@ -201,6 +203,7 @@ a6xx_gen2 = GPUProps(
         has_z24uint_s8uint = True,
         indirect_draw_wfm_quirk = True,
         draw_auto_stale_stride_quirk = True,
+        predicated_binning_quirk = True,
         depth_bounds_require_depth_test_quirk = True, # TODO: check if true
         has_dp2acc = False, # TODO: check if true
         has_8bpp_ubwc = False,
@@ -377,7 +380,8 @@ add_gpus([
         GPUId(620),
     ], A6xxGPUInfo(
         CHIP.A6XX,
-        [a6xx_base, a6xx_gen1, GPUProps(draw_auto_stale_stride_quirk = False)],
+        [a6xx_base, a6xx_gen1, GPUProps(draw_auto_stale_stride_quirk = False,
+                                         predicated_binning_quirk = False)],
         num_ccu = 1,
         tile_align_w = 32,
         tile_align_h = 16,
@@ -716,6 +720,7 @@ add_gpus([
             storage_16bit = True,
             is_a702 = True,
             draw_auto_stale_stride_quirk = False,
+            predicated_binning_quirk = False,
             )
         ],
         num_ccu = 1,

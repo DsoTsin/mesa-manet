@@ -141,6 +141,22 @@ struct fd_dev_info {
        */
       bool draw_auto_stale_stride_quirk;
 
+      /* Many A6XX GEN1/GEN2 devices have a newer a630_sqe.fw in which, only in CP_DRAW_INDX and
+       * CP_DRAW_INDX_OFFSET, visibility-based skipping happens *before* predication-based skipping.
+       * It seems this breaks predication, because draws skipped by predication will not be executed
+       * in the binning phase, and therefore won't have an entry in the draw stream, but the
+       * visibility-based skipping will expect it to have an entry. The result is a GPU hang when
+       * actually executing the first non-predicated draw. However, it seems that things still work
+       * if the whole renderpass is predicated. Affected tests (with hw binning) are:
+       *   dEQP-VK.conditional_rendering.draw_clear.draw.case_*_host_memory
+       *   dEQP-VK.conditional_rendering.draw_clear.draw.maintenance5
+       *
+       * linux-firmware (working) FW version: 016ee176
+       * Last known working FW version: 016ee17a
+       * Latest known broken FW version: 016ee207 (linux-firmware)
+       */
+      bool predicated_binning_quirk;
+
       /* On some GPUs, the depth test needs to be enabled when the
        * depth bounds test is enabled and the depth attachment uses UBWC.
        */
