@@ -552,8 +552,8 @@ add_gpus([
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
             [A6XXRegs.REG_A6XX_PC_POWER_CNTL, 2],
             [A6XXRegs.REG_A6XX_VFD_POWER_CNTL, 2],
-            # this seems to be a chicken bit that fixes cubic filtering:
-            [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL, 0x00108000],
+            # bit 24 seems to be a chicken bit that fixes cubic filtering:
+            [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL, 0x01008000],
             [A6XXRegs.REG_A6XX_GRAS_DBG_ECO_CNTL, 0],
             [A6XXRegs.REG_A6XX_SP_CHICKEN_BITS, 0x00001400],
             [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x01000000],
