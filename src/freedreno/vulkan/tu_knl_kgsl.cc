@@ -191,13 +191,24 @@ static VkResult
 kgsl_bo_user_map(struct tu_device *dev, struct tu_bo *bo, uint64_t client_iova)
 {
    uint64_t offset = bo->gem_handle << 12;
+   /* KGSL may free the GPU VA of a destroyed BO asynchronously, and without MAP_FIXED_NOREPLACE,
+    * it then silently places the BO elsewhere. With MAP_FIXED_NOREPLACE, KGSL flushes pending frees
+    * and retries instead. Kernels older than 4.17 ignore the flag and treat client_iova as a hint.
+    */
+   int flags = MAP_SHARED | (client_iova ? MAP_FIXED_NOREPLACE : 0);
    void *map = mmap(reinterpret_cast<void *>(client_iova), bo->size, PROT_READ | PROT_WRITE,
-                    MAP_SHARED, dev->physical_device->local_fd, offset);
+                    flags, dev->physical_device->local_fd, offset);
    if (map == MAP_FAILED) {
+      int err = errno;
       kgsl_bo_finish(dev, bo);
 
+      if (client_iova && err == EEXIST) {
+         return vk_errorf(dev, VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS,
+                          "mmap could not map the given address");
+      }
+
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                       "mmap failed (%s)", strerror(errno));
+                       "mmap failed (%s)", strerror(err));
    }
 
    if (client_iova && reinterpret_cast<uint64_t>(map) != client_iova) {
