@@ -2751,7 +2751,7 @@ calc_cs_barrier_reg_budget(struct ir3_shader_variant *v,
       (wave_pairs_per_wg * (double_threadsize ? 2 : 1));
    assert(vec4_regs_per_thread > 0);
 
-   return vec4_regs_per_thread * 4 * 2;
+   return vec4_regs_per_thread * RA_FULL_VEC4_SIZE;
 }
 
 struct ir3_pressure
@@ -2776,7 +2776,8 @@ ir3_ra_get_reg_file_limits(struct ir3_shader_variant *v)
     */
    if (v->shader_options.real_wavesize == IR3_DOUBLE_ONLY) {
       limit_pressure.full =
-         MIN2(limit_pressure.full, v->compiler->reg_size_vec4 / 2 * 16);
+         MIN2(limit_pressure.full,
+              v->compiler->reg_size_vec4 / 2 * RA_FULL_VEC4_SIZE);
    }
 
    assert(limit_pressure.full <= RA_FULL_SIZE);
@@ -2848,7 +2849,7 @@ ir3_ra(struct ir3_shader_variant *v)
    }
 
    /* Both banks come out of one file, in half-units. */
-   unsigned phys_file_size = v->compiler->reg_size_vec4 * 4 * 2;
+   unsigned phys_file_size = v->compiler->reg_size_vec4 * RA_FULL_VEC4_SIZE;
 
    if (!v->mergedregs && mesa_shader_stage_is_compute(v->type) &&
        v->shader->nir->info.uses_control_barrier)

@@ -122,8 +122,10 @@ ra_reg_is_predicate(const struct ir3_register *reg)
 #define ra_foreach_dst(__dstreg, __instr)                                      \
    ra_foreach_dst_n(__dstreg, __i, __instr)
 
-#define RA_HALF_SIZE     (4 * 48)
-#define RA_FULL_SIZE     (4 * 48 * 2)
+#define RA_HALF_VEC4_SIZE 4
+#define RA_FULL_VEC4_SIZE (RA_HALF_VEC4_SIZE * 2)
+#define RA_HALF_SIZE     (RA_HALF_VEC4_SIZE * 48)
+#define RA_FULL_SIZE     (RA_FULL_VEC4_SIZE * 48)
 #define RA_SHARED_SIZE   (2 * 4 * 8)
 #define RA_SHARED_HALF_SIZE (4 * 8)
 #define RA_MAX_FILE_SIZE RA_FULL_SIZE
