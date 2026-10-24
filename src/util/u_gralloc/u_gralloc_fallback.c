@@ -73,40 +73,49 @@ static pthread_once_t panvk_v19_once = PTHREAD_ONCE_INIT;
 static struct panvk_v19_mapper *panvk_v19_mapper_ptr;
 static void *panvk_v19_mapper_so;
 static int panvk_v19_mapper_status = -ENOTSUP;
+static bool panvk_v19_mapper_qti;
 
 static void
 panvk_v19_mapper_init_once(void)
 {
    void *so = NULL;
    const char *how = "NONE";
+   const char *instance = NULL;
+   static const struct {
+      const char *instance, *soname, *path;
+   } modules[] = {
+      {"qti", "mapper.qti.so", "/vendor/lib64/hw/mapper.qti.so"},
+      {"mediatek", "mapper.mediatek.so", "/vendor/lib64/hw/mapper.mediatek.so"},
+   };
    void *bn = dlopen("libbinder_ndk.so", RTLD_NOW | RTLD_LOCAL);
    if (!bn)
       bn = dlopen("/system/lib64/libbinder_ndk.so", RTLD_NOW | RTLD_LOCAL);
-   if (bn) {
-      panvk_v19_open_passthrough_fn open_hal =
-         (panvk_v19_open_passthrough_fn)dlsym(bn, "AServiceManager_openDeclaredPassthroughHal");
+   panvk_v19_open_passthrough_fn open_hal = bn ?
+      (panvk_v19_open_passthrough_fn)dlsym(bn, "AServiceManager_openDeclaredPassthroughHal") : NULL;
+   void *vs = dlopen("libvndksupport.so", RTLD_NOW | RTLD_LOCAL);
+   if (!vs)
+      vs = dlopen("/system/lib64/libvndksupport.so", RTLD_NOW | RTLD_LOCAL);
+   panvk_v19_load_sphal_fn load_sphal = vs ?
+      (panvk_v19_load_sphal_fn)dlsym(vs, "android_load_sphal_library") : NULL;
+   for (unsigned i = 0; i < ARRAY_SIZE(modules); i++) {
       if (open_hal) {
-         so = open_hal("mapper", "mediatek", RTLD_NOW | RTLD_LOCAL);
+         so = open_hal("mapper", modules[i].instance, RTLD_NOW | RTLD_LOCAL);
          if (so) how = "BINDER_PASSTHROUGH";
       }
-   }
-   if (!so) {
-      void *vs = dlopen("libvndksupport.so", RTLD_NOW | RTLD_LOCAL);
-      if (!vs)
-         vs = dlopen("/system/lib64/libvndksupport.so", RTLD_NOW | RTLD_LOCAL);
-      if (vs) {
-         panvk_v19_load_sphal_fn load_sphal =
-            (panvk_v19_load_sphal_fn)dlsym(vs, "android_load_sphal_library");
-         if (load_sphal) {
-            so = load_sphal("mapper.mediatek.so", RTLD_NOW | RTLD_LOCAL);
-            if (!so) so = load_sphal("/vendor/lib64/hw/mapper.mediatek.so", RTLD_NOW | RTLD_LOCAL);
-            if (so) how = "SPHAL";
-         }
+      if (!so && load_sphal) {
+         so = load_sphal(modules[i].soname, RTLD_NOW | RTLD_LOCAL);
+         if (!so) so = load_sphal(modules[i].path, RTLD_NOW | RTLD_LOCAL);
+         if (so) how = "SPHAL";
       }
-   }
-   if (!so) {
-      so = dlopen("/vendor/lib64/hw/mapper.mediatek.so", RTLD_NOW | RTLD_LOCAL);
-      if (so) how = "DIRECT";
+      if (!so) {
+         so = dlopen(modules[i].path, RTLD_NOW | RTLD_LOCAL);
+         if (so) how = "DIRECT";
+      }
+      if (so) {
+         instance = modules[i].instance;
+         panvk_v19_mapper_qti = !strcmp(instance, "qti");
+         break;
+      }
    }
    if (!so) {
       mesa_logw("[P0A-V19-FULLPLANE] mapper load failed");
@@ -119,7 +128,7 @@ panvk_v19_mapper_init_once(void)
       return;
    }
    int32_t rc = load(&panvk_v19_mapper_ptr);
-   mesa_logi("[P0A-V19-FULLPLANE] init how=%s rc=%d mapper=%p version=%u", how, rc,
+   mesa_logi("[P0A-V19-FULLPLANE] init instance=%s how=%s rc=%d mapper=%p version=%u", instance, how, rc,
              panvk_v19_mapper_ptr, panvk_v19_mapper_ptr ? panvk_v19_mapper_ptr->version : 0);
    if (rc || !panvk_v19_mapper_ptr || panvk_v19_mapper_ptr->version < 5 ||
        !panvk_v19_mapper_ptr->v5.importBuffer || !panvk_v19_mapper_ptr->v5.freeBuffer ||
@@ -312,9 +321,10 @@ panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
    int strides[4] = {0}, offsets[4] = {0};
    int fds[4] = {-1, -1, -1, -1};
    int fd_index[4];
-   if (panvk_v19_plane_fd_indices(h, planes, fd_index)) {
+   if (!panvk_v19_mapper_qti && panvk_v19_plane_fd_indices(h, planes, fd_index)) {
       free(b.data); return -EINVAL;
    }
+   int qti_fd_index = 0;
    for (uint64_t i = 0; i < planes; i++) {
       uint64_t components = 0;
       desc[i].comp_count = 0;
@@ -348,6 +358,11 @@ panvk_v19_decode_planes(panvk_v19_buffer_handle_t h, const native_handle_t *raw,
       desc[i].vsub = vsub;
       offsets[i] = (int)offset;
       strides[i] = (int)stride;
+      if (panvk_v19_mapper_qti) {
+         if (i && offset == 0)
+            qti_fd_index++;
+         fd_index[i] = qti_fd_index;
+      }
       if (!raw || fd_index[i] >= raw->numFds) { rc = -EINVAL; break; }
       fds[i] = raw->data[fd_index[i]];
    }
