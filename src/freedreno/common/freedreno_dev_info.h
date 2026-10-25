@@ -594,6 +594,8 @@ struct fd_dev_info fd_dev_info(const struct fd_dev_id *id);
 
 const struct fd_dev_info *fd_dev_info_raw_by_name(const char *name);
 
+const char *fd_dev_name_at(unsigned index, struct fd_dev_id *id);
+
 static uint8_t
 fd_dev_gen(const struct fd_dev_id *id)
 {

@@ -101,6 +101,16 @@ fd_dev_info_raw_by_name(const char *name)
 }
 
 const char *
+fd_dev_name_at(unsigned index, struct fd_dev_id *id)
+{
+   if (index >= ARRAY_SIZE(fd_dev_recs))
+      return NULL;
+   if (id)
+      *id = fd_dev_recs[index].id;
+   return fd_dev_recs[index].name;
+}
+
+const char *
 fd_dev_name(const struct fd_dev_id *id)
 {
    for (int i = 0; i < ARRAY_SIZE(fd_dev_recs); i++) {

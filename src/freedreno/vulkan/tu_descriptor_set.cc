@@ -94,12 +94,14 @@ static void
 tu_descriptor_set_layout_destroy(struct vk_device *vk_dev,
                                  struct vk_descriptor_set_layout *vk_layout)
 {
+#ifndef TU_OFFLINE_ONLY
    struct tu_device *dev = container_of(vk_dev, struct tu_device, vk);
    struct tu_descriptor_set_layout *layout =
       container_of(vk_layout, struct tu_descriptor_set_layout, vk);
 
    if (layout->embedded_samplers)
       tu_bo_finish(dev, layout->embedded_samplers);
+#endif
    vk_descriptor_set_layout_destroy(vk_dev, vk_layout);
 }
 
@@ -115,6 +117,11 @@ tu_CreateDescriptorSetLayout(
 
    assert(pCreateInfo->sType ==
           VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
+#ifdef TU_OFFLINE_ONLY
+   if (pCreateInfo->flags &
+       VK_DESCRIPTOR_SET_LAYOUT_CREATE_EMBEDDED_IMMUTABLE_SAMPLERS_BIT_EXT)
+      return VK_ERROR_FEATURE_NOT_PRESENT;
+#endif
    const VkDescriptorSetLayoutBindingFlagsCreateInfo *variable_flags =
       vk_find_struct_const(
          pCreateInfo->pNext,
@@ -288,6 +295,7 @@ tu_CreateDescriptorSetLayout(
 
    set_layout->dynamic_offset_size = dynamic_offset_size;
 
+#ifndef TU_OFFLINE_ONLY
    if (pCreateInfo->flags &
        VK_DESCRIPTOR_SET_LAYOUT_CREATE_EMBEDDED_IMMUTABLE_SAMPLERS_BIT_EXT) {
       result = tu_bo_init_new(device, &set_layout->vk.base,
@@ -321,6 +329,7 @@ tu_CreateDescriptorSetLayout(
                 sizeof(sampler->descriptor));
       }
    }
+#endif
 
    *pSetLayout = tu_descriptor_set_layout_to_handle(set_layout);
 

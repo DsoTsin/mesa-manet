@@ -65,7 +65,7 @@ libtu_files = files(
   'tu_util.cc',
 )
 
-libtu_files += custom_target(
+tu_float32_spv = custom_target(
   'float32_spv.h',
   input : float32_glsl_file,
   output : 'float32_spv.h',
@@ -76,7 +76,7 @@ libtu_files += custom_target(
   depfile : 'float32_spv.h.d',
 )
 
-libtu_files += custom_target(
+tu_float64_spv = custom_target(
   'float64_spv.h',
   input : [glsl2spirv, float64_glsl_file],
   output : 'float64_spv.h',
@@ -90,6 +90,8 @@ libtu_files += custom_target(
   ],
   depfile : 'float64_spv.h.d',
 )
+
+libtu_files += [tu_float32_spv, tu_float64_spv]
 
 subdir('bvh')
 
@@ -230,6 +232,50 @@ libvulkan_freedreno = shared_library(
   link_depends : vulkan_icd_link_depends,
   install : true,
 )
+
+if with_tools.contains('freedreno')
+  libtu_offline = static_library(
+    'tu_offline',
+    [files('tu_shader.cc', 'tu_descriptor_set.cc',
+           'tu_nir_lower_demote_samples.cc', 'tu_nir_lower_multiview.cc',
+           'tu_nir_lower_ray_query.cc', 'tu_util.cc', 'tu_subsampled_image.cc',
+           '../ir3/ir3-offline-compiler-tu.cc'),
+     tu_entrypoints[0], tu_drirc[1], tu_tracepoints[1], freedreno_xml_header_files,
+     tu_float32_spv, tu_float64_spv],
+    include_directories : [libtu_includes, include_directories('.')],
+    dependencies : [idep_nir, idep_vulkan_util, idep_vulkan_runtime,
+                    idep_vulkan_wsi, idep_mesautil],
+    cpp_args : [tu_cpp_args, soong_compat_cpp_args, '-DTU_OFFLINE_ONLY'],
+    gnu_symbol_visibility : 'hidden',
+    build_by_default : false,
+  )
+  ir3_offline_compiler = executable(
+    'ir3-offline-compiler',
+    [files('../ir3/ir3-offline-compiler.c'), sha1_h],
+    include_directories : libtu_includes,
+    dependencies : [idep_nir, idep_vulkan_util, idep_vulkan_runtime,
+                    idep_mesautil, dep_spirv_tools, dep_m, dep_thread],
+    link_with : [libtu_offline, libfreedreno_ir3, libfreedreno_layout,
+                 libfreedreno_common],
+    link_args : [ld_args_gc_sections],
+    c_args : [c_msvc_compat_args, no_override_init_args, soong_compat_c_args],
+    gnu_symbol_visibility : 'hidden',
+    install : true,
+  )
+  if with_tests
+    ir3_offline_glslang = find_program('glslangValidator', required : false)
+    if ir3_offline_glslang.found()
+      test(
+        'ir3-offline-compiler',
+        prog_python,
+        args : [files('../ir3/test_ir3_offline_compiler.py'),
+                ir3_offline_compiler, ir3_offline_glslang],
+        suite : ['freedreno'],
+        timeout : 120,
+      )
+    endif
+  endif
+endif
 
 if with_symbols_check
   test(

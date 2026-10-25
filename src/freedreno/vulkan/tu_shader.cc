@@ -294,6 +294,27 @@ tu_spirv_to_nir(struct tu_device *dev,
    return nir;
 }
 
+enum ir3_push_consts_type
+tu_push_consts_type(const struct tu_pipeline_layout *layout,
+                    const struct ir3_compiler *compiler)
+{
+   if (!layout->push_constant_size)
+      return IR3_PUSH_CONSTS_NONE;
+
+   if (TU_DEBUG(PUSH_CONSTS_PER_STAGE))
+      return IR3_PUSH_CONSTS_PER_STAGE;
+
+   if (tu6_shared_constants_enable(layout, compiler)) {
+      return IR3_PUSH_CONSTS_SHARED;
+   } else {
+      if (compiler->gen >= 7) {
+         return IR3_PUSH_CONSTS_SHARED_PREAMBLE;
+      } else {
+         return IR3_PUSH_CONSTS_PER_STAGE;
+      }
+   }
+}
+
 static void
 lower_load_push_constant(struct tu_device *dev,
                          nir_builder *b,
@@ -3393,8 +3414,10 @@ tu_shader_init(struct tu_device *dev, const void *key_data, size_t key_size)
    if (key_size > 0)
       memcpy(obj_key_data, key_data, key_size);
 
+#ifndef TU_OFFLINE_ONLY
    vk_pipeline_cache_object_init(&dev->vk, &shader->base,
                                  &tu_shader_ops, obj_key_data, key_size);
+#endif
 
    shader->const_state.fdm_ubo.idx = -1;
    shader->const_state.dynamic_offsets_ubo.idx = -1;
@@ -3738,6 +3761,12 @@ tu_shader_create(struct tu_device *dev,
    shader->variant =
       ir3_shader_create_variant(ir3_shader, ir3_key, executable_info);
 
+   if (!shader->variant) {
+      ir3_shader_destroy(ir3_shader);
+      vk_free(&dev->vk.alloc, shader);
+      return VK_ERROR_UNKNOWN;
+   }
+
    if (ir3_exceeds_safe_constlen(shader->variant)) {
       struct ir3_shader_key safe_constlen_key = *ir3_key;
       safe_constlen_key.safe_constlen = true;
@@ -3813,11 +3842,13 @@ tu_shader_create(struct tu_device *dev,
       break;
    }
 
+#ifndef TU_OFFLINE_ONLY
    VkResult result = tu_upload_shader(dev, shader);
    if (result != VK_SUCCESS) {
       vk_free(&dev->vk.alloc, shader);
       return result;
    }
+#endif
 
    *shader_out = shader;
    return VK_SUCCESS;

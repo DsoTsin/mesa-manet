@@ -319,27 +319,6 @@ tu_blend_state_is_dual_src(const struct vk_color_blend_state *cb)
    return false;
 }
 
-enum ir3_push_consts_type
-tu_push_consts_type(const struct tu_pipeline_layout *layout,
-                    const struct ir3_compiler *compiler)
-{
-   if (!layout->push_constant_size)
-      return IR3_PUSH_CONSTS_NONE;
-
-   if (TU_DEBUG(PUSH_CONSTS_PER_STAGE))
-      return IR3_PUSH_CONSTS_PER_STAGE;
-
-   if (tu6_shared_constants_enable(layout, compiler)) {
-      return IR3_PUSH_CONSTS_SHARED;
-   } else {
-      if (compiler->gen >= 7) {
-         return IR3_PUSH_CONSTS_SHARED_PREAMBLE;
-      } else {
-         return IR3_PUSH_CONSTS_PER_STAGE;
-      }
-   }
-}
-
 static uint32_t
 sp_xs_config(const struct ir3_shader_variant *v)
 {
