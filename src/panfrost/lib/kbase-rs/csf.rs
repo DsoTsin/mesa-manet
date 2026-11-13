@@ -256,12 +256,23 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_neural(
     }
 
     for (req, create) in attempts {
-        match d.inout::<_, GroupCreateOutput>(req, create) {
+        let mut used_req = req;
+        let mut result = d.inout::<_, GroupCreateOutput>(req, create);
+        if req == KBASE_IOCTL_CS_QUEUE_GROUP_CREATE
+            && result.as_ref().is_err_and(|err| err.raw_os_error() == Some(libc::ENOTTY))
+        {
+            used_req = KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EXTENDED;
+            result = d.inout::<_, GroupCreateOutput>(
+                used_req,
+                GroupCreateExtendedPriority::from(create),
+            );
+        }
+        match result {
             Ok(output) => {
                 let handle = output.handle;
                 logd!(
                     "created CSF group {handle}, DVS buffer {dvs_buf:#x}, \
-                     compute priority {}/{}",
+                    compute priority {}/{}, ioctl {used_req:#x}",
                     create.comp_pri_threshold,
                     create.comp_pri_ratio
                 );
@@ -273,10 +284,12 @@ pub extern "C" fn kbase_kmod_csf_group_create_with_neural(
                 };
                 return 0;
             }
-            Err(e) => logw!("CS_QUEUE_GROUP_CREATE ({req:#x}) failed: {e}"),
+            Err(e) => logw!("CS_QUEUE_GROUP_CREATE ({used_req:#x}) failed: {e}"),
         }
     }
-    if dvs_buf == 0 && tiler_oom_handler {
+    if neural {
+        loge!("no supported CSF queue group creation ABI accepted neural endpoints");
+    } else if dvs_buf == 0 && tiler_oom_handler {
         loge!(
             "incremental rendering requires CS_QUEUE_GROUP_CREATE 1.18 or newer"
         );

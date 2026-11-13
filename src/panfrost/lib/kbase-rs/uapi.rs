@@ -50,6 +50,8 @@ pub const KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_19: u32 = ioc(RW, KBASE, 58, 112);
 pub const KBASE_IOCTL_MEM_ALLOC_EX: u32 = kbase::<MemAlloc>(RW, 59);
 pub const KBASE_IOCTL_MEM_ALLOC_EX_1_9: u32 = ioc(RW, KBASE, 59, 64);
 pub const KBASE_IOCTL_CS_QUEUE_GROUP_CREATE: u32 = kbase::<GroupCreate>(RW, 63);
+pub const KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EXTENDED: u32 =
+    kbase::<GroupCreateExtendedPriority>(RW, 63);
 pub const KBASE_IOCTL_DEFER_FREE_PHYS: u32 = kbase::<u32>(W, 81);
 pub const DMA_HEAP_IOCTL_ALLOC: u32 =
     ioc(RW, b'H', 0, size_of::<DmaHeapAlloc>());
@@ -259,6 +261,53 @@ pub struct GroupCreate {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct GroupCreateExtendedPriority {
+    pub tiler_mask: u64,
+    pub fragment_mask: u64,
+    pub compute_mask: u64,
+    pub cs_min: u8,
+    pub priority: u8,
+    pub priority_extension: u8,
+    pub tiler_max: u8,
+    pub fragment_max: u8,
+    pub compute_max: u8,
+    pub csi_handlers: u8,
+    pub neural_max: u8,
+    pub cs_fault_report_enable: u8,
+    pub padding0: [u8; 7],
+    pub dvs_buf: u64,
+    pub neural_mask: u64,
+    pub comp_pri_threshold: u8,
+    pub comp_pri_ratio: u8,
+    pub padding: [u8; 6],
+    pub reserved: [u64; 8],
+}
+
+impl From<GroupCreate> for GroupCreateExtendedPriority {
+    fn from(create: GroupCreate) -> Self {
+        Self {
+            tiler_mask: create.tiler_mask,
+            fragment_mask: create.fragment_mask,
+            compute_mask: create.compute_mask,
+            cs_min: create.cs_min,
+            priority: create.priority,
+            tiler_max: create.tiler_max,
+            fragment_max: create.fragment_max,
+            compute_max: create.compute_max,
+            csi_handlers: create.csi_handlers,
+            neural_max: create.neural_max,
+            cs_fault_report_enable: create.cs_fault_report_enable,
+            dvs_buf: create.dvs_buf,
+            neural_mask: create.neural_mask,
+            comp_pri_threshold: create.comp_pri_threshold,
+            comp_pri_ratio: create.comp_pri_ratio,
+            ..Self::default()
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct GroupCreateOutput {
     pub handle: u8,
     pub padding: [u8; 3],
@@ -266,6 +315,14 @@ pub struct GroupCreateOutput {
 }
 
 const _: () = {
+    assert!(size_of::<GroupCreateExtendedPriority>() == 128);
+    assert!(std::mem::offset_of!(GroupCreateExtendedPriority, tiler_max) == 27);
+    assert!(std::mem::offset_of!(GroupCreateExtendedPriority, cs_fault_report_enable) == 32);
+    assert!(std::mem::offset_of!(GroupCreateExtendedPriority, dvs_buf) == 40);
+    assert!(std::mem::offset_of!(GroupCreateExtendedPriority, neural_mask) == 48);
+    assert!(std::mem::offset_of!(GroupCreateExtendedPriority, comp_pri_threshold) == 56);
+    assert!(KBASE_IOCTL_CS_QUEUE_GROUP_CREATE == 0xc078803f);
+    assert!(KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EXTENDED == 0xc080803f);
     assert!(std::mem::size_of::<GroupCreateOutput>() == 8);
     assert!(std::mem::offset_of!(GroupCreateOutput, uid) == 4);
 };
