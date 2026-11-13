@@ -3,6 +3,7 @@
 #include "compiler/spirv/spirv.h"
 #include "neural/pan_graph_alloc.h"
 #include "util/ralloc.h"
+#include "util/u_debug.h"
 #include "util/u_math.h"
 #include "vk_format.h"
 #include "vk_util.h"
@@ -427,8 +428,11 @@ lower_quantized_conv(struct graph_parser *p, struct panvk_graph_value *v)
    const struct panvk_graph_value *w = &g->values[v->inputs[1]];
    if (w->kind != PANVK_GRAPH_CONSTANT)
       return true;
-   const char *native_conv = getenv("PANVK_GRAPH_NATIVE_CONV");
-   if (native_conv && !strcmp(native_conv, "1")) {
+   bool spatial_dilation = false;
+   for (unsigned axis = 0; axis < 2; axis++)
+      spatial_dilation |= v->kernel[axis] > 1 && v->dilation[axis] > 1;
+   if (!spatial_dilation &&
+       debug_get_bool_option("PANVK_GRAPH_NATIVE_CONV", true)) {
       struct pan_graph_conv_info info = {
          .batch = a->dims[0], .input_height = a->dims[1],
          .input_width = a->dims[2], .input_channels = a->dims[3],
@@ -451,18 +455,22 @@ lower_quantized_conv(struct graph_parser *p, struct panvk_graph_value *v)
          p->oom = true;
          return false;
       }
-      if (!pan_graph_conv_i8_init(conv.conv, &info) || !finish_shape(&zero))
-         return false;
-      conv.inputs[2] = g->count;
-      g->values[g->count++] = zero;
-      uint32_t conv_index = g->count;
-      g->passes[g->pass_count++] = g->count;
-      g->values[g->count++] = conv;
-      v->op = PANVK_GRAPH_OP_ADD;
-      v->input_count = 2;
-      v->inputs[1] = v->inputs[2];
-      v->inputs[0] = conv_index;
-      return true;
+      if (pan_graph_conv_i8_init(conv.conv, &info)) {
+         if (!finish_shape(&zero))
+            return false;
+         conv.inputs[2] = g->count;
+         g->values[g->count++] = zero;
+         uint32_t conv_index = g->count;
+         g->passes[g->pass_count++] = g->count;
+         g->values[g->count++] = conv;
+         v->op = PANVK_GRAPH_OP_ADD;
+         v->input_count = 2;
+         v->inputs[1] = v->inputs[2];
+         v->inputs[0] = conv_index;
+         return true;
+      }
+      ralloc_free(conv.conv);
+      ralloc_free(zero.data);
    }
    uint64_t inner = (uint64_t)w->dims[1] * w->dims[2] * w->dims[3];
    uint64_t rows = (uint64_t)v->dims[1] * v->dims[2];
@@ -1017,8 +1025,8 @@ fuse_pointwise(struct panvk_data_graph *g)
             users[v->inputs[j]]++;
       }
    }
-   const char *rescale = getenv("PANVK_GRAPH_CONV_RESCALE");
-   for (unsigned i = 0; rescale && !strcmp(rescale, "1") && i < g->count; i++) {
+   const bool rescale = debug_get_bool_option("PANVK_GRAPH_CONV_RESCALE", true);
+   for (unsigned i = 0; rescale && i < g->count; i++) {
       struct panvk_graph_value *v = &g->values[i];
       if (!v->live || !v->conv)
          continue;
@@ -1042,7 +1050,7 @@ fuse_pointwise(struct panvk_data_graph *g)
       *v->conv = plan;
       resize->fused_into = i;
    }
-   for (unsigned i = 0; rescale && !strcmp(rescale, "1") && i < g->count; i++) {
+   for (unsigned i = 0; rescale && i < g->count; i++) {
       struct panvk_graph_value *v = &g->values[i];
       if (!v->live || v->kind != PANVK_GRAPH_OPERATION ||
           v->op != PANVK_GRAPH_OP_RESCALE || v->format != VK_FORMAT_R8_SINT ||
@@ -1068,7 +1076,7 @@ fuse_pointwise(struct panvk_data_graph *g)
       add->fused_into = i;
    }
 
-   for (unsigned i = 0; rescale && !strcmp(rescale, "1") && i < g->count; i++) {
+   for (unsigned i = 0; rescale && i < g->count; i++) {
       struct panvk_graph_value *v = &g->values[i];
       if (!v->live || v->kind != PANVK_GRAPH_OPERATION ||
           v->op != PANVK_GRAPH_OP_TABLE || v->format != VK_FORMAT_R8_SINT)
@@ -1163,8 +1171,8 @@ fuse_pointwise(struct panvk_data_graph *g)
 static VkResult
 allocate_transient(struct panvk_data_graph *g)
 {
-   const char *fusion = getenv("PANVK_GRAPH_CONV_RESCALE");
-   for (unsigned i = 0; fusion && !strcmp(fusion, "1") && i < g->pass_count; i++) {
+   const bool fusion = debug_get_bool_option("PANVK_GRAPH_CONV_RESCALE", true);
+   for (unsigned i = 0; fusion && i < g->pass_count; i++) {
       struct panvk_graph_value *v = &g->values[g->passes[i]];
       if (v->kind != PANVK_GRAPH_OPERATION || v->op != PANVK_GRAPH_OP_CONCAT ||
           v->rank != 4 || v->axis != 3 || v->format != VK_FORMAT_R8_SINT ||

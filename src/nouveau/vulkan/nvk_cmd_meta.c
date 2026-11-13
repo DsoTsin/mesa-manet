@@ -11,6 +11,10 @@
 #include "nvk_physical_device.h"
 
 #include "vk_format.h"
+#include "vk_meta_private.h"
+#include "vk_pipeline.h"
+
+#include "nir_builder.h"
 
 #include "nv_push_cl9097.h"
 #include "nv_push_cl90c0.h"
@@ -345,6 +349,37 @@ nvk_meta_image_copy_compute_supported(struct nvk_image *img)
    return true;
 }
 
+static bool
+nvk_meta_copy_requires_compute(struct nvk_cmd_buffer *cmd)
+{
+   const struct nvk_physical_device *pdev =
+      nvk_device_physical(nvk_cmd_buffer_device(cmd));
+   const enum nvkmd_engines engines = nvk_queue_engines_from_queue_flags(
+      pdev, nvk_cmd_buffer_queue_flags(cmd));
+
+   return pdev->nvkmd->kmd_info.has_compute_queue &&
+          (engines & NVKMD_ENGINE_COMPUTE) && !(engines & NVKMD_ENGINE_3D);
+}
+
+static void
+nvk_meta_copy_aspect_barrier(struct nvk_cmd_buffer *cmd)
+{
+   const VkMemoryBarrier2 barrier = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+      .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+      .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+      .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+      .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+   };
+   const VkDependencyInfo dep = {
+      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+      .memoryBarrierCount = 1,
+      .pMemoryBarriers = &barrier,
+   };
+   nvk_CmdPipelineBarrier2(nvk_cmd_buffer_to_handle(cmd), &dep);
+}
+
 static inline
 uint32_t extent_size(VkExtent3D e) {
    return e.width * e.height * e.depth;
@@ -356,14 +391,60 @@ nvk_meta_copy_get_image_properties(struct nvk_image *img,
 {
    struct vk_meta_copy_image_properties props = {};
 
-   assert(!vk_format_is_depth_or_stencil(img->vk.format));
-   assert(!vk_format_get_ycbcr_info(img->vk.format));
+   const struct vk_format_ycbcr_info *ycbcr =
+      vk_format_get_ycbcr_info(img->vk.format);
+   if (vk_format_is_depth_or_stencil(img->vk.format)) {
+      switch (img->vk.format) {
+      case VK_FORMAT_S8_UINT:
+         break;
+      case VK_FORMAT_D16_UNORM:
+      case VK_FORMAT_D16_UNORM_S8_UINT:
+         props.depth.view_format = VK_FORMAT_R16_UINT;
+         props.depth.component_mask = BITFIELD_BIT(0);
+         break;
+      case VK_FORMAT_X8_D24_UNORM_PACK32:
+      case VK_FORMAT_D24_UNORM_S8_UINT:
+         props.depth.view_format = VK_FORMAT_R8G8B8A8_UINT;
+         props.depth.component_mask = BITFIELD_MASK(3);
+         break;
+      case VK_FORMAT_D32_SFLOAT:
+      case VK_FORMAT_D32_SFLOAT_S8_UINT:
+         props.depth.view_format = VK_FORMAT_R32_UINT;
+         props.depth.component_mask = BITFIELD_BIT(0);
+         break;
+      default:
+         UNREACHABLE("Invalid depth/stencil format");
+      }
 
-   unsigned blk_sz = vk_format_get_blocksize(img->vk.format);
-   props.color.view_format = vk_meta_get_uint_format_for_blk_size(blk_sz);
+      if (img->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
+         props.stencil.view_format = VK_FORMAT_R8_UINT;
+         props.stencil.component_mask = BITFIELD_BIT(0);
+         if (!img->separate_zs &&
+             (img->vk.aspects & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+            if (img->vk.format == VK_FORMAT_D24_UNORM_S8_UINT) {
+               props.stencil.view_format = VK_FORMAT_R8G8B8A8_UINT;
+               props.stencil.component_mask = BITFIELD_BIT(3);
+            } else {
+               assert(img->vk.format == VK_FORMAT_D32_SFLOAT_S8_UINT);
+               props.depth.view_format = VK_FORMAT_R32G32_UINT;
+               props.stencil.view_format = VK_FORMAT_R32G32_UINT;
+               props.stencil.component_mask = BITFIELD_BIT(1);
+            }
+         }
+      }
+   } else if (ycbcr) {
+      for (uint32_t p = 0; p < ycbcr->n_planes; p++) {
+         props.plane[p].view_format = vk_meta_get_uint_format_for_blk_size(
+            vk_format_get_blocksize(ycbcr->planes[p].format));
+      }
+   } else {
+      props.color.view_format = vk_meta_get_uint_format_for_blk_size(
+         vk_format_get_blocksize(img->vk.format));
+   }
 
    const struct nvk_image_plane *plane = &img->planes[0];
    const struct nil_image *nil_image = &plane->nil;
+   const unsigned blk_sz = util_format_get_blocksize(nil_image->format.p_format);
 
    const struct nil_image_level *level =
       &nil_image->levels[0];
@@ -400,6 +481,364 @@ nvk_meta_copy_get_image_properties(struct nvk_image *img,
    return props;
 }
 
+struct nvk_meta_raw_depth_key {
+   uint32_t type;
+   uint8_t src_dim;
+   uint8_t dst_dim;
+   bool preserve_stencil;
+   nil_sample_layout sample_layout;
+   uint32_t unorm_depth;
+};
+
+struct nvk_meta_raw_depth_push {
+   uint64_t src_addr;
+   uint64_t dst_addr;
+   uint64_t image_stride;
+   uint32_t row_stride;
+   uint32_t src_offset[3];
+   uint32_t dst_offset[3];
+   uint32_t extent[3];
+};
+
+static bool
+nvk_meta_copy_raw_depth(struct nvk_cmd_buffer *cmd, const struct nvk_image *image)
+{
+   return nvk_meta_copy_requires_compute(cmd) &&
+          (image->vk.format == VK_FORMAT_X8_D24_UNORM_PACK32 ||
+           image->vk.format == VK_FORMAT_D24_UNORM_S8_UINT);
+}
+
+static nir_def *
+nvk_meta_raw_depth_load_push(nir_builder *b, unsigned components,
+                              unsigned bits, unsigned offset)
+{
+   return nir_load_push_constant(b, components, bits, nir_imm_int(b, offset));
+}
+
+static nir_deref_instr *
+nvk_meta_raw_depth_image(nir_builder *b, unsigned binding, unsigned dim,
+                           bool unorm_depth)
+{
+   const enum glsl_sampler_dim sampler_dim =
+      dim == 1 ? GLSL_SAMPLER_DIM_1D :
+      dim == 2 ? GLSL_SAMPLER_DIM_2D : GLSL_SAMPLER_DIM_3D;
+   const struct glsl_type *type =
+      glsl_image_type(sampler_dim, dim != 3,
+                      unorm_depth ? GLSL_TYPE_FLOAT : GLSL_TYPE_UINT);
+   nir_variable *var =
+      nir_variable_create(b->shader, nir_var_uniform, type, "raw_depth");
+   var->data.descriptor_set = 0;
+   var->data.binding = binding;
+   var->data.image.format = unorm_depth ? PIPE_FORMAT_R32_FLOAT :
+                                         PIPE_FORMAT_R32_UINT;
+   return nir_build_deref_var(b, var);
+}
+
+static nir_def *
+nvk_meta_raw_depth_coords(nir_builder *b, nir_def *id, unsigned offset,
+                           unsigned dim, nil_sample_layout layout,
+                           unsigned sample)
+{
+   nir_def *origin = nvk_meta_raw_depth_load_push(b, 3, 32, offset);
+   nir_def *pos = nir_iadd(b, id, origin);
+   const struct nil_Extent4D_Samples grid = nil_px_extent_sa(layout);
+   const struct nil_sample_offset loc = nil_sample_offset(layout, sample);
+   nir_def *x = nir_imul_imm(b, nir_channel(b, pos, 0), grid.width);
+   x = nir_iadd_imm(b, x, loc.x);
+   nir_def *y = nir_imul_imm(b, nir_channel(b, pos, 1), grid.height);
+   y = nir_iadd_imm(b, y, loc.y);
+   nir_def *z = nir_channel(b, pos, 2);
+   return dim == 1 ? nir_vec4(b, x, z, nir_imm_int(b, 0), nir_imm_int(b, 0)) :
+                     nir_vec4(b, x, y, z, nir_imm_int(b, 0));
+}
+
+static nir_def *
+nvk_meta_raw_depth_address(nir_builder *b, nir_def *id, unsigned offset)
+{
+   nir_def *address = nvk_meta_raw_depth_load_push(b, 1, 64, offset);
+   nir_def *row_stride = nvk_meta_raw_depth_load_push(
+      b, 1, 32, offsetof(struct nvk_meta_raw_depth_push, row_stride));
+   nir_def *image_stride = nvk_meta_raw_depth_load_push(
+      b, 1, 64, offsetof(struct nvk_meta_raw_depth_push, image_stride));
+   nir_def *x = nir_imul_imm(b, nir_u2u64(b, nir_channel(b, id, 0)), 4);
+   nir_def *y = nir_imul(b, nir_u2u64(b, nir_channel(b, id, 1)),
+                           nir_u2u64(b, row_stride));
+   nir_def *z = nir_imul(b, nir_u2u64(b, nir_channel(b, id, 2)), image_stride);
+   return nir_iadd(b, address, nir_iadd(b, x, nir_iadd(b, y, z)));
+}
+
+static nir_shader *
+nvk_meta_raw_depth_shader(const struct nvk_meta_raw_depth_key *key)
+{
+   nir_builder builder = nir_builder_init_simple_shader(
+      MESA_SHADER_COMPUTE, NULL, "nvk-meta-copy-raw-depth");
+   nir_builder *b = &builder;
+   b->fp_math_ctrl = nir_fp_exact;
+   b->shader->info.workgroup_size[0] = 32;
+   b->shader->info.workgroup_size[1] = 4;
+   b->shader->info.workgroup_size[2] = 1;
+
+   nir_deref_instr *src = key->src_dim ?
+      nvk_meta_raw_depth_image(b, 0, key->src_dim, key->unorm_depth) : NULL;
+   nir_deref_instr *dst = key->dst_dim ?
+      nvk_meta_raw_depth_image(b, 1, key->dst_dim, false) : NULL;
+   nir_def *id = nir_load_global_invocation_id(b, 32);
+   nir_def *extent = nvk_meta_raw_depth_load_push(
+      b, 3, 32, offsetof(struct nvk_meta_raw_depth_push, extent));
+   nir_push_if(b, nir_ball(b, nir_ult(b, id, extent)));
+
+   const enum glsl_sampler_dim src_dim =
+      key->src_dim == 1 ? GLSL_SAMPLER_DIM_1D :
+      key->src_dim == 2 ? GLSL_SAMPLER_DIM_2D : GLSL_SAMPLER_DIM_3D;
+   const enum glsl_sampler_dim dst_dim =
+      key->dst_dim == 1 ? GLSL_SAMPLER_DIM_1D :
+      key->dst_dim == 2 ? GLSL_SAMPLER_DIM_2D : GLSL_SAMPLER_DIM_3D;
+   for (unsigned sample = 0;
+        sample < nil_sample_layout_samples(key->sample_layout); sample++) {
+      nir_def *value;
+      if (src) {
+         nir_def *coords = nvk_meta_raw_depth_coords(
+            b, id, offsetof(struct nvk_meta_raw_depth_push, src_offset),
+            key->src_dim, key->sample_layout, sample);
+         if (key->unorm_depth) {
+            value = nir_image_deref_load(
+               b, 1, 32, &src->def, coords, nir_imm_int(b, 0), nir_imm_int(b, 0),
+               .image_dim = src_dim, .image_array = key->src_dim != 3,
+               .format = PIPE_FORMAT_R32_FLOAT, .dest_type = nir_type_float32);
+            value = nir_fround_even(b, nir_fmul_imm(b, value, 16777215.0));
+            value = nir_f2u32(b, value);
+         } else {
+            value = nir_image_deref_load_raw_nv(
+               b, 1, &src->def, coords, nir_imm_int(b, 0), nir_imm_int(b, 0),
+               .image_dim = src_dim, .image_array = key->src_dim != 3,
+               .format = PIPE_FORMAT_R32_UINT, .dest_type = nir_type_uint32);
+         }
+      } else {
+         nir_def *address = nvk_meta_raw_depth_address(
+            b, id, offsetof(struct nvk_meta_raw_depth_push, src_addr));
+         value = nir_load_global(b, 1, 32, address, .align_mul = 4);
+      }
+
+      if (dst) {
+         nir_def *coords = nvk_meta_raw_depth_coords(
+            b, id, offsetof(struct nvk_meta_raw_depth_push, dst_offset),
+            key->dst_dim, key->sample_layout, sample);
+         if (key->unorm_depth || key->preserve_stencil) {
+            for (unsigned byte = 0; byte < 3; byte++) {
+               nir_def *byte_x = nir_imul_imm(b, nir_channel(b, coords, 0), 4);
+               nir_def *byte_coords = nir_vector_insert_imm(
+                  b, coords, nir_iadd_imm(b, byte_x, byte), 0);
+               nir_def *byte_value = nir_ushr_imm(b, value, byte * 8);
+               nir_image_deref_store_raw_nv(
+                  b, &dst->def, byte_coords, nir_imm_int(b, 0), byte_value,
+                  nir_imm_int(b, 0), .image_dim = dst_dim,
+                  .image_array = key->dst_dim != 3,
+                  .format = PIPE_FORMAT_R8_UINT, .src_type = nir_type_uint32);
+            }
+         } else {
+            nir_image_deref_store_raw_nv(
+               b, &dst->def, coords, nir_imm_int(b, 0), value,
+               nir_imm_int(b, 0), .image_dim = dst_dim,
+               .image_array = key->dst_dim != 3,
+               .format = PIPE_FORMAT_R32_UINT, .src_type = nir_type_uint32);
+         }
+      } else {
+         nir_def *address = nvk_meta_raw_depth_address(
+            b, id, offsetof(struct nvk_meta_raw_depth_push, dst_addr));
+         nir_store_global(b, value, address, .align_mul = 4);
+      }
+   }
+   nir_pop_if(b, NULL);
+   return b->shader;
+}
+
+static VkResult
+nvk_meta_raw_depth_pipeline(struct nvk_device *dev,
+                              const struct nvk_meta_raw_depth_key *key,
+                              VkPipelineLayout *layout, VkPipeline *pipeline)
+{
+   const uint32_t layout_key = VK_META_OBJECT_KEY_DRIVER_OFFSET + 40;
+   const VkDescriptorSetLayoutBinding bindings[] = {
+      { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+      { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+   };
+   const VkDescriptorSetLayoutCreateInfo set_info = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+      .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR,
+      .bindingCount = ARRAY_SIZE(bindings),
+      .pBindings = bindings,
+   };
+   const VkPushConstantRange push_range = {
+      .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+      .size = sizeof(struct nvk_meta_raw_depth_push),
+   };
+   VkResult result = vk_meta_get_pipeline_layout(
+      &dev->vk, &dev->meta, &set_info, &push_range,
+      &layout_key, sizeof(layout_key), layout);
+   if (result != VK_SUCCESS)
+      return result;
+
+   *pipeline = vk_meta_lookup_pipeline(&dev->meta, key, sizeof(*key));
+   if (*pipeline != VK_NULL_HANDLE)
+      return VK_SUCCESS;
+
+   const VkPipelineShaderStageNirCreateInfoMESA nir_info = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_NIR_CREATE_INFO_MESA,
+      .nir = nvk_meta_raw_depth_shader(key),
+   };
+   const VkComputePipelineCreateInfo pipeline_info = {
+      .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+      .stage = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .pNext = &nir_info,
+         .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+         .pName = "main",
+      },
+      .layout = *layout,
+   };
+   result = vk_meta_create_compute_pipeline(
+      &dev->vk, &dev->meta, &pipeline_info, key, sizeof(*key), pipeline);
+   ralloc_free(nir_info.nir);
+   return result;
+}
+
+static VkResult
+nvk_meta_raw_depth_view(struct nvk_cmd_buffer *cmd, struct nvk_image *image,
+                          const VkImageSubresourceLayers *subres,
+                          bool raw_store, VkImageView *view)
+{
+   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+   const VkImageViewUsageCreateInfo usage = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
+      .usage = VK_IMAGE_USAGE_STORAGE_BIT,
+   };
+   const VkImageViewCreateInfo info = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+      .pNext = &usage,
+      .flags = VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA,
+      .image = nvk_image_to_handle(image),
+      .viewType = vk_image_sampled_view_type(&image->vk),
+      .format = raw_store ? VK_FORMAT_R32_UINT : image->vk.format,
+      .subresourceRange = {
+         .aspectMask = raw_store ? VK_IMAGE_ASPECT_COLOR_BIT :
+                                  VK_IMAGE_ASPECT_DEPTH_BIT,
+         .baseMipLevel = subres->mipLevel,
+         .levelCount = 1,
+         .layerCount = image->vk.array_layers,
+      },
+   };
+   return vk_meta_create_image_view(&cmd->vk, &dev->meta, &info, view);
+}
+
+static void
+nvk_meta_raw_depth_dispatch(struct nvk_cmd_buffer *cmd,
+                              struct nvk_image *src,
+                              const VkImageSubresourceLayers *src_subres,
+                              VkImageLayout src_layout, struct nvk_image *dst,
+                              const VkImageSubresourceLayers *dst_subres,
+                              VkImageLayout dst_layout,
+                              const struct nvk_meta_raw_depth_push *push)
+{
+   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+   const struct vk_device_dispatch_table *disp = &dev->vk.dispatch_table;
+   struct nvk_image *image = src ? src : dst;
+   const struct nvk_meta_raw_depth_key key = {
+      .type = VK_META_OBJECT_KEY_DRIVER_OFFSET + 41,
+      .src_dim = src ? src->vk.image_type + 1 : 0,
+      .dst_dim = dst ? dst->vk.image_type + 1 : 0,
+      .preserve_stencil = dst && !dst->separate_zs &&
+                         (dst->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT),
+      .sample_layout = image->planes[0].nil.sample_layout,
+      .unorm_depth = image->vk.format == VK_FORMAT_X8_D24_UNORM_PACK32 ||
+                     image->vk.format == VK_FORMAT_D24_UNORM_S8_UINT,
+   };
+   VkPipelineLayout layout;
+   VkPipeline pipeline;
+   VkResult result = nvk_meta_raw_depth_pipeline(dev, &key, &layout, &pipeline);
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmd->vk, result);
+      return;
+   }
+
+   struct nvk_image *images[] = { src, dst };
+   const VkImageSubresourceLayers *subres[] = { src_subres, dst_subres };
+   const VkImageLayout layouts[] = { src_layout, dst_layout };
+   VkDescriptorImageInfo image_info[2] = {};
+   VkWriteDescriptorSet writes[2] = {};
+   uint32_t write_count = 0;
+   for (unsigned i = 0; i < 2; i++) {
+      if (!images[i])
+         continue;
+      result = nvk_meta_raw_depth_view(cmd, images[i], subres[i], i == 1,
+                                       &image_info[i].imageView);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return;
+      }
+      image_info[i].imageLayout = layouts[i];
+      writes[write_count++] = (VkWriteDescriptorSet) {
+         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstBinding = i,
+         .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+         .pImageInfo = &image_info[i],
+      };
+   }
+
+   const VkCommandBuffer command_buffer = nvk_cmd_buffer_to_handle(cmd);
+   disp->CmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+   disp->CmdPushDescriptorSetKHR(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                 layout, 0, write_count, writes);
+   disp->CmdPushConstants(command_buffer, layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                          0, sizeof(*push), push);
+   nvk_CmdDispatchBase(command_buffer, 0, 0, 0,
+                       DIV_ROUND_UP(push->extent[0], 32),
+                       DIV_ROUND_UP(push->extent[1], 4), push->extent[2]);
+}
+
+static void
+nvk_meta_raw_depth_set_offset(uint32_t out[3], const struct nvk_image *image,
+                               const VkImageSubresourceLayers *subres,
+                               VkOffset3D offset)
+{
+   out[0] = offset.x;
+   out[1] = offset.y;
+   out[2] = image->vk.image_type == VK_IMAGE_TYPE_3D ?
+               offset.z : subres->baseArrayLayer;
+}
+
+static void
+nvk_meta_raw_depth_memory_region(struct nvk_cmd_buffer *cmd,
+                                  struct nvk_image *image,
+                                  const VkDeviceMemoryImageCopyKHR *region,
+                                  bool to_image)
+{
+   const struct vk_image_buffer_layout buffer_layout =
+      vk_image_memory_copy_layout(&image->vk, region);
+   const VkExtent3D extent =
+      vk_image_sanitize_extent(&image->vk, region->imageExtent);
+   struct nvk_meta_raw_depth_push push = {
+      .src_addr = region->addressRange.address,
+      .dst_addr = region->addressRange.address,
+      .image_stride = buffer_layout.image_stride_B,
+      .row_stride = buffer_layout.row_stride_B,
+      .extent = {
+         extent.width, extent.height,
+         image->vk.image_type == VK_IMAGE_TYPE_3D ? extent.depth :
+            vk_image_subresource_layer_count(&image->vk,
+                                             &region->imageSubresource),
+      },
+   };
+   nvk_meta_raw_depth_set_offset(to_image ? push.dst_offset : push.src_offset,
+      image, &region->imageSubresource, region->imageOffset);
+   nvk_meta_raw_depth_dispatch(cmd,
+      to_image ? NULL : image, &region->imageSubresource, region->imageLayout,
+      to_image ? image : NULL, &region->imageSubresource, region->imageLayout,
+      &push);
+}
+
 static void
 nvk_cmd_copy_image_to_memory_meta(struct nvk_cmd_buffer *cmd,
                                   const VkCopyDeviceMemoryImageInfoKHR *pCopyMemoryInfo)
@@ -412,8 +851,23 @@ nvk_cmd_copy_image_to_memory_meta(struct nvk_cmd_buffer *cmd,
 
    struct nvk_meta_save_compute save;
    nvk_meta_begin_compute(cmd, &save);
-   vk_meta_copy_image_to_memory(&cmd->vk, &dev->meta, pCopyMemoryInfo,
-                                &src_img_props);
+   if (nvk_meta_copy_raw_depth(cmd, src)) {
+      VkCopyDeviceMemoryImageInfoKHR info = *pCopyMemoryInfo;
+      info.regionCount = 1;
+      for (uint32_t i = 0; i < pCopyMemoryInfo->regionCount; i++) {
+         info.pRegions = &pCopyMemoryInfo->pRegions[i];
+         if (info.pRegions->imageSubresource.aspectMask ==
+             VK_IMAGE_ASPECT_DEPTH_BIT) {
+            nvk_meta_raw_depth_memory_region(cmd, src, info.pRegions, false);
+         } else {
+            vk_meta_copy_image_to_memory(&cmd->vk, &dev->meta, &info,
+                                         &src_img_props);
+         }
+      }
+   } else {
+      vk_meta_copy_image_to_memory(&cmd->vk, &dev->meta, pCopyMemoryInfo,
+                                   &src_img_props);
+   }
    nvk_meta_end_compute(cmd, &save);
 }
 
@@ -425,8 +879,9 @@ nvk_CmdCopyImageToMemoryKHR(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(nvk_image, src, pCopyMemoryInfo->image);
 
    VkQueueFlags queue_flags = nvk_cmd_buffer_queue_flags(cmd);
-   if ((queue_flags & VK_QUEUE_COMPUTE_BIT) &&
-       nvk_meta_image_copy_compute_supported(src)) {
+   if (nvk_meta_copy_requires_compute(cmd) ||
+       ((queue_flags & VK_QUEUE_COMPUTE_BIT) &&
+        nvk_meta_image_copy_compute_supported(src))) {
       nvk_cmd_copy_image_to_memory_meta(cmd, pCopyMemoryInfo);
    } else {
       nvk_cmd_copy_image_to_memory_ce(cmd, pCopyMemoryInfo);
@@ -446,8 +901,40 @@ nvk_cmd_copy_memory_to_image_meta(struct nvk_cmd_buffer *cmd,
 
    union nvk_meta_save_generic save;
    nvk_meta_begin_generic(cmd, &save, engine);
-   vk_meta_copy_memory_to_image(&cmd->vk, &dev->meta, pCopyMemoryInfo,
-                                &dst_img_props, engine);
+   const bool interleaved_zs = !dst->separate_zs &&
+      dst->vk.aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+   if (nvk_meta_copy_raw_depth(cmd, dst)) {
+      VkCopyDeviceMemoryImageInfoKHR info = *pCopyMemoryInfo;
+      info.regionCount = 1;
+      for (uint32_t i = 0; i < pCopyMemoryInfo->regionCount; i++) {
+         info.pRegions = &pCopyMemoryInfo->pRegions[i];
+         if (interleaved_zs && i > 0 &&
+             info.pRegions->imageSubresource.aspectMask !=
+             pCopyMemoryInfo->pRegions[i - 1].imageSubresource.aspectMask)
+            nvk_meta_copy_aspect_barrier(cmd);
+         if (info.pRegions->imageSubresource.aspectMask ==
+             VK_IMAGE_ASPECT_DEPTH_BIT) {
+            nvk_meta_raw_depth_memory_region(cmd, dst, info.pRegions, true);
+         } else {
+            vk_meta_copy_memory_to_image(&cmd->vk, &dev->meta, &info,
+                                         &dst_img_props, engine);
+         }
+      }
+   } else if (interleaved_zs && engine == VK_PIPELINE_BIND_POINT_COMPUTE) {
+      VkCopyDeviceMemoryImageInfoKHR info = *pCopyMemoryInfo;
+      info.regionCount = 1;
+      for (uint32_t i = 0; i < pCopyMemoryInfo->regionCount; i++) {
+         info.pRegions = &pCopyMemoryInfo->pRegions[i];
+         if (i > 0 && info.pRegions->imageSubresource.aspectMask !=
+                      pCopyMemoryInfo->pRegions[i - 1].imageSubresource.aspectMask)
+            nvk_meta_copy_aspect_barrier(cmd);
+         vk_meta_copy_memory_to_image(&cmd->vk, &dev->meta, &info,
+                                      &dst_img_props, engine);
+      }
+   } else {
+      vk_meta_copy_memory_to_image(&cmd->vk, &dev->meta, pCopyMemoryInfo,
+                                   &dst_img_props, engine);
+   }
    nvk_meta_end_generic(cmd, &save, engine);
 }
 
@@ -459,8 +946,11 @@ nvk_CmdCopyMemoryToImageKHR(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(nvk_image, dst, pCopyMemoryInfo->image);
 
    VkQueueFlags queue_flags = nvk_cmd_buffer_queue_flags(cmd);
-   if ((queue_flags & VK_QUEUE_GRAPHICS_BIT) &&
-       nvk_meta_image_copy_gfx_supported(dst)) {
+   if (nvk_meta_copy_requires_compute(cmd)) {
+      nvk_cmd_copy_memory_to_image_meta(cmd, pCopyMemoryInfo,
+                                        VK_PIPELINE_BIND_POINT_COMPUTE);
+   } else if ((queue_flags & VK_QUEUE_GRAPHICS_BIT) &&
+              nvk_meta_image_copy_gfx_supported(dst)) {
       nvk_cmd_copy_memory_to_image_meta(cmd, pCopyMemoryInfo,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS);
    } else if ((queue_flags & VK_QUEUE_COMPUTE_BIT) &&
@@ -489,8 +979,59 @@ nvk_cmd_copy_image_meta(struct nvk_cmd_buffer *cmd,
 
    union nvk_meta_save_generic save;
    nvk_meta_begin_generic(cmd, &save, engine);
-   vk_meta_copy_image(&cmd->vk, &dev->meta, pCopyImageInfo,
-                      &src_img_props, &dst_img_props, engine);
+   const bool interleaved_zs = !dst->separate_zs &&
+      dst->vk.aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+   if (nvk_meta_copy_raw_depth(cmd, src) && nvk_meta_copy_raw_depth(cmd, dst)) {
+      VkCopyImageInfo2 info = *pCopyImageInfo;
+      info.regionCount = 1;
+      for (uint32_t i = 0; i < pCopyImageInfo->regionCount; i++) {
+         VkImageCopy2 region = pCopyImageInfo->pRegions[i];
+         info.pRegions = &region;
+         if (region.srcSubresource.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) {
+            const VkExtent3D extent =
+               vk_image_sanitize_extent(&src->vk, region.extent);
+            struct nvk_meta_raw_depth_push push = {
+               .extent = {
+                  extent.width, extent.height,
+                  src->vk.image_type == VK_IMAGE_TYPE_3D ? extent.depth :
+                     vk_image_subresource_layer_count(&src->vk,
+                                                      &region.srcSubresource),
+               },
+            };
+            nvk_meta_raw_depth_set_offset(push.src_offset, src,
+               &region.srcSubresource, region.srcOffset);
+            nvk_meta_raw_depth_set_offset(push.dst_offset, dst,
+               &region.dstSubresource, region.dstOffset);
+            if (interleaved_zs && i > 0)
+               nvk_meta_copy_aspect_barrier(cmd);
+            nvk_meta_raw_depth_dispatch(cmd, src, &region.srcSubresource,
+               info.srcImageLayout, dst, &region.dstSubresource,
+               info.dstImageLayout, &push);
+            region.srcSubresource.aspectMask &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
+            region.dstSubresource.aspectMask &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
+            if (interleaved_zs && region.srcSubresource.aspectMask)
+               nvk_meta_copy_aspect_barrier(cmd);
+         }
+         if (region.srcSubresource.aspectMask) {
+            vk_meta_copy_image(&cmd->vk, &dev->meta, &info,
+                               &src_img_props, &dst_img_props, engine);
+         }
+      }
+   } else if (interleaved_zs && engine == VK_PIPELINE_BIND_POINT_COMPUTE) {
+      VkCopyImageInfo2 info = *pCopyImageInfo;
+      info.regionCount = 1;
+      for (uint32_t i = 0; i < pCopyImageInfo->regionCount; i++) {
+         info.pRegions = &pCopyImageInfo->pRegions[i];
+         if (i > 0 && info.pRegions->dstSubresource.aspectMask !=
+                      pCopyImageInfo->pRegions[i - 1].dstSubresource.aspectMask)
+            nvk_meta_copy_aspect_barrier(cmd);
+         vk_meta_copy_image(&cmd->vk, &dev->meta, &info,
+                            &src_img_props, &dst_img_props, engine);
+      }
+   } else {
+      vk_meta_copy_image(&cmd->vk, &dev->meta, pCopyImageInfo,
+                         &src_img_props, &dst_img_props, engine);
+   }
    nvk_meta_end_generic(cmd, &save, engine);
 }
 
@@ -503,9 +1044,12 @@ nvk_CmdCopyImage2(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(nvk_image, dst, pCopyImageInfo->dstImage);
 
    VkQueueFlags queue_flags = nvk_cmd_buffer_queue_flags(cmd);
-   if ((queue_flags & VK_QUEUE_GRAPHICS_BIT) &&
-       nvk_meta_image_copy_gfx_supported(src) &&
-       nvk_meta_image_copy_gfx_supported(dst)) {
+   if (nvk_meta_copy_requires_compute(cmd)) {
+      nvk_cmd_copy_image_meta(cmd, pCopyImageInfo,
+                              VK_PIPELINE_BIND_POINT_COMPUTE);
+   } else if ((queue_flags & VK_QUEUE_GRAPHICS_BIT) &&
+              nvk_meta_image_copy_gfx_supported(src) &&
+              nvk_meta_image_copy_gfx_supported(dst)) {
       nvk_cmd_copy_image_meta(cmd, pCopyImageInfo,
                               VK_PIPELINE_BIND_POINT_GRAPHICS);
    } else if ((queue_flags & VK_QUEUE_COMPUTE_BIT) &&

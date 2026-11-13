@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "nvk_device.h"
+#include "nvk_acceleration_structure.h"
 
 #include "nvk_cmd_buffer.h"
 #include "nvk_entrypoints.h"
@@ -14,7 +15,9 @@
 #include "nvkmd/nvkmd.h"
 
 #include "vk_common_entrypoints.h"
+#ifndef _WIN32
 #include "vk_drm_syncobj.h"
+#endif
 #include "vk_pipeline_cache.h"
 #include "vk_debug_utils.h"
 #include "util/u_printf.h"
@@ -56,6 +59,42 @@ nvk_slm_area_get_mem_ref(struct nvk_slm_area *area,
    return mem;
 }
 
+struct nvk_slm_layout
+nvk_slm_layout_calculate(const struct nv_device_info *info,
+                          uint32_t slm_bytes_per_lane,
+                          uint32_t crs_bytes_per_warp)
+{
+   assert(slm_bytes_per_lane < (1 << 24));
+   assert(crs_bytes_per_warp <= (1 << 20));
+   uint64_t bytes_per_warp = (uint64_t)slm_bytes_per_lane * 32 + crs_bytes_per_warp;
+
+   /* The hardware seems to require this alignment for
+    * NV9097_SET_SHADER_LOCAL_MEMORY_E_DEFAULT_SIZE_PER_WARP
+    */
+   bytes_per_warp = align64(bytes_per_warp, 0x200);
+
+   uint64_t bytes_per_mp = bytes_per_warp * info->max_warps_per_mp;
+   uint64_t bytes_per_tpc = bytes_per_mp * info->mp_per_tpc;
+
+   /* The hardware seems to require this alignment for
+    * NVA0C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A_SIZE_LOWER.
+    */
+   bytes_per_tpc = align64(bytes_per_tpc, 0x8000);
+
+   uint64_t size = bytes_per_tpc * info->tpc_count;
+
+   /* The hardware seems to require this alignment for
+    * NV9097_SET_SHADER_LOCAL_MEMORY_D_SIZE_LOWER.
+    */
+   size = align64(size, 0x20000);
+
+   return (struct nvk_slm_layout) {
+      .bytes_per_warp = bytes_per_warp,
+      .bytes_per_tpc = bytes_per_tpc,
+      .size = size,
+   };
+}
+
 static VkResult
 nvk_slm_area_ensure(struct nvk_device *dev,
                     struct nvk_slm_area *area,
@@ -64,23 +103,8 @@ nvk_slm_area_ensure(struct nvk_device *dev,
 {
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
    VkResult result;
-
-   assert(slm_bytes_per_lane < (1 << 24));
-   assert(crs_bytes_per_warp <= (1 << 20));
-   uint64_t bytes_per_warp = slm_bytes_per_lane * 32 + crs_bytes_per_warp;
-
-   /* The hardware seems to require this alignment for
-    * NV9097_SET_SHADER_LOCAL_MEMORY_E_DEFAULT_SIZE_PER_WARP
-    */
-   bytes_per_warp = align64(bytes_per_warp, 0x200);
-
-   uint64_t bytes_per_mp = bytes_per_warp * pdev->info.max_warps_per_mp;
-   uint64_t bytes_per_tpc = bytes_per_mp * pdev->info.mp_per_tpc;
-
-   /* The hardware seems to require this alignment for
-    * NVA0C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A_SIZE_LOWER.
-    */
-   bytes_per_tpc = align64(bytes_per_tpc, 0x8000);
+   struct nvk_slm_layout layout = nvk_slm_layout_calculate(&pdev->info,
+      slm_bytes_per_lane, crs_bytes_per_warp);
 
    /* nvk_slm_area::bytes_per_mp only ever increases so we can check this
     * outside the lock and exit early in the common case.  We only need to
@@ -89,33 +113,26 @@ nvk_slm_area_ensure(struct nvk_device *dev,
     * Also, we only care about bytes_per_mp and not bytes_per_warp because
     * they are integer multiples of each other.
     */
-   if (likely(bytes_per_tpc <= area->bytes_per_tpc))
+   if (likely(layout.bytes_per_tpc <= area->bytes_per_tpc))
       return VK_SUCCESS;
 
-   uint64_t size = bytes_per_tpc * pdev->info.tpc_count;
-
-   /* The hardware seems to require this alignment for
-    * NV9097_SET_SHADER_LOCAL_MEMORY_D_SIZE_LOWER.
-    */
-   size = align64(size, 0x20000);
-
    struct nvkmd_mem *mem;
-   result = nvkmd_dev_alloc_mem(dev->nvkmd, &dev->vk.base, size, 0,
+   result = nvkmd_dev_alloc_mem(dev->nvkmd, &dev->vk.base, layout.size, 0,
                                 NVKMD_MEM_LOCAL, &mem);
    if (result != VK_SUCCESS)
       return result;
 
    struct nvkmd_mem *unref_mem;
    simple_mtx_lock(&area->mutex);
-   if (bytes_per_tpc <= area->bytes_per_tpc) {
+   if (layout.bytes_per_tpc <= area->bytes_per_tpc) {
       /* We lost the race, throw away our BO */
-      assert(area->bytes_per_warp >= bytes_per_warp);
+      assert(area->bytes_per_warp >= layout.bytes_per_warp);
       unref_mem = mem;
    } else {
       unref_mem = area->mem;
       area->mem = mem;
-      area->bytes_per_warp = bytes_per_warp;
-      area->bytes_per_tpc = bytes_per_tpc;
+      area->bytes_per_warp = layout.bytes_per_warp;
+      area->bytes_per_tpc = layout.bytes_per_tpc;
    }
    simple_mtx_unlock(&area->mutex);
 
@@ -200,6 +217,11 @@ init_app_workarounds_entrypoints(struct nvk_device *device, struct dispatch_tabl
    const struct nvk_physical_device *pdev = nvk_device_physical(device);
    const struct nvk_instance *instance = nvk_physical_device_instance(pdev);
    struct vk_device_entrypoint_table table = {0};
+#ifdef _MSC_VER
+   PFN_vkVoidFunction *entries = (PFN_vkVoidFunction *)&table;
+   for (unsigned i = 0; i < sizeof(table) / sizeof(*entries); i++)
+      entries[i] = (PFN_vkVoidFunction)vk_entrypoint_stub;
+#endif
 
 #define SET_ENTRYPOINT(app_layer, entrypoint) table.entrypoint = app_layer##_##entrypoint;
    if (!strcmp(instance->drirc.debug.app_layer, "metroexodus")) {
@@ -261,7 +283,9 @@ nvk_CreateDevice(VkPhysicalDevice physicalDevice,
       dev->vk.command_buffer_ops = &nvk_cmd_buffer_ops;
 
       dev->vk.get_timestamp = nvk_device_get_timestamp;
+#ifndef _WIN32
       dev->vk.copy_sync_payloads = vk_drm_syncobj_copy_payloads;
+#endif
 
       result = nvk_upload_queue_init(dev, &dev->upload);
       if (result != VK_SUCCESS)
@@ -390,6 +414,8 @@ nvk_CreateDevice(VkPhysicalDevice physicalDevice,
       if (result != VK_SUCCESS)
          goto fail_mem_cache;
    }
+
+   nvk_device_init_accel_struct(dev);
 
    if (queue_count > 0 && NAK_CAN_PRINTF) {
       result = nvk_init_printf(dev);

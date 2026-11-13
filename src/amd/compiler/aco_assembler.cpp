@@ -1536,6 +1536,10 @@ insert_code(asm_context& ctx, std::vector<uint32_t>& out, unsigned insert_before
       if (symbol.offset >= insert_before)
          symbol.offset += insert_count;
    }
+   for (auto& info : ctx.program->debug_info) {
+      if (info.offset >= insert_before * 4)
+         info.offset += insert_count * 4;
+   }
 }
 
 static void

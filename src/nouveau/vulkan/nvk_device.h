@@ -17,6 +17,7 @@
 #include "vk_queue.h"
 
 struct nvk_physical_device;
+struct nv_device_info;
 struct nvkmd_dev;
 struct nvkmd_mem;
 struct vk_pipeline_cache;
@@ -37,6 +38,17 @@ struct nvk_slm_area {
    uint32_t bytes_per_warp;
    uint32_t bytes_per_tpc;
 };
+
+struct nvk_slm_layout {
+   uint64_t bytes_per_warp;
+   uint64_t bytes_per_tpc;
+   uint64_t size;
+};
+
+struct nvk_slm_layout
+nvk_slm_layout_calculate(const struct nv_device_info *info,
+                          uint32_t slm_bytes_per_lane,
+                          uint32_t crs_bytes_per_warp);
 
 struct nvkmd_mem *
 nvk_slm_area_get_mem_ref(struct nvk_slm_area *area,

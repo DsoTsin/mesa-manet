@@ -1651,6 +1651,9 @@ var_decoration_cb(struct vtn_builder *b, struct vtn_value *val, int member,
    case SpvDecorationInputAttachmentIndex:
       vtn_var->input_attachment_index = dec->operands[0];
       return;
+   case SpvDecorationHitObjectShaderRecordBufferNV:
+   case SpvDecorationHitObjectShaderRecordBufferEXT:
+      return;
    case SpvDecorationAlignment:
       var_set_alignment(b, vtn_var, dec->operands[0]);
       break;
@@ -1905,6 +1908,11 @@ vtn_storage_class_to_mode(struct vtn_builder *b,
    case SpvStorageClassIncomingRayPayloadKHR:
       mode = vtn_variable_mode_ray_payload_in;
       nir_mode = nir_var_shader_call_data;
+      break;
+   case SpvStorageClassHitObjectAttributeNV:
+   case SpvStorageClassHitObjectAttributeEXT:
+      mode = vtn_variable_mode_private;
+      nir_mode = nir_var_shader_temp;
       break;
    case SpvStorageClassHitAttributeKHR:
       mode = vtn_variable_mode_hit_attrib;

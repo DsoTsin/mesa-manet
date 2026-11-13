@@ -55,7 +55,7 @@ struct nvk_physical_device {
    uint8_t mem_heap_count;
    uint8_t mem_type_count;
 
-   struct nvk_queue_family queue_families[3];
+   struct nvk_queue_family queue_families[4];
    uint8_t queue_family_count;
 };
 
@@ -97,6 +97,14 @@ VkResult nvk_create_drm_physical_device(struct vk_instance *vk_instance,
                                         struct _drmDevice *drm_device,
                                         struct vk_physical_device **pdev_out);
 
+VkResult nvk_create_physical_device_for_nvkmd(struct vk_instance *instance,
+                                            struct nvkmd_pdev *nvkmd,
+                                            struct vk_physical_device **out);
+
+#ifdef _WIN32
+VkResult nvk_enumerate_wddm_physical_devices(struct vk_instance *instance);
+#endif
+
 void nvk_physical_device_destroy(struct vk_physical_device *vk_device);
 
 VkExtent2D nvk_max_shading_rate(const struct nvk_physical_device *pdev,
@@ -105,7 +113,8 @@ VkExtent2D nvk_max_shading_rate(const struct nvk_physical_device *pdev,
 #if defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
     defined(VK_USE_PLATFORM_XCB_KHR) || \
     defined(VK_USE_PLATFORM_XLIB_KHR) || \
-    defined(VK_USE_PLATFORM_DISPLAY_KHR)
+    defined(VK_USE_PLATFORM_DISPLAY_KHR) || \
+    defined(VK_USE_PLATFORM_WIN32_KHR)
 #define NVK_USE_WSI_PLATFORM
 #endif
 

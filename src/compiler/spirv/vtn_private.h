@@ -284,6 +284,7 @@ enum vtn_base_type {
    vtn_base_type_tensor_view,
    vtn_base_type_buffer,
    vtn_base_type_tensor,
+   vtn_base_type_hit_object,
 };
 
 struct vtn_type {

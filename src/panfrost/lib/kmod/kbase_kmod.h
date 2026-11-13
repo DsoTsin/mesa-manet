@@ -32,6 +32,8 @@ uint32_t kbase_kmod_get_flush_id(const struct pan_kmod_dev *dev);
 /* True when this kbase context can allocate dma-bufs for sharing with WSI. */
 bool kbase_kmod_supports_dmabuf(const struct pan_kmod_dev *dev);
 
+void kbase_kmod_register_thread(const struct pan_kmod_dev *dev);
+
 /* CSF queue group / queue / tiler heap primitives (CSF only).
  *
  * A queue is a ring buffer in a GPU BO: bind it to a group at a CS index,

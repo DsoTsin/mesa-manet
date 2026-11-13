@@ -743,6 +743,10 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_image_deref_load:
    case nir_intrinsic_bindless_image_load:
    case nir_intrinsic_image_heap_load:
+   case nir_intrinsic_image_load_raw_nv:
+   case nir_intrinsic_image_deref_load_raw_nv:
+   case nir_intrinsic_bindless_image_load_raw_nv:
+   case nir_intrinsic_image_heap_load_raw_nv:
    case nir_intrinsic_image_sparse_load:
    case nir_intrinsic_image_deref_sparse_load:
    case nir_intrinsic_bindless_image_sparse_load:
@@ -1107,6 +1111,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_report_ray_intersection:
    case nir_intrinsic_rq_proceed:
    case nir_intrinsic_rq_load:
+   case nir_intrinsic_ttu_load_nv:
    case nir_intrinsic_load_ray_triangle_vertex_positions:
    case nir_intrinsic_cmat_extract:
    case nir_intrinsic_cmat_muladd_amd:

@@ -15,10 +15,13 @@ struct nouveau_ws_bo;
 struct nouveau_ws_context;
 struct novueau_ws_push;
 struct nvk_device;
+struct nvk_physical_device;
 struct nvkmd_mem;
 struct nvkmd_ctx;
 
 struct nvk_queue_state {
+   uint32_t shader_upload_seq;
+
    struct {
       uint32_t alloc_count;
    } images;
@@ -59,27 +62,9 @@ nvk_queue_device(struct nvk_queue *queue)
    return (struct nvk_device *)queue->vk.base.device;
 }
 
-static inline enum nvkmd_engines
-nvk_queue_engines_from_queue_flags(VkQueueFlags queue_flags)
-{
-   enum nvkmd_engines engines = 0;
-   if (queue_flags & VK_QUEUE_GRAPHICS_BIT) {
-      engines |= NVKMD_ENGINE_3D;
-      /* We rely on compute shaders for queries */
-      engines |= NVKMD_ENGINE_COMPUTE;
-   }
-   if (queue_flags & VK_QUEUE_COMPUTE_BIT) {
-      engines |= NVKMD_ENGINE_COMPUTE;
-      /* We currently rely on 3D engine MMEs for indirect dispatch */
-      engines |= NVKMD_ENGINE_3D;
-   }
-   if (queue_flags & VK_QUEUE_TRANSFER_BIT)
-      engines |= NVKMD_ENGINE_COPY;
-   if (queue_flags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
-      engines |= NVKMD_ENGINE_VDEC;
-
-   return engines;
-}
+enum nvkmd_engines
+nvk_queue_engines_from_queue_flags(const struct nvk_physical_device *pdev,
+                                  VkQueueFlags queue_flags);
 
 static inline uint8_t
 nvk_queue_subchannels_from_engines(enum nvkmd_engines engines)

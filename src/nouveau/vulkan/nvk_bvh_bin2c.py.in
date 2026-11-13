@@ -1,0 +1,6 @@
+from pathlib import Path
+import sys
+
+binary = Path(sys.argv[1]).read_bytes()
+Path(sys.argv[2]).write_text("\n".join(",".join(f"0x{value:02x}" for value in binary[offset:offset + 16]) + ","
+                                     for offset in range(0, len(binary), 16)) + "\n", encoding="ascii")

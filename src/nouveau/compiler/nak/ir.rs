@@ -7541,6 +7541,26 @@ impl DisplayOp for OpS2R {
 }
 impl_display_for_op!(OpS2R);
 
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpElect {
+    #[dst_type(GPR)]
+    pub lane: Dst,
+
+    #[dst_type(Pred)]
+    pub elected: Dst,
+
+    #[src_type(Pred)]
+    pub pred: Src,
+}
+
+impl DisplayOp for OpElect {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "elect {}", self.pred)
+    }
+}
+impl_display_for_op!(OpElect);
+
 pub enum VoteOp {
     Any,
     All,
@@ -8079,6 +8099,90 @@ impl fmt::Display for OpAnnotate {
     }
 }
 
+pub struct OpTtuMacro {
+    pub dual: bool,
+    pub store_addresses: Vec<u16>,
+    pub load_addresses: Vec<u16>,
+    pub srcs: Vec<Src>,
+    pub dsts: Vec<Dst>,
+}
+
+impl OpTtuMacro {
+    pub fn validate(&self) {
+        assert!(!self.store_addresses.is_empty());
+        assert!(!self.load_addresses.is_empty());
+        assert_eq!(self.srcs.len(), self.store_addresses.len() * 3);
+        assert_eq!(self.dsts.len(), self.load_addresses.len() * 2);
+        assert!(
+            self.store_addresses.len() + self.load_addresses.len() + 1 <= 31
+        );
+        assert!(self
+            .store_addresses
+            .iter()
+            .chain(&self.load_addresses)
+            .all(|a| a & 15 == 0));
+    }
+
+    pub fn encoded_size(&self) -> usize {
+        self.validate();
+        (3 + self.store_addresses.len() + self.load_addresses.len()) * 4
+    }
+}
+
+impl SrcsAsSlice for OpTtuMacro {
+    fn srcs_as_slice(&self) -> &[Src] {
+        &self.srcs
+    }
+    fn srcs_as_mut_slice(&mut self) -> &mut [Src] {
+        &mut self.srcs
+    }
+    fn src_types(&self) -> SrcTypeList {
+        const TYPES: [SrcType; 93] = {
+            let mut types = [SrcType::GPR; 93];
+            let mut i = 0;
+            while i < 93 {
+                types[i] = SrcType::Pred;
+                i += 3;
+            }
+            types
+        };
+        SrcTypeList::Array(&TYPES[..self.srcs.len()])
+    }
+}
+
+impl DstsAsSlice for OpTtuMacro {
+    fn dsts_as_slice(&self) -> &[Dst] {
+        &self.dsts
+    }
+    fn dsts_as_mut_slice(&mut self) -> &mut [Dst] {
+        &mut self.dsts
+    }
+    fn dst_types(&self) -> DstTypeList {
+        DstTypeList::Uniform(DstType::Vec)
+    }
+}
+
+impl DisplayOp for OpTtuMacro {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ttu.macro{}", if self.dual { ".dual" } else { "" })?;
+        for (i, address) in self.store_addresses.iter().enumerate() {
+            write!(
+                f,
+                " st[0x{:x}]({},{},{})",
+                address,
+                self.srcs[i * 3],
+                self.srcs[i * 3 + 1],
+                self.srcs[i * 3 + 2]
+            )?;
+        }
+        for address in &self.load_addresses {
+            write!(f, " ld[0x{:x}]", address)?;
+        }
+        Ok(())
+    }
+}
+impl_display_for_op!(OpTtuMacro);
+
 #[derive(DisplayOp, DstsAsSlice, SrcsAsSlice, FromVariants)]
 pub enum Op {
     FAdd(Box<OpFAdd>),
@@ -8144,6 +8248,7 @@ pub enum Op {
     PSetP(Box<OpPSetP>),
     R2UR(Box<OpR2UR>),
     Redux(Box<OpRedux>),
+    TtuMacro(Box<OpTtuMacro>),
     Tex(Box<OpTex>),
     Tld(Box<OpTld>),
     Tld4(Box<OpTld4>),
@@ -8197,6 +8302,7 @@ pub enum Op {
     Nop(OpNop),
     PixLd(Box<OpPixLd>),
     S2R(Box<OpS2R>),
+    Elect(Box<OpElect>),
     Vote(Box<OpVote>),
     Match(Box<OpMatch>),
     Undef(Box<OpUndef>),
@@ -8222,6 +8328,13 @@ const _: () = {
 };
 
 impl Op {
+    pub fn is_uniform(&self) -> bool {
+        match self {
+            Op::Elect(_) => false,
+            _ => all_dsts_uniform(self.dsts_as_slice()),
+        }
+    }
+
     pub fn is_branch(&self) -> bool {
         matches!(
             self,
@@ -8320,6 +8433,8 @@ impl Op {
             // Uniform ops
             Op::R2UR(_) | Op::Redux(_) => false,
 
+            Op::TtuMacro(_) => false,
+
             // Texture ops
             Op::Tex(_)
             | Op::Tld(_)
@@ -8386,7 +8501,7 @@ impl Op {
             | Op::S2R(_)
             | Op::Match(_)
             | Op::Nanosleep(_) => false,
-            Op::Nop(_) | Op::Vote(_) => true,
+            Op::Nop(_) | Op::Vote(_) | Op::Elect(_) => true,
 
             // Virtual ops
             Op::Undef(_)
@@ -8508,6 +8623,8 @@ impl Op {
             }
             Op::Redux(_) => false,
 
+            Op::TtuMacro(_) => false,
+
             // Texture ops
             Op::Tex(_)
             | Op::Tld(_)
@@ -8573,6 +8690,7 @@ impl Op {
             | Op::Match(_)
             | Op::Nop(_)
             | Op::Vote(_)
+            | Op::Elect(_)
             | Op::Nanosleep(_) => false,
 
             // Virtual ops
@@ -8915,7 +9033,8 @@ impl Instr {
             Op::Atom(op) => op.mem_space != MemSpace::Local,
             Op::Ld(op) => op.access.space != MemSpace::Local,
             Op::St(op) => op.access.space != MemSpace::Local,
-            Op::SuAtom(_)
+            Op::TtuMacro(_)
+            | Op::SuAtom(_)
             | Op::SuLd(_)
             | Op::SuSt(_)
             | Op::SuLdGa(_)
@@ -8935,7 +9054,8 @@ impl Instr {
 
     pub fn can_eliminate(&self) -> bool {
         match &self.op {
-            Op::ASt(_)
+            Op::TtuMacro(_)
+            | Op::ASt(_)
             | Op::SuSt(_)
             | Op::SuStGa(_)
             | Op::SuAtom(_)
@@ -9056,6 +9176,7 @@ impl Instr {
             | Op::PSetP(_)
             | Op::R2UR(_)
             | Op::Redux(_)
+            | Op::TtuMacro(_)
             | Op::Tex(_)
             | Op::Tld(_)
             | Op::Tld4(_)
@@ -9110,6 +9231,7 @@ impl Instr {
             | Op::PixLd(_)
             | Op::S2R(_)
             | Op::Vote(_)
+            | Op::Elect(_)
             | Op::Match(_)
             | Op::Undef(_)
             | Op::SrcBar(_)

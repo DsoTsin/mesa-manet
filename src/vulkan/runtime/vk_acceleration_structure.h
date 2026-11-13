@@ -178,6 +178,14 @@ struct vk_acceleration_structure_build_ops {
     */
    void (*init_update_scratch)(VkCommandBuffer cmd_buffer, const struct vk_acceleration_structure_build_state *states, uint32_t build_count);
 
+   VkResult (*build_leaves)(VkCommandBuffer command_buffer, struct vk_device *device,
+                             struct vk_acceleration_structure_build_state *states,
+                             uint32_t build_count, bool update);
+
+   VkResult (*build_internal)(VkCommandBuffer command_buffer, struct vk_device *device,
+                               struct vk_acceleration_structure_build_state *states,
+                               uint32_t build_count);
+
    void (*encode)(VkCommandBuffer commandBuffer, struct vk_device *device, struct vk_meta_device *meta,
                   const struct vk_acceleration_structure_build_args *args, struct vk_acceleration_structure_build_state *states,
                   uint32_t build_count, bool flushed_compute_after_init_update_scratch);
@@ -200,6 +208,13 @@ vk_build_stage(vk_build_stage_cb cb, VkCommandBuffer commandBuffer, struct vk_de
                struct vk_meta_device *meta, const struct vk_acceleration_structure_build_args *args,
                struct vk_acceleration_structure_build_state *states, uint32_t build_count,
                uint32_t build_flags_mask, bool update);
+
+VkResult
+vk_build_update_leaf_nodes(VkCommandBuffer commandBuffer, struct vk_device *device,
+                          struct vk_meta_device *meta,
+                          const struct vk_acceleration_structure_build_args *args,
+                          struct vk_acceleration_structure_build_state *states,
+                          uint32_t build_count);
 
 void vk_bvh_build_barrier_compute_to_compute(VkCommandBuffer commandBuffer, bool indirect_dst);
 void vk_bvh_build_barrier_transfer_to_compute(VkCommandBuffer commandBuffer);
@@ -268,6 +283,8 @@ vk_ir_node_size(VkGeometryTypeKHR geometry_type, uint32_t build_flags)
       size = sizeof(struct vk_ir_triangle_node);
       if (build_flags & VK_BUILD_FLAG_HAS_QUADS)
          size += sizeof(struct vk_ir_triangle_node_quad);
+      if (build_flags & VK_BUILD_FLAG_STORE_VERTEX_IDS)
+         size += 24;
    } else if (geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR) {
       size = sizeof(struct vk_ir_aabb_node);
    } else {

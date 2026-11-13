@@ -510,6 +510,8 @@ vk_ir_node_size(uint32_t geometry_type)
       size = SIZEOF(vk_ir_triangle_node);
       if (VK_TEST_BUILD_FLAG_HAS_QUADS)
          size += SIZEOF(vk_ir_triangle_node_quad);
+      if ((BUILD_FLAGS & VK_BUILD_FLAG_STORE_VERTEX_IDS) != 0)
+         size += 24;
    } else if (geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR) {
       size = SIZEOF(vk_ir_aabb_node);
    } else {

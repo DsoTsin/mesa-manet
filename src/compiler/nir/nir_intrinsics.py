@@ -862,6 +862,9 @@ def image(name, src_comp=[], extra_indices=[], **kwargs):
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
 
 image("load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
+image("load_raw_nv", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0,
+      bit_sizes=[32], flags=[CAN_ELIMINATE])
+image("store_raw_nv", src_comp=[4, 1, 0, 1], extra_indices=[SRC_TYPE])
 # The fourth source is in the input attachment index. The BASE is implicitly
 # added, and the RANGE indicates how many input attachments can be accessed.
 image("input_attachment_load", src_comp=[2, 1, 1], extra_indices=[DEST_TYPE, BASE, RANGE], dest_comp=0, flags=[CAN_REORDER, CAN_ELIMINATE])
@@ -3384,3 +3387,22 @@ system_value("is_depth_clamp_emulated_kk", 1, bit_sizes=[1])
 system_value("is_viewport_z_transform_emulated_kk", 1, bit_sizes=[1])
 # Loads the viewport Z range for a given viewport index.
 load("viewport_z_range_kk", [1], [], [CAN_ELIMINATE, CAN_REORDER])
+
+intrinsic("ttu_open_nv", indices=[FLAGS])
+intrinsic("ttu_store_nv", src_comp=[1, 4], indices=[BASE])
+intrinsic("ttu_go_nv")
+intrinsic("ttu_load_nv", dest_comp=4, indices=[BASE, FLAGS], bit_sizes=[32])
+
+
+intrinsic("hit_object_trace_ray", src_comp=[-1, -1, 2, 1, 1, 1, 3, 1, 3, 1, -1])
+intrinsic("rt_hit_object_trace_ray", src_comp=[-1, -1, 2, 1, 1, 1, 3, 1, 3, 1, -1], indices=[CALL_IDX, STACK_SIZE])
+intrinsic("hit_object_execute_shader", src_comp=[-1, -1])
+intrinsic("rt_hit_object_execute_shader", src_comp=[-1, -1], indices=[CALL_IDX, STACK_SIZE])
+intrinsic("hit_object_record_miss", src_comp=[-1, 1, 1, 3, 1, 3, 1])
+intrinsic("hit_object_record_empty", src_comp=[-1])
+intrinsic("hit_object_record_from_query", src_comp=[-1, -1, 1, -1, 1])
+intrinsic("hit_object_load", src_comp=[-1], dest_comp=0, indices=[BASE, COLUMN])
+intrinsic("hit_object_load_attributes", src_comp=[-1, -1])
+intrinsic("hit_object_set_sbt_index", src_comp=[-1, 1])
+intrinsic("reorder_thread", src_comp=[-1, 1, 1])
+intrinsic("rt_reorder_thread", src_comp=[-1, 1, 1], indices=[CALL_IDX, STACK_SIZE])

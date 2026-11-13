@@ -2115,6 +2115,10 @@ aspect_masks_valid(struct vk_image *src_img, struct vk_image *dst_img,
       vk_format_get_ycbcr_info(src_img->format);
    const struct vk_format_ycbcr_info *dst_ycbcr_info =
       vk_format_get_ycbcr_info(dst_img->format);
+   if (src_ycbcr_info && src_ycbcr_info->n_planes == 1)
+      src_ycbcr_info = NULL;
+   if (dst_ycbcr_info && dst_ycbcr_info->n_planes == 1)
+      dst_ycbcr_info = NULL;
 
    if (!src_ycbcr_info && !dst_ycbcr_info) {
       ASSERTED const VkImageAspectFlags valid_aspects =

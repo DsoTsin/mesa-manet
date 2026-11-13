@@ -58,7 +58,8 @@ impl Shader<'_> {
                 | Op::PhiSrcs(_)
                 | Op::Pin(_)
                 | Op::Unpin(_)
-                | Op::Vote(_) => [instr].into(),
+                | Op::Vote(_)
+                | Op::Elect(_) => [instr].into(),
                 Op::Bra(bra) if sm.sm() >= 80 => match &instr.pred.pred_ref {
                     PredRef::SSA(ssa) if ssa.file() == RegFile::UPred => {
                         let bra_u = OpBra {

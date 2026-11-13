@@ -10,6 +10,8 @@
 #ifndef _MSC_VER
 #include <stddef.h>
 #define MAX_ALIGN alignof(max_align_t)
+#elif defined(_WIN64)
+#define MAX_ALIGN 16
 #else
 /* long double might be 128-bit, but our callers do not need that anyway(?) */
 #include <stdint.h>

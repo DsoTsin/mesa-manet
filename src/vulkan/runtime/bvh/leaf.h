@@ -110,6 +110,17 @@ build_triangle(inout vk_aabb bounds, VOID_REF dst_ptr, vk_bvh_geometry_data geom
    DEREF(node).base.aabb = bounds;
    DEREF(node).triangle_id = global_id;
    DEREF(node).geometry_id_and_flags = geom_data.geometry_id;
+   if ((BUILD_FLAGS & VK_BUILD_FLAG_STORE_VERTEX_IDS) != 0) {
+      triangle_indices indices = load_indices(geom_data.indices, geom_data.index_format, global_id);
+      uint32_t extra_offset = SIZEOF(vk_ir_triangle_node);
+      if (VK_TEST_BUILD_FLAG_HAS_QUADS)
+         extra_offset += SIZEOF(vk_ir_triangle_node_quad);
+      for (uint32_t vertex = 0; vertex < 3; vertex++) {
+         uint64_t identity = uint64_t(geom_data.data) + uint64_t(indices.index[vertex]) * geom_data.stride;
+         DEREF(INDEX(uint32_t, OFFSET(dst_ptr, extra_offset), vertex * 2)) = uint32_t(identity);
+         DEREF(INDEX(uint32_t, OFFSET(dst_ptr, extra_offset), vertex * 2 + 1)) = uint32_t(identity >> 32);
+      }
+   }
 
    if (VK_TEST_BUILD_FLAG_HAS_QUADS) {
       REF(vk_ir_triangle_node_quad) quad = vk_ir_triangle_node_get_quad_ref(node);
@@ -295,6 +306,11 @@ main(void)
       is_active = build_instance(bounds, src_ptr, dst_ptr, global_id);
    }
 
+   if ((BUILD_FLAGS & VK_BUILD_FLAG_INACTIVE_BOUNDS) != 0 && !is_active) {
+      bounds.min = vec3(uintBitsToFloat(0x7f7fffffu));
+      bounds.max = -bounds.min;
+      DEREF(REF(vk_ir_node)(dst_ptr)).aabb = bounds;
+   }
    if (VK_TEST_BUILD_FLAG_ALWAYS_ACTIVE)
       is_active = true;
 
@@ -305,12 +321,20 @@ main(void)
    if (subgroupElect())
       atomicAdd(DEREF(args.header).active_leaf_count, subgroupBallotBitCount(ballot));
 
+   ivec3 minimum = ivec3(0x7fffffff);
+   ivec3 maximum = ivec3(0x80000000);
    if (is_active) {
-      atomicMin(DEREF(args.header).min_bounds[0], to_emulated_float(bounds.min.x));
-      atomicMin(DEREF(args.header).min_bounds[1], to_emulated_float(bounds.min.y));
-      atomicMin(DEREF(args.header).min_bounds[2], to_emulated_float(bounds.min.z));
-      atomicMax(DEREF(args.header).max_bounds[0], to_emulated_float(bounds.max.x));
-      atomicMax(DEREF(args.header).max_bounds[1], to_emulated_float(bounds.max.y));
-      atomicMax(DEREF(args.header).max_bounds[2], to_emulated_float(bounds.max.z));
+      for (uint32_t axis = 0; axis < 3; axis++) {
+         minimum[axis] = to_emulated_float(bounds.min[axis]);
+         maximum[axis] = to_emulated_float(bounds.max[axis]);
+      }
+   }
+   minimum = subgroupMin(minimum);
+   maximum = subgroupMax(maximum);
+   if (subgroupElect() && subgroupBallotBitCount(ballot) != 0) {
+      for (uint32_t axis = 0; axis < 3; axis++) {
+         atomicMin(DEREF(args.header).min_bounds[axis], minimum[axis]);
+         atomicMax(DEREF(args.header).max_bounds[axis], maximum[axis]);
+      }
    }
 }

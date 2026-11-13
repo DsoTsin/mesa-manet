@@ -11,6 +11,9 @@
 
 #include "genxml/gen_macros.h"
 #include "c11/threads.h"
+#if defined(HAVE_PAN_KMOD_KBASE) && !defined(PANVK_OFFLINE_ONLY)
+#include "kmod/kbase_kmod.h"
+#endif
 
 #ifdef PANVK_OFFLINE_ONLY
 #include "tools/kraidoc_context.h"
@@ -2674,6 +2677,10 @@ panvk_compile_shader_impl(struct panvk_device *dev,
 {
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
+
+#if defined(HAVE_PAN_KMOD_KBASE) && !defined(PANVK_OFFLINE_ONLY)
+   kbase_kmod_register_thread(dev->kmod.dev);
+#endif
 
    struct panvk_shader *shader;
    VkResult result;

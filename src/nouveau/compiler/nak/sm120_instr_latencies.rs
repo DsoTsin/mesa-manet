@@ -22,6 +22,7 @@ use nak_latencies::sm100::*;
 fn op_reg_latency(op: &Op, reader: bool, op_reg_idx: usize) -> RegLatencySM100 {
     use RegLatencySM100::*;
     match op {
+        Op::TtuMacro(_) => Decoupled,
         // this will need updating if imad grows support for input predicates
         Op::IMad(_) | Op::IMul(_) => Fma,
         Op::IMad64(_) => {
@@ -100,7 +101,7 @@ fn op_reg_latency(op: &Op, reader: bool, op_reg_idx: usize) -> RegLatencySM100 {
         Op::PLop3(_) => Alu,
         Op::Prmt(_) => Alu,
         Op::Nop(_) => Disp64,
-        Op::Vote(_) => Dualalu,
+        Op::Vote(_) | Op::Elect(_) => Dualalu,
         Op::Match(_) => Decoupled,
         Op::S2R(_) => DecoupledAgu,
         Op::R2UR(_) => Alu,
@@ -173,6 +174,7 @@ fn op_reg_latency(op: &Op, reader: bool, op_reg_idx: usize) -> RegLatencySM100 {
 fn op_pred_latency(op: &Op) -> PredLatencySM100 {
     use PredLatencySM100::*;
     match op {
+        Op::TtuMacro(_) => Decoupled,
         Op::Atom(_) => Decoupled,
         Op::Bra(_) => Decoupled,
         Op::DSetP(_) => RedirectedFp64,
@@ -207,7 +209,7 @@ fn op_pred_latency(op: &Op) -> PredLatencySM100 {
         Op::Txd(_) => Decoupled,
         Op::Txq(_) => Decoupled,
 
-        Op::Vote(_) => DispDualAlu,
+        Op::Vote(_) | Op::Elect(_) => DispDualAlu,
         Op::Match(_) => Decoupled,
         _ => {
             panic!("Illegal op in sm120 pred latency {}", op);
@@ -315,6 +317,7 @@ fn op_ureg_latency(
             }
         }
         Op::Vote(_) => Voteu,
+        Op::Elect(_) => Elect,
         Op::S2R(_) => ToUr,
 
         Op::Tex(_) | Op::Tld(_) | Op::Tld4(_) | Op::Txq(_) => Tex,

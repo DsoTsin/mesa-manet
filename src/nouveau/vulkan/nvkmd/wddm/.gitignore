@@ -1,0 +1,10 @@
+/target/
+
+evidence/
+__pycache__/
+tests/
+validation/
+Cargo.lock
+*.py
+AGENTS.md
+CLAUDE.md

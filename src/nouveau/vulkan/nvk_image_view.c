@@ -14,6 +14,8 @@
 #include "vk_format.h"
 
 #include "clb097.h"
+#include "clcd97tex.h"
+#include "drf.h"
 
 static enum nil_view_type
 vk_image_view_type_to_nil_view_type(VkImageViewType view_type)
@@ -99,12 +101,31 @@ nvk_image_view_init_no_alloc(struct nvk_device *dev,
 
    vk_image_view_init(&dev->vk, &view->vk, pCreateInfo);
 
+   const bool internal_raw_view =
+      pdev->nvkmd->kmd_info.has_compute_queue &&
+      (pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA) &&
+      view->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT &&
+      (image->vk.aspects &
+         (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
+
    /* First, figure out which image planes we need.
     * For depth/stencil, we may only have plane so simply assert
     * and then map directly betweeen the image and view plane
     */
-   if (image->vk.aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
-                            VK_IMAGE_ASPECT_STENCIL_BIT)) {
+   if (internal_raw_view) {
+      view->plane_count = 1;
+      if (image->separate_zs) {
+         const unsigned view_size = vk_format_get_blocksize(view->vk.format);
+         const unsigned stencil_size = util_format_get_blocksize(
+            image->planes[1].nil.format.p_format);
+         view->planes[0].image_plane = view_size == stencil_size ? 1 : 0;
+         assert(view_size == util_format_get_blocksize(
+            image->planes[view->planes[0].image_plane].nil.format.p_format));
+      } else {
+         view->planes[0].image_plane = 0;
+      }
+   } else if (image->vk.aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
+                                  VK_IMAGE_ASPECT_STENCIL_BIT)) {
       view->separate_zs =
          image->separate_zs &&
          view->vk.aspects == (VK_IMAGE_ASPECT_DEPTH_BIT |
@@ -147,7 +168,7 @@ nvk_image_view_init_no_alloc(struct nvk_device *dev,
          ycbcr_info->planes[view_plane].format : view->vk.format;
 
       enum pipe_format p_format = nvk_format_to_pipe_format(plane_format);
-      if (image->separate_zs)
+      if (image->separate_zs && !internal_raw_view)
          p_format = nil_image.format.p_format;
       else if (view->vk.aspects == VK_IMAGE_ASPECT_STENCIL_BIT)
          p_format = util_format_stencil_only(nil_image.format.p_format);
@@ -170,8 +191,16 @@ nvk_image_view_init_no_alloc(struct nvk_device *dev,
          .min_lod_clamp = view->vk.min_lod,
       };
 
-      if (util_format_is_compressed(nil_image.format.p_format) &&
-         !util_format_is_compressed(nil_view.format.p_format))
+      if ((util_format_is_compressed(nil_image.format.p_format) &&
+           !util_format_is_compressed(nil_view.format.p_format)) ||
+          (pdev->nvkmd->kmd_info.has_compute_queue &&
+           (pCreateInfo->flags & VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA) &&
+           (util_format_get_blockwidth(nil_image.format.p_format) !=
+               util_format_get_blockwidth(nil_view.format.p_format) ||
+            util_format_get_blockheight(nil_image.format.p_format) !=
+               util_format_get_blockheight(nil_view.format.p_format) ||
+            util_format_get_blockdepth(nil_image.format.p_format) !=
+               util_format_get_blockdepth(nil_view.format.p_format))))
          image_uncompressed_view(&nil_image, &nil_view, &base_addr);
 
       if (nil_image.dim == NIL_IMAGE_DIM_3D &&
@@ -223,6 +252,14 @@ nvk_image_view_init_no_alloc(struct nvk_device *dev,
             view->planes[view_plane].storage.desc.su_info =
                nil_fill_su_info(&pdev->info, &nil_image, &nil_view, base_addr);
          }
+      }
+
+      if (internal_raw_view && p_format == PIPE_FORMAT_R32_UINT &&
+          nil_image.levels[0].tiling.gob_type == NIL_GOB_TYPE_BLACKWELL_Z24) {
+         NVDEF_MW_SET(view->planes[view_plane].storage.desc.desc.bits,
+                      NVCD97, TEXHEAD_V2_BL, COMPONENTS, SIZES_G8R24);
+         NVDEF_MW_SET(view->planes[view_plane].storage.desc.desc.bits,
+                      NVCD97, TEXHEAD_V2_BL, DATA_TYPE, TEX_DATA_TYPE_UINT);
       }
    }
 }

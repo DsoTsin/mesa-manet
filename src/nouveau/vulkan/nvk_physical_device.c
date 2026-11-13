@@ -16,22 +16,23 @@
 #include "nvk_shader.h"
 #include "nvk_wsi.h"
 #include "nvkmd/nvkmd.h"
-#include "nvkmd/nouveau/nvkmd_nouveau.h"
 #include "git_sha1.h"
 #include "util/detect_os.h"
 #include "util/disk_cache.h"
 #include "util/hex.h"
 #include "util/mesa-blake3.h"
 #include "util/os_misc.h"
+#include "util/u_debug.h"
 
 #include "vk_android.h"
 #include "vk_device.h"
-#include "vk_drm_syncobj.h"
 #include "vk_physical_device.h"
 #include "vk_shader_module.h"
 #include "vulkan/wsi/wsi_common.h"
 
+#ifndef _WIN32
 #include <sys/sysmacros.h>
+#endif
 
 #include "nv_push.h"
 #include "cl90c0.h"
@@ -119,8 +120,28 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
     * they follow whether any decode codec is built.
     */
    const bool video = h264dec;
+#ifdef NVK_BVH_CUDA_ENABLED
+   const bool ray_tracing = info->sm == 120;
+#else
+   const bool ray_tracing = false;
+#endif
+
+   const bool ser_queue =
+#if defined(_WIN32) && defined(NVK_SER_CUDA_ENABLED)
+      ray_tracing && debug_get_bool_option("NVK_WDDM_SER_QUEUE", false);
+#else
+      false;
+#endif
 
    *ext = (struct vk_device_extension_table) {
+      .KHR_acceleration_structure = ray_tracing,
+      .KHR_deferred_host_operations = ray_tracing,
+      .KHR_ray_query = ray_tracing,
+      .KHR_ray_tracing_pipeline = ray_tracing,
+      .KHR_ray_tracing_position_fetch = ray_tracing,
+      .KHR_ray_tracing_maintenance1 = ray_tracing,
+      .EXT_opacity_micromap = ray_tracing,
+      .EXT_ray_tracing_invocation_reorder = ser_queue,
       .KHR_8bit_storage = true,
       .KHR_16bit_storage = true,
       .KHR_bind_memory2 = true,
@@ -348,6 +369,22 @@ nvk_get_device_features(const struct nv_device_info *info,
    bool is_tu11x = info->chipset == 0x167 || info->chipset == 0x168;
 
    *features = (struct vk_features) {
+      .accelerationStructure = supported_extensions->KHR_acceleration_structure,
+      .descriptorBindingAccelerationStructureUpdateAfterBind =
+         supported_extensions->KHR_acceleration_structure,
+      .rayQuery = supported_extensions->KHR_ray_query,
+      .micromapEXT = supported_extensions->EXT_opacity_micromap,
+      .rayTracingInvocationReorder = supported_extensions->EXT_ray_tracing_invocation_reorder,
+      .rayTracingPipeline = supported_extensions->KHR_ray_tracing_pipeline,
+      .rayTracingPositionFetch = supported_extensions->KHR_ray_tracing_position_fetch,
+      .rayTracingPipelineTraceRaysIndirect =
+         supported_extensions->KHR_ray_tracing_pipeline,
+      .rayTraversalPrimitiveCulling =
+         supported_extensions->KHR_ray_tracing_pipeline,
+      .rayTracingMaintenance1 =
+         supported_extensions->KHR_ray_tracing_maintenance1,
+      .rayTracingPipelineTraceRaysIndirect2 =
+         supported_extensions->KHR_ray_tracing_maintenance1,
       /* Vulkan 1.0 */
       .robustBufferAccess = true,
       .fullDrawIndexUint32 = true,
@@ -842,6 +879,7 @@ nvk_get_device_features(const struct nv_device_info *info,
 static void
 nvk_get_device_properties(const struct nvk_instance *instance,
                           const struct nv_device_info *info,
+                          const struct vk_device_extension_table *supported_extensions,
                           struct vk_properties *properties)
 {
    /* Note: update nir_shader_compiler_options.max_samples when changing this. */
@@ -863,6 +901,23 @@ nvk_get_device_properties(const struct nvk_instance *instance,
          VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
 
    *properties = (struct vk_properties) {
+      .maxGeometryCount = (1u << 24) - 1,
+      .maxOpacity2StateSubdivisionLevel = 12,
+      .maxOpacity4StateSubdivisionLevel = 12,
+      .maxInstanceCount = (1u << 24) - 1,
+      .maxPrimitiveCount = (1u << 29) - 1,
+      .maxPerStageDescriptorAccelerationStructures = NVK_MAX_DESCRIPTORS,
+      .maxPerStageDescriptorUpdateAfterBindAccelerationStructures = NVK_MAX_DESCRIPTORS,
+      .maxDescriptorSetAccelerationStructures = NVK_MAX_DESCRIPTORS,
+      .maxDescriptorSetUpdateAfterBindAccelerationStructures = NVK_MAX_DESCRIPTORS,
+      .minAccelerationStructureScratchOffsetAlignment = 128,
+      .shaderGroupHandleSize = 32,
+      .shaderGroupHandleAlignment = 32,
+      .shaderGroupBaseAlignment = 64,
+      .maxRayRecursionDepth = 31,
+      .maxShaderGroupStride = 4096,
+      .maxRayDispatchInvocationCount = 1u << 30,
+      .maxRayHitAttributeSize = 32,
       .apiVersion = nvk_get_vk_version(info),
       .driverVersion = vk_get_driver_version(),
       .vendorID = instance->drirc.debug.force_vk_vendor != 0 ?
@@ -997,7 +1052,8 @@ nvk_get_device_properties(const struct nvk_instance *instance,
 
       /* Vulkan 1.1 properties */
       .subgroupSize = 32,
-      .subgroupSupportedStages = supported_shader_stages,
+      .subgroupSupportedStages = supported_shader_stages |
+         (supported_extensions->KHR_ray_tracing_pipeline ? NVK_SHADER_STAGE_RT_BITS : 0),
       .subgroupSupportedOperations = VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
                                      VK_SUBGROUP_FEATURE_BALLOT_BIT |
                                      VK_SUBGROUP_FEATURE_BASIC_BIT |
@@ -1185,7 +1241,7 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       .storageBufferDescriptorSize = sizeof(union nvk_buffer_descriptor),
       .robustStorageBufferDescriptorSize = sizeof(union nvk_buffer_descriptor),
       .inputAttachmentDescriptorSize = sizeof(struct nvk_sampled_image_descriptor),
-      .accelerationStructureDescriptorSize = 0,
+      .accelerationStructureDescriptorSize = sizeof(uint64_t),
       .maxSamplerDescriptorBufferRange = UINT32_MAX,
       .maxResourceDescriptorBufferRange = UINT32_MAX,
       .samplerDescriptorBufferAddressSpaceSize = UINT32_MAX,
@@ -1349,6 +1405,11 @@ nvk_get_device_properties(const struct nvk_instance *instance,
       /* VK_NV_shader_sm_builtins */
       .shaderSMCount = (uint32_t)info->tpc_count * info->mp_per_tpc,
       .shaderWarpsPerSM = info->max_warps_per_mp,
+      .rayTracingInvocationReorderReorderingHint =
+         supported_extensions->EXT_ray_tracing_invocation_reorder ?
+         VK_RAY_TRACING_INVOCATION_REORDER_MODE_REORDER_EXT :
+         VK_RAY_TRACING_INVOCATION_REORDER_MODE_NONE_EXT,
+      .maxShaderBindingTableRecordIndex = UINT32_MAX - 1,
    };
 
    /* Add the driver to the device name (like other Mesa drivers do) */
@@ -1517,18 +1578,12 @@ nvk_get_vram_heap_available(struct nvk_physical_device *pdev)
 }
 
 VkResult
-nvk_create_drm_physical_device(struct vk_instance *_instance,
-                               struct _drmDevice *drm_device,
-                               struct vk_physical_device **pdev_out)
+nvk_create_physical_device_for_nvkmd(struct vk_instance *_instance,
+                                    struct nvkmd_pdev *nvkmd,
+                                    struct vk_physical_device **pdev_out)
 {
    struct nvk_instance *instance = (struct nvk_instance *)_instance;
    VkResult result;
-
-   struct nvkmd_pdev *nvkmd;
-   result = nvkmd_try_create_pdev_for_drm(drm_device, &instance->vk.base,
-                                          instance->debug_flags, &nvkmd);
-   if (result != VK_SUCCESS)
-      return result;
 
    /* We don't support anything pre-Kepler */
    if (nvkmd->dev_info.cls_eng3d < KEPLER_A) {
@@ -1572,14 +1627,53 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
    nvk_get_device_extensions(instance, &nvkmd->dev_info,
                              nvkmd->kmd_info.has_alloc_tiled,
                              &supported_extensions);
+   if (!nvkmd->kmd_info.has_dma_buf) {
+      supported_extensions.KHR_external_fence_fd = false;
+      supported_extensions.KHR_external_memory_fd = false;
+      supported_extensions.KHR_external_semaphore_fd = false;
+      supported_extensions.EXT_external_memory_dma_buf = false;
+      supported_extensions.EXT_physical_device_drm = false;
+   }
+   if (!nvkmd->kmd_info.has_gpu_timestamp) {
+      supported_extensions.KHR_calibrated_timestamps = false;
+      supported_extensions.EXT_calibrated_timestamps = false;
+   }
+   supported_extensions.EXT_map_memory_placed = nvkmd->kmd_info.has_map_fixed;
+#ifdef _WIN32
+   supported_extensions.EXT_pci_bus_info = false;
+#endif
 
    struct vk_features supported_features;
    nvk_get_device_features(&nvkmd->dev_info, &supported_extensions,
                            &supported_features);
+   if (!nvkmd->kmd_info.has_sparse_binding) {
+      supported_features.sparseBinding = false;
+      supported_features.sparseResidency2Samples = false;
+      supported_features.sparseResidency4Samples = false;
+      supported_features.sparseResidency8Samples = false;
+      supported_features.sparseResidency16Samples = false;
+      supported_features.sparseResidencyAliased = false;
+      supported_features.sparseResidencyBuffer = false;
+      supported_features.sparseResidencyImage2D = false;
+      supported_features.sparseResidencyImage3D = false;
+      supported_features.sparseImageFloat32Atomics = false;
+      supported_features.sparseImageFloat32AtomicAdd = false;
+      supported_features.sparseImageInt64Atomics = false;
+   }
+   if (!nvkmd->kmd_info.has_va_replay)
+      supported_features.bufferDeviceAddressCaptureReplay = false;
+   if (!nvkmd->kmd_info.has_map_fixed) {
+      supported_features.memoryMapPlaced = false;
+      supported_features.memoryMapRangePlaced = false;
+   }
+   if (!nvkmd->kmd_info.has_overmap)
+      supported_features.memoryUnmapReserve = false;
 
    struct vk_properties properties;
-   nvk_get_device_properties(instance, &nvkmd->dev_info, &properties);
+   nvk_get_device_properties(instance, &nvkmd->dev_info, &supported_extensions,
+                             &properties);
 
+#ifndef _WIN32
    if (nvkmd->drm.render_dev) {
       properties.drmHasRender = true;
       properties.drmRenderMajor = major(nvkmd->drm.render_dev);
@@ -1591,6 +1685,7 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
       properties.drmPrimaryMajor = major(nvkmd->drm.primary_dev);
       properties.drmPrimaryMinor = minor(nvkmd->drm.primary_dev);
    }
+#endif
 
    result = vk_physical_device_init(&pdev->vk, &instance->vk,
                                     &supported_extensions,
@@ -1648,7 +1743,11 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
          .heapIndex = vram_heap_idx,
       };
 
-      if (pdev->info.cls_eng3d >= MAXWELL_A) {
+      bool has_mappable_vram = pdev->info.cls_eng3d >= MAXWELL_A;
+#ifdef _WIN32
+      has_mappable_vram &= pdev->info.bar_size_B > 0;
+#endif
+      if (has_mappable_vram) {
          pdev->mem_types[pdev->mem_type_count++] = (VkMemoryType) {
             .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -1705,13 +1804,21 @@ nvk_create_drm_physical_device(struct vk_instance *_instance,
       .queue_flags = VK_QUEUE_GRAPHICS_BIT |
                      VK_QUEUE_COMPUTE_BIT |
                      VK_QUEUE_TRANSFER_BIT |
-                     VK_QUEUE_SPARSE_BINDING_BIT,
+                     (nvkmd->kmd_info.has_sparse_binding ? VK_QUEUE_SPARSE_BINDING_BIT : 0),
       .queue_count = 1,
    };
+   if (nvkmd->kmd_info.has_compute_queue) {
+      pdev->queue_families[pdev->queue_family_count++] = (struct nvk_queue_family) {
+         .queue_flags = VK_QUEUE_COMPUTE_BIT |
+                        VK_QUEUE_TRANSFER_BIT |
+                        (nvkmd->kmd_info.has_sparse_binding ? VK_QUEUE_SPARSE_BINDING_BIT : 0),
+         .queue_count = 1,
+      };
+   }
    if (pdev->info.has_transfer_queue) {
       pdev->queue_families[pdev->queue_family_count++] = (struct nvk_queue_family) {
          .queue_flags = VK_QUEUE_TRANSFER_BIT |
-                        VK_QUEUE_SPARSE_BINDING_BIT,
+                        (nvkmd->kmd_info.has_sparse_binding ? VK_QUEUE_SPARSE_BINDING_BIT : 0),
          .queue_count = 2,
       };
    }
@@ -1747,6 +1854,22 @@ fail_nvkmd:
    nvkmd_pdev_destroy(nvkmd);
    return result;
 }
+
+#ifndef _WIN32
+VkResult
+nvk_create_drm_physical_device(struct vk_instance *instance,
+                               struct _drmDevice *drm_device,
+                               struct vk_physical_device **pdev_out)
+{
+   struct nvk_instance *nvk = (struct nvk_instance *)instance;
+   struct nvkmd_pdev *nvkmd;
+   VkResult result = nvkmd_try_create_pdev_for_drm(drm_device, &instance->base,
+                                                  nvk->debug_flags, &nvkmd);
+   if (result != VK_SUCCESS)
+      return result;
+   return nvk_create_physical_device_for_nvkmd(instance, nvkmd, pdev_out);
+}
+#endif
 
 void
 nvk_physical_device_destroy(struct vk_physical_device *vk_pdev)

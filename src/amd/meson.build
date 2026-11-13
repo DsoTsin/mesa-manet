@@ -7,7 +7,7 @@ if with_tools.contains('drm-shim')
   subdir('drm-shim')
 endif
 
-if with_amd_vk or with_gallium_radeonsi
+if with_amd_vk or with_gallium_radeonsi or with_amd_agc
   subdir('addrlib')
   subdir('common')
   if amd_with_llvm
@@ -23,6 +23,10 @@ if with_amd_vk
   if with_aco_tests
     subdir('compiler/tests')
   endif
+endif
+
+if with_amd_agc
+  subdir('agc')
 endif
 
 if with_gallium_radeonsi

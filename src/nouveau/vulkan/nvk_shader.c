@@ -13,6 +13,8 @@
 #include "nvk_device.h"
 #include "nvk_instance.h"
 #include "nvk_mme.h"
+#include "nvk_nir_lower_ray_queries.h"
+#include "nvk_nir_ser.h"
 #include "nvk_physical_device.h"
 #include "nvk_sampler.h"
 #include "nvk_shader.h"
@@ -172,6 +174,7 @@ nvk_preprocess_nir(struct vk_physical_device *vk_pdev,
    };
    nir_lower_sysvals_to_varyings(nir, &sysvals_opts);
 
+   nvk_nir_lower_hit_objects(nir);
    nak_preprocess_nir(nir, pdev->nak);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
@@ -238,6 +241,9 @@ nvk_hash_state(struct vk_physical_device *device,
 {
    struct mesa_blake3 blake3_ctx;
    _mesa_blake3_init(&blake3_ctx);
+   const bool opacity_micromap = enabled_features->micromapEXT;
+   _mesa_blake3_update(&blake3_ctx, &opacity_micromap,
+                      sizeof(opacity_micromap));
    if (state && (stages & VK_SHADER_STAGE_FRAGMENT_BIT)) {
       struct nak_fs_key key;
       nvk_populate_fs_key(&key, state);
@@ -382,6 +388,9 @@ nvk_lower_nir(struct nvk_device *dev, nir_shader *nir,
               struct nvk_cbuf_map *cbuf_map_out)
 {
    struct nvk_physical_device *pdev = nvk_device_physical_mut(dev);
+
+   NIR_PASS(_, nir, nvk_nir_lower_ray_queries_with_omm,
+            dev->vk.enabled_features.micromapEXT);
 
    if (nir->info.stage == MESA_SHADER_TESS_EVAL) {
       NIR_PASS(_, nir, nir_lower_patch_vertices,
@@ -1200,23 +1209,37 @@ nvk_compile_nir_shader(struct nvk_device *dev, nir_shader *nir,
                        const VkAllocationCallbacks *alloc,
                        struct nvk_shader **shader_out)
 {
-   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
-
    const struct vk_pipeline_robustness_state rs_none = {
       .uniform_buffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT,
       .storage_buffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT,
       .images = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT,
    };
 
+   return nvk_compile_nir_shader_with_layout(dev, nir, 0, &rs_none, NULL,
+                                             alloc, shader_out);
+}
+
+VkResult
+nvk_compile_nir_shader_with_layout(
+   struct nvk_device *dev, nir_shader *nir, VkShaderCreateFlagsEXT flags,
+   const struct vk_pipeline_robustness_state *robustness,
+   struct vk_pipeline_layout *layout, const VkAllocationCallbacks *alloc,
+   struct nvk_shader **shader_out)
+{
+   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+
    assert(nir->info.stage == MESA_SHADER_COMPUTE);
    if (nir->options == NULL)
       nir->options = nvk_get_nir_options((struct vk_physical_device *)&pdev->vk,
-                                         nir->info.stage, &rs_none);
+                                         nir->info.stage, robustness);
 
    struct vk_shader_compile_info info = {
       .stage = nir->info.stage,
+      .flags = flags,
       .nir = nir,
-      .robustness = &rs_none,
+      .robustness = robustness,
+      .set_layout_count = layout ? layout->set_count : 0,
+      .set_layouts = layout ? layout->set_layouts : NULL,
    };
 
    struct vk_shader *shader = NULL;
@@ -1643,7 +1666,7 @@ nvk_shader_get_executable_internal_representations(
    VK_OUTARRAY_MAKE_TYPED(VkPipelineExecutableInternalRepresentationKHR, out,
                           internal_representations,
                           internal_representation_count);
-   bool incomplete_text = false;
+   bool incomplete_data = false;
 
    assert(executable_index == 0);
 
@@ -1652,7 +1675,7 @@ nvk_shader_get_executable_internal_representations(
          WRITE_STR(ir->name, "NIR shader");
          WRITE_STR(ir->description, "NIR shader");
          if (!write_ir_text(ir, shader->nir_str))
-            incomplete_text = true;
+            incomplete_data = true;
       }
    }
 
@@ -1661,11 +1684,24 @@ nvk_shader_get_executable_internal_representations(
          WRITE_STR(ir->name, "NAK assembly");
          WRITE_STR(ir->description, "NAK assembly");
          if (!write_ir_text(ir, shader->asm_str))
-            incomplete_text = true;
+            incomplete_data = true;
+      }
+      vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
+         WRITE_STR(ir->name, "NVIDIA machine code");
+         WRITE_STR(ir->description, "Native NVIDIA shader instruction bytes");
+         ir->isText = VK_FALSE;
+         if (ir->pData) {
+            size_t size = MIN2(ir->dataSize, shader->code_size);
+            memcpy(ir->pData, shader->code_ptr, size);
+            incomplete_data |= size < shader->code_size;
+            ir->dataSize = size;
+         } else {
+            ir->dataSize = shader->code_size;
+         }
       }
    }
 
-   return incomplete_text ? VK_INCOMPLETE : vk_outarray_status(&out);
+   return incomplete_data ? VK_INCOMPLETE : vk_outarray_status(&out);
 }
 
 static const struct vk_shader_ops nvk_shader_ops = {

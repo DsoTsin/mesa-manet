@@ -38,6 +38,8 @@ nak_nir_load_sysval(nir_builder *b, enum nak_sv idx,
    case NAK_SV_PRIM_TYPE:
    case NAK_SV_CLOCK_LO:
    case NAK_SV_CLOCK_HI:
+   case NAK_SV_GLOBAL_TIMER_LO:
+   case NAK_SV_GLOBAL_TIMER_HI:
    case NAK_SV_VARIABLE_RATE:
       divergent = false;
       break;
@@ -204,7 +206,7 @@ nak_optimize_nir(nir_shader *nir, const struct nak_compiler *nak)
       LOOP_OPT(nir, nir_opt_cse);
 
       nir_opt_peephole_select_options peephole_select_options = {
-         .limit = 0,
+         .limit = nak->sm >= 100 ? 1 : 0,
          .discard_ok = true,
       };
       LOOP_OPT_NOT_IDEMPOTENT(nir, nir_opt_peephole_select,
@@ -369,6 +371,40 @@ lower_bit_size_cb(const nir_instr *instr, void *data)
    }
 }
 
+static bool
+nak_nir_has_explicit_global_access(nir_shader *nir)
+{
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            switch (nir_instr_as_intrinsic(instr)->intrinsic) {
+            case nir_intrinsic_load_global:
+            case nir_intrinsic_load_global_2x32:
+            case nir_intrinsic_load_global_bounded:
+            case nir_intrinsic_load_global_offset:
+            case nir_intrinsic_load_global_nv:
+            case nir_intrinsic_store_global:
+            case nir_intrinsic_store_global_2x32:
+            case nir_intrinsic_store_global_offset:
+            case nir_intrinsic_store_global_nv:
+            case nir_intrinsic_global_atomic:
+            case nir_intrinsic_global_atomic_2x32:
+            case nir_intrinsic_global_atomic_nv:
+            case nir_intrinsic_global_atomic_swap:
+            case nir_intrinsic_global_atomic_swap_2x32:
+            case nir_intrinsic_global_atomic_swap_nv:
+               return true;
+            default:
+               break;
+            }
+         }
+      }
+   }
+   return false;
+}
+
 void
 nak_preprocess_nir(nir_shader *nir, const struct nak_compiler *nak)
 {
@@ -405,7 +441,8 @@ nak_preprocess_nir(nir_shader *nir, const struct nak_compiler *nak)
 
    nak_optimize_nir(nir, nak);
 
-   OPT(nir, nir_opt_barrier_modes);
+   if (!nak_nir_has_explicit_global_access(nir))
+      OPT(nir, nir_opt_barrier_modes);
    OPT(nir, nir_opt_acquire_release_barriers, SCOPE_QUEUE_FAMILY);
 
    OPT(nir, nir_lower_var_copies);
@@ -667,6 +704,10 @@ nak_nir_lower_system_value_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    }
 
    case nir_intrinsic_shader_clock: {
+      const enum nak_sv clock_lo_sv = nir_intrinsic_memory_scope(intrin) == SCOPE_DEVICE ?
+         NAK_SV_GLOBAL_TIMER_LO : NAK_SV_CLOCK_LO;
+      const enum nak_sv clock_hi_sv = nir_intrinsic_memory_scope(intrin) == SCOPE_DEVICE ?
+         NAK_SV_GLOBAL_TIMER_HI : NAK_SV_CLOCK_HI;
       /* The CS2R opcode can load 64 bits worth of sysval data at a time but
        * it's not actually atomic.  In order to get correct shader clocks, we
        * need to do a loop where we do
@@ -690,7 +731,7 @@ nak_nir_lower_system_value_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       nir_variable *clock =
          nir_local_variable_create(b->impl, glsl_uvec2_type(), NULL);
 
-      nir_def *clock_hi = nak_nir_load_sysval(b, NAK_SV_CLOCK_HI, 0);
+      nir_def *clock_hi = nak_nir_load_sysval(b, clock_hi_sv, 0);
       nir_ssa_bar_nv(b, clock_hi);
 
       nir_store_var(b, clock, nir_vec2(b, nir_imm_int(b, 0), clock_hi), 0x3);
@@ -699,10 +740,10 @@ nak_nir_lower_system_value_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       {
          nir_def *last_clock = nir_load_var(b, clock);
 
-         nir_def *clock_lo = nak_nir_load_sysval(b, NAK_SV_CLOCK_LO, 0);
+         nir_def *clock_lo = nak_nir_load_sysval(b, clock_lo_sv, 0);
          nir_ssa_bar_nv(b, clock_lo);
 
-         clock_hi = nak_nir_load_sysval(b, NAK_SV_CLOCK + 1, 0);
+         clock_hi = nak_nir_load_sysval(b, clock_hi_sv, 0);
          nir_ssa_bar_nv(b, clock_hi);
 
          nir_store_var(b, clock, nir_vec2(b, clock_lo, clock_hi), 0x3);
@@ -1049,6 +1090,7 @@ nak_mem_vectorize_cb(unsigned align_mul, unsigned align_offset,
                      int64_t hole_size, nir_intrinsic_instr *low,
                      nir_intrinsic_instr *high, void *cb_data)
 {
+   const struct nak_compiler *nak = cb_data;
    /*
     * Since we legalize these later with nir_lower_mem_access_bit_sizes,
     * we can optimistically combine anything that might be profitable
@@ -1063,8 +1105,8 @@ nak_mem_vectorize_cb(unsigned align_mul, unsigned align_offset,
       return false;
 
    unsigned max_bytes = 128u / 8u;
-   if (low->intrinsic == nir_intrinsic_ldc_nv ||
-       low->intrinsic == nir_intrinsic_ldcx_nv)
+   if ((low->intrinsic == nir_intrinsic_ldc_nv ||
+        low->intrinsic == nir_intrinsic_ldcx_nv) && nak->sm < 120)
       max_bytes = 64u / 8u;
 
    unsigned byte_load = num_components * (bit_size / 8);
@@ -1079,6 +1121,7 @@ nak_mem_access_size_align(nir_intrinsic_op intrin,
                           bool offset_is_const, enum gl_access_qualifier access,
                           const void *cb_data)
 {
+   const struct nak_compiler *nak = cb_data;
    const uint32_t align = nir_combined_align(align_mul, align_offset);
    assert(util_is_power_of_two_nonzero(align));
 
@@ -1092,8 +1135,8 @@ nak_mem_access_size_align(nir_intrinsic_op intrin,
 
    unsigned chunk_bytes = MIN3(bytes_pow2, align, 16);
    assert(util_is_power_of_two_nonzero(chunk_bytes));
-   if (intrin == nir_intrinsic_ldc_nv ||
-       intrin == nir_intrinsic_ldcx_nv)
+   if ((intrin == nir_intrinsic_ldc_nv ||
+        intrin == nir_intrinsic_ldcx_nv) && nak->sm < 120)
       chunk_bytes = MIN2(chunk_bytes, 8);
 
    if ((intrin == nir_intrinsic_ldc_nv ||
@@ -1655,7 +1698,7 @@ nak_postprocess_nir(nir_shader *nir,
       .lower_vote_ieq = nak->sm < 70,
       .lower_first_invocation_to_ballot = true,
       .lower_read_first_invocation = true,
-      .lower_elect = true,
+      .lower_elect = nak->sm < 90,
       .lower_quad_vote = true,
       .lower_inverse_ballot = true,
       .lower_rotate_to_shuffle = true
@@ -1690,6 +1733,9 @@ nak_postprocess_nir(nir_shader *nir,
                           nir_var_mem_task_payload |
                           nir_var_shader_temp;
    vectorize_opts.callback = nak_mem_vectorize_cb;
+   vectorize_opts.cb_data = (void *)nak;
+   if (nak->sm >= 120)
+      vectorize_opts.modes |= nir_var_mem_ubo;
    vectorize_opts.robust_modes = robust2_modes;
    OPT(nir, nir_opt_load_store_vectorize, &vectorize_opts);
 
@@ -1698,6 +1744,7 @@ nak_postprocess_nir(nir_shader *nir,
                nir_var_mem_task_payload,
       .callback = mesa_shader_stage_is_mesh(nir->info.stage) ? nak_mesh_mem_access_size_align
                                                              : nak_mem_access_size_align,
+      .cb_data = nak,
    };
    OPT(nir, nir_lower_mem_access_bit_sizes, &mem_bit_size_options);
    OPT(nir, nir_lower_bit_size, lower_bit_size_cb, (void *)nak);

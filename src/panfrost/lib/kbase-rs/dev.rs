@@ -2,7 +2,8 @@
 // Copyright © 2026 Pix Philosophy (HK) Limited
 // SPDX-License-Identifier: MIT
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::{c_int, c_void};
 use std::fs::File;
@@ -10,11 +11,17 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::ptr;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 
 use crate::pan_kmod::*;
 use crate::uapi::*;
 use crate::{LogErr, inout, ioctl, kbase_kmod_ops, mmap};
+
+static NEXT_REGISTRATION_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static REGISTERED_DEVICES: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+}
 
 pub struct Map(pub *mut c_void, usize);
 
@@ -67,6 +74,8 @@ pub struct Dev {
     pub mem_import_legacy: AtomicBool,
     pub next_handle: AtomicU32,
     pub csf_error: AtomicBool,
+    thread_registration_id: u64,
+    register_threads: AtomicBool,
     pub kcpu: Mutex<Kcpu>,
     pub export_queue: Option<u8>,
     pub dma_heap: Option<OwnedFd>,
@@ -84,11 +93,37 @@ impl Dev {
     }
 
     pub fn ioctl<T>(&self, req: u32, arg: T) -> io::Result<c_int> {
+        self.register_thread();
         ioctl(self.fd(), req, arg)
     }
 
     pub fn inout<I: Copy, O: Copy>(&self, req: u32, i: I) -> io::Result<O> {
+        self.register_thread();
         inout(self.fd(), req, i)
+    }
+
+    pub(crate) fn register_thread(&self) {
+        if !self.register_threads.load(Relaxed) {
+            return;
+        }
+        REGISTERED_DEVICES.with(|registered| {
+            let mut registered = registered.borrow_mut();
+            if registered.contains(&self.thread_registration_id) {
+                return;
+            }
+            let tid = unsafe { libc::gettid() } as u32;
+            match ioctl(self.fd(), XRING_IOCTL_REGISTER_DRIVER_THREAD, u64::from(tid)) {
+                Ok(_) => { registered.insert(self.thread_registration_id); }
+                Err(error) => {
+                    if self.register_threads.swap(false, Relaxed)
+                        && error.raw_os_error() != Some(libc::ENOTTY)
+                        && error.raw_os_error() != Some(libc::EOPNOTSUPP)
+                    {
+                        logw!("thread registration disabled: {error}");
+                    }
+                }
+            }
+        });
     }
 
     pub fn inout_compat<I: Copy, O: Copy>(
@@ -240,6 +275,9 @@ impl Dev {
             mem_import_legacy: AtomicBool::new(false),
             next_handle: AtomicU32::new(2),
             csf_error: AtomicBool::new(false),
+            thread_registration_id: NEXT_REGISTRATION_ID.fetch_add(1, Relaxed),
+            register_threads: AtomicBool::new(csf && env::var("PANVK_KBASE_THREAD_REGISTRATION")
+                .map_or_else(|_| is_xring_o3(), |value| value == "1")),
             kcpu: Mutex::new(Kcpu {
                 id: kcpu,
                 pending: None,
@@ -445,6 +483,18 @@ fn env_is_zero(name: &str) -> bool {
     env::var(name).is_ok_and(|value| value == "0")
 }
 
+#[cfg(target_os = "android")]
+fn is_xring_o3() -> bool {
+    let mut value = [0u8; libc::PROP_VALUE_MAX as usize];
+    let len = unsafe { libc::__system_property_get(c"ro.board.platform".as_ptr(), value.as_mut_ptr().cast()) };
+    len > 0 && value.starts_with(b"xring_o3_asic\0")
+}
+
+#[cfg(not(target_os = "android"))]
+fn is_xring_o3() -> bool {
+    false
+}
+
 fn csif_info(fd: c_int) -> Option<CsifInfo> {
     let probe: GlbIfaceOut =
         inout(fd, KBASE_IOCTL_CS_GET_GLB_IFACE, GlbIface::default())
@@ -565,4 +615,11 @@ pub extern "C" fn kbase_kmod_get_flush_id(dev: *const KmodDev) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn kbase_kmod_supports_dmabuf(dev: *const KmodDev) -> bool {
     unsafe { Dev::get(dev) }.dma_heap.is_some()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kbase_kmod_register_thread(dev: *const KmodDev) {
+    if !dev.is_null() && unsafe { (*dev).ops == &kbase_kmod_ops } {
+        unsafe { Dev::get(dev) }.register_thread();
+    }
 }

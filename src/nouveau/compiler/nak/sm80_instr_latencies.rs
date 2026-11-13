@@ -173,7 +173,7 @@ impl RegLatencySM80 {
             Op::PLop3(_) => CoupledAlu,
             Op::Prmt(_) => CoupledAlu,
             Op::Nop(_) => CoupledDisp64,
-            Op::Vote(_) => CoupledAlu,
+            Op::Vote(_) | Op::Elect(_) => CoupledAlu,
             Op::Match(_) => Decoupled,
             Op::S2R(_) => Decoupled,
             // S2UR  => Decoupled,
@@ -895,7 +895,7 @@ impl PredLatencySM80 {
             Op::Txd(_) => PredLatencySM80::Decoupled,
             Op::Txq(_) => PredLatencySM80::Decoupled,
 
-            Op::Vote(_) => PredLatencySM80::Disp_Alu,
+            Op::Vote(_) | Op::Elect(_) => PredLatencySM80::Disp_Alu,
             Op::Match(_) => PredLatencySM80::Decoupled,
             _ => {
                 panic!("Illegal op in sm80 pred latency {}", op);
@@ -1140,7 +1140,7 @@ impl URegLatencySM80 {
                     panic!("Illegal S2UR in ureg");
                 }
             }
-            Op::Vote(_) => VoteU,
+            Op::Vote(_) | Op::Elect(_) => VoteU,
 
             Op::FRnd(_) => vdecoupled,
             Op::F2FP(_)

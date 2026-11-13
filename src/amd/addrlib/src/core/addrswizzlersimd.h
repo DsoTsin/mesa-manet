@@ -22,7 +22,7 @@
 // Disabled
 #define ADDR_HAS_AVX2 0
 #define AVX2_FUNC
-#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#elif defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86))
 // x86 visual studio builds
 #define ADDR_HAS_AVX2 1
 #define AVX2_FUNC

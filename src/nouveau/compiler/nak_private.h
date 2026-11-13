@@ -24,6 +24,51 @@ struct nak_compiler {
    struct nir_shader_compiler_options nir_options;
 };
 
+struct nak_nir_gs_info {
+   uint32_t output_primitive;
+   uint32_t input_primitive;
+   uint16_t vertices_out;
+   uint8_t invocations;
+   uint8_t active_stream_mask;
+};
+
+struct nak_nir_fs_info {
+   uint8_t post_depth_coverage;
+   uint8_t early_fragment_tests;
+   uint8_t uses_sample_shading;
+};
+
+struct nak_nir_tess_info {
+   uint32_t primitive_mode;
+   uint8_t tcs_vertices_out;
+   uint8_t spacing;
+   uint8_t ccw;
+   uint8_t point_mode;
+};
+
+struct nak_nir_mesh_info {
+   uint32_t primitive_type;
+   uint16_t max_vertices_out;
+   uint16_t max_primitives_out;
+};
+
+struct nak_nir_shader_info {
+   uint32_t stage;
+   uint16_t workgroup_size[3];
+   uint8_t clip_distance_array_size;
+   uint8_t cull_distance_array_size;
+   uint32_t shared_size;
+   uint32_t task_payload_size;
+   uint32_t float_controls_execution_mode;
+   struct nak_nir_gs_info gs;
+   struct nak_nir_fs_info fs;
+   struct nak_nir_tess_info tess;
+   struct nak_nir_mesh_info mesh;
+};
+
+void nak_nir_get_shader_info(const nir_shader *nir,
+                             struct nak_nir_shader_info *info);
+
 enum ENUM_PACKED nak_attr {
    /* System values A */
    NAK_ATTR_TESS_LOD_LEFT     = 0x000,
@@ -133,6 +178,8 @@ enum ENUM_PACKED nak_sv {
    NAK_SV_CLOCK_LO         = 0x50,
    NAK_SV_CLOCK_HI         = 0x51,
    NAK_SV_CLOCK            = NAK_SV_CLOCK_LO,
+   NAK_SV_GLOBAL_TIMER_LO  = 0x52,
+   NAK_SV_GLOBAL_TIMER_HI  = 0x53,
    NAK_SV_VARIABLE_RATE    = 0x84,
 };
 

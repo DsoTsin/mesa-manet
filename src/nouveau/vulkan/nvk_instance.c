@@ -38,6 +38,9 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
    .KHR_wayland_surface = true,
 #endif
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+   .KHR_win32_surface = true,
+#endif
 #ifdef VK_USE_PLATFORM_XCB_KHR
    .KHR_xcb_surface = true,
 #endif
@@ -161,10 +164,14 @@ nvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    nvk_init_experimental_flags(instance);
    nvk_init_dri_options(instance);
 
-   instance->vk.physical_devices.try_create_for_drm =
-      nvk_create_drm_physical_device;
+#ifdef _WIN32
+   instance->vk.physical_devices.enumerate = nvk_enumerate_wddm_physical_devices;
+#else
+   instance->vk.physical_devices.try_create_for_drm = nvk_create_drm_physical_device;
+#endif
    instance->vk.physical_devices.destroy = nvk_physical_device_destroy;
 
+#if HAVE_BUILD_ID
    const struct build_id_note *note =
       build_id_find_nhdr_for_addr(nvk_CreateInstance);
    if (!note) {
@@ -182,6 +189,14 @@ nvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    STATIC_ASSERT(sizeof(instance->driver_build_sha) == BLAKE3_KEY_LEN);
    copy_build_id_to_sha1(instance->driver_build_sha, note);
+#elif defined(NVK_BUILD_ID_OVERRIDE)
+   _mesa_blake3_compute(NVK_BUILD_ID_OVERRIDE, strlen(NVK_BUILD_ID_OVERRIDE),
+                        instance->driver_build_sha);
+#else
+   result = vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
+                      "NVK requires a build identity");
+   goto fail_init;
+#endif
 
    *pInstance = nvk_instance_to_handle(instance);
    return VK_SUCCESS;

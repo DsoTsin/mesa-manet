@@ -1,0 +1,1466 @@
+{
+ "functions": [
+  {
+   "name": "sceAgcCreateShader",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetGsPrimPayload",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcCreatePrimState",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcUpdatePrimState",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcCreateInterpolantMapping_10000",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcUpdateInterpolantMapping_10000",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetGsOversubscription",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetRegisterDefaults2",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetRegisterDefaults2Internal",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetDefaultCxStateFlat",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcInit_0090",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetIsTrinityMode",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetShaderInstrumentation",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetShaderInstrumentation",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDebugRaiseException",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSuspendPoint",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetAmmSemaphoreMemory",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetSemaphoreMemory",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetSemaphoreLabel",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcFuseShaderHalves_0200",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcGetFusedShaderSize_0080",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverAddEqEvent",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverAgrSubmitDcb",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverAgrSubmitMultiDcbs",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverAllocateToolMemoryForGpuReset",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverDeleteEqEvent",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetAllocatedToolMemoryForGpuReset",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetCoredumpAddress",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetCoredumpMode",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetEqContextId",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetEqEventType",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetResourceRegistrationMaxNameLength",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetSetFlipPacketSizeInDwords",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetSetWorkloadCompletePacketSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetSetWorkloadStreamInactivePacketSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetSetWorkloadsActivePacketSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetTFRing",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverGetWaitRenderingPacketSizeInDwords",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverNopDataGetPacketSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverNopDataWritePacket",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverQueryResourceRegistrationUserMemoryRequirements",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverRegisterWorkloadStream",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSetHsOffchipParam",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSetTFRing",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSubmitAcb",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSubmitCommandBuffer",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSubmitDcb",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSubmitMultiAcbs",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSubmitMultiCommandBuffers",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverSubmitMultiDcbs",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverUnregisterWorkloadStream",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverUserDataGetPacketSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverUserDataWritePacket",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverUserDataWritePopMarker",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverUserDataWritePushMarker",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverUserDataWriteSetMarker",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverWaitUntilSafeForRendering",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDriverDbgReadRegister",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverGetExceptionStatus",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverGetTraceInitiator",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverIsPaDebug",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverRegisterDefaultOwner",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverRegisterGpuResetCallbacks",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverSysSubmitFlipHandleProxy",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverUnregisterGpuResetCallbacks",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverUserDataImmediateWrite",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverUserDataImmediateWritePacket",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverIsCaptureInProgress",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverIsSubmitValidationEnabled",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverIsTraceInProgress",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverInitResourceRegistration",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverSetResourceRegistrationInfo",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0"
+  },
+  {
+   "name": "sceAgcDriverGetShaderDebuggingStatus",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "1"
+  },
+  {
+   "name": "sceAgcDriverModuleRegistration",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0003"
+  },
+  {
+   "name": "sceAgcDriverGetCaptureConfig",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverGetSubmitValidationConfig",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverGetSubmitValidationMode",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverSetCaptureConfig",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverSetSubmitValidationConfig",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverSetSubmitValidationMode",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverSetValidationDisabled",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverSetValidationErrorOutputFrequency",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverRequestCaptureStart",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverRequestCaptureStop",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverTriggerCapture",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c1000"
+  },
+  {
+   "name": "sceAgcDriverAcquireRazorACQ",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverDbgWriteRegister",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetGpuPrintfWorkArea",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetGpuRefClks",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetPaDebugInterfaceVersion",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverIsSuspendPointInFlight",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetGpuPrintfEnabled",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetHsOffchipParamDirect",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetTargetRingForDiag",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSubmitMultiCommandBuffersDirect",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSubmitToRazorACQ",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSuspendPointSubmitDirect",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverFindResourcesPublic",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetDefaultOwner",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetOwnerName",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetResourceBaseAddressAndSizeInBytes",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetResourceName",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetResourceShaderGuid",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetResourceType",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverGetResourceUserData",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverInitResourceRegistrationInterface",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverRegisterGdsResource",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverRegisterMultipleResources",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverRegisterOwner",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverRegisterOwnerForSystem",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverRegisterResource",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverSetResourceUserData",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverUnregisterAllResourcesForOwner",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverUnregisterOwnerAndResources",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverUnregisterResource",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "constant",
+   "value": "0x8a6c9018"
+  },
+  {
+   "name": "sceAgcDriverAcquireHDRScopesACQ",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverCreateQueue",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverCwsrResumeAcq",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverCwsrSuspendAcq",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverDebugHardwareStatus",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverDeregisterCaptureInterface",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverDestroyQueue",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetHsOffchipParam",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetRegShadowInfo",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetRegShadowInfoAgr",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetReservedDmemForAgc",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverGetWorkloadStreamInfo",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverHp3dLockEnd",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverHp3dLockStart",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverIDHSSubmit",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverIsCoredumpValid",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverIsEsvmProcess",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverIsSuspendPointInFlightDirect",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverNotifyDefaultStates",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverPassInfoDownward",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverPatchClearState",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverRegisterCaptureInterface",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverReleaseHDRScopesACQ",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverReleaseRazorACQ",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSdmaCopyLinearBlocking",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetFlip",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetTFRingDirect",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetValueToSharedGds",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetWorkloadComplete",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetWorkloadStreamInactive",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetWorkloadsActive",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetupAsyncGraphics",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSetupRegisterShadow",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSubmitReprojectionAcb",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSubmitToHDRScopesACQ",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSuspendPointSubmit",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSuspendPointSubmitCdbg",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSysEnableSubmitDone45Exception",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSysGetClientNumber",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSysGetGfxAppGpuResetStatus",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverSysIsGameClosed",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "sceAgcDriverTmpInitIdhs",
+   "module": "libSceAgcDriver",
+   "return": "int32_t",
+   "params": [],
+   "state": "unimplemented",
+   "value": "0x8a6d0001"
+  },
+  {
+   "name": "AgcDriverAttachWindow",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverCaptureOverlay",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverCheckGuestMemory",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverDisplayBufferSize",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverHostHdr",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverLockVulkanLoader",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverNoteReportedToneMapPeak",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverPadStatusPoll",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverPadStatusShow",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverPresentBuffer",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverPresentClear",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverPresentationApi",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverPresentingHdr10",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverRaiseWorkerThreadPriority",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverRegisterVideoOutput",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverReleaseWindow",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverRequestScreenshot",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverReserveEopFlip",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverReserveEopFlipAt",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverSetHostDisplayHdr",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverSetSurfaceHdr10",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverSetSystemDialog",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverSetSystemOverlay",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverShutdown",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverStoreGuestLabel",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverSubmitFlip",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverTogglePerformanceOverlay",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverTraceCount",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverTraceRecording",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverTraceThread",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverUnlockVulkanLoader",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverUnregisterVideoOutput",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "AgcDriverWaitIdle",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "ComputeContainRect",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "ComputeContainScale",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "ComputeContainSize",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "ComputeHeightForWidth",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "ComputeWidthForHeight",
+   "module": "libSceAgcDriver",
+   "return": "void",
+   "params": [],
+   "state": "host"
+  },
+  {
+   "name": "sceAgcDcbSetCxRegistersIndirect",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDcbSetCxRegistersIndirectGetSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetCxRegIndirectPatchAddRegisters",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "uint32_t",
+     "count"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetCxRegIndirectPatchSetAddress",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "const struct agc_register *",
+     "registers"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetCxRegIndirectPatchSetNumRegisters",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "uint32_t",
+     "count"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDcbSetShRegistersIndirect",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDcbSetShRegistersIndirectGetSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetShRegIndirectPatchAddRegisters",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "uint32_t",
+     "count"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetShRegIndirectPatchSetAddress",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "const struct agc_register *",
+     "registers"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetShRegIndirectPatchSetNumRegisters",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "uint32_t",
+     "count"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDcbSetUcRegistersIndirect",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcDcbSetUcRegistersIndirectGetSize",
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetUcRegIndirectPatchAddRegisters",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "uint32_t",
+     "count"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetUcRegIndirectPatchSetAddress",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "const struct agc_register *",
+     "registers"
+    ]
+   ],
+   "state": "done"
+  },
+  {
+   "name": "sceAgcSetUcRegIndirectPatchSetNumRegisters",
+   "module": "libSceAgc",
+   "return": "int32_t",
+   "params": [
+    [
+     "uint32_t *",
+     "command"
+    ],
+    [
+     "uint32_t",
+     "count"
+    ]
+   ],
+   "state": "done"
+  }
+ ]
+}

@@ -39,6 +39,7 @@ mod opt_dce;
 mod opt_exec_units;
 mod opt_flow;
 mod opt_normalize_consts;
+mod opt_pack_halves;
 mod opt_redundant_movs;
 mod opt_share_copies;
 mod opt_tex_dual;
@@ -73,6 +74,7 @@ mod debug {
             const STATS = 1 << 5;
             const NO_PREAMBLE = 1 << 6;
             const NO_TEX_DUAL = 1 << 8;
+            const PACK_HALVES = 1 << 9;
         }
     }
 
@@ -93,6 +95,7 @@ mod debug {
                 "stats" => flags |= DebugFlags::STATS,
                 "nopreamble" => flags |= DebugFlags::NO_PREAMBLE,
                 "no-tex-dual" => flags |= DebugFlags::NO_TEX_DUAL,
+                "pack-halves" => flags |= DebugFlags::PACK_HALVES,
                 unk => eprintln!("Unknown {debug_var} flag \"{}\"", unk),
             }
         }

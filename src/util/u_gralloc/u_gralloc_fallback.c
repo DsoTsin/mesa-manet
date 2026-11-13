@@ -86,6 +86,7 @@ panvk_v19_mapper_init_once(void)
    } modules[] = {
       {"qti", "mapper.qti.so", "/vendor/lib64/hw/mapper.qti.so"},
       {"mediatek", "mapper.mediatek.so", "/vendor/lib64/hw/mapper.mediatek.so"},
+      {"xring", "mapper.xring.so", "/vendor/lib64/hw/mapper.xring.so"},
    };
    void *bn = dlopen("libbinder_ndk.so", RTLD_NOW | RTLD_LOCAL);
    if (!bn)

@@ -962,7 +962,21 @@ vk_common_GetCalibratedTimestampsKHR(
       max_clock_period = MAX2(max_clock_period, period);
    }
 
-   *pMaxDeviation = vk_time_max_deviation(begin, end, max_clock_period);
+#if DETECT_OS_WINDOWS
+   if (device->calibrate_time_domain ==
+       VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR) {
+      LARGE_INTEGER frequency;
+      if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0)
+         return VK_ERROR_UNKNOWN;
+      const uint64_t period = DIV_ROUND_UP(NSEC_PER_SEC,
+                                          (uint64_t)frequency.QuadPart);
+      max_clock_period = MAX2(max_clock_period, period);
+      const uint64_t interval = end - begin + 1;
+      *pMaxDeviation = interval > (UINT64_MAX - max_clock_period) / period ?
+         UINT64_MAX : interval * period + max_clock_period;
+   } else
+#endif
+      *pMaxDeviation = vk_time_max_deviation(begin, end, max_clock_period);
 
    return VK_SUCCESS;
 }

@@ -1003,7 +1003,7 @@ impl Shader<'_> {
             .iter()
             .enumerate()
             .map(|(c, cand)| match cand.item {
-                Item::Value(v) if u32::from(values[v].source) == PAN_FAU_VALUE_PILOT => {
+                Item::Value(v) if u32::from(values[v].source) == PAN_FAU_VALUE_PILOT as u32 => {
                     (0_u8, v as u64)
                 }
                 Item::Value(v) => (
@@ -1081,7 +1081,7 @@ impl Shader<'_> {
                     let value = &values[v];
                     for k in 0..u32::from(value.size) {
                         let w = at + k;
-                        if u32::from(value.source) == PAN_FAU_VALUE_PILOT {
+                        if u32::from(value.source) == PAN_FAU_VALUE_PILOT as u32 {
                             clear_bit(&mut fau.is_const, w);
                             set_bit(&mut fau.is_pilot, w);
                         } else {

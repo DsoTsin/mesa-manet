@@ -253,6 +253,31 @@ typedef enum {
    nir_ray_query_value_intersection_triangle_vertex_positions
 } nir_ray_query_value;
 
+typedef enum {
+   nir_hit_object_value_tmin,
+   nir_hit_object_value_tmax,
+   nir_hit_object_value_flags,
+   nir_hit_object_value_world_origin,
+   nir_hit_object_value_world_direction,
+   nir_hit_object_value_object_origin,
+   nir_hit_object_value_object_direction,
+   nir_hit_object_value_object_to_world,
+   nir_hit_object_value_world_to_object,
+   nir_hit_object_value_instance_id,
+   nir_hit_object_value_instance_custom_index,
+   nir_hit_object_value_geometry_index,
+   nir_hit_object_value_primitive_index,
+   nir_hit_object_value_hit_kind,
+   nir_hit_object_value_current_time,
+   nir_hit_object_value_sbt_index,
+   nir_hit_object_value_shader_record,
+   nir_hit_object_value_triangle_positions,
+   nir_hit_object_value_is_empty,
+   nir_hit_object_value_is_hit,
+   nir_hit_object_value_is_miss,
+} nir_hit_object_value;
+
+
 /**
  * Intel resource flags
  */

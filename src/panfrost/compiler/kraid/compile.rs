@@ -294,6 +294,10 @@ fn finish_shader(
     pass!(s.opt_branch_invert());
     pass!(s.opt_fall_through());
 
+    if DEBUG.contains(DebugFlags::PACK_HALVES) {
+        pass!(s.opt_pack_halves());
+    }
+
     // These have to happen last since we can't remove any instructions after
     // they've completed.
     pass!(s.assign_message_slots());

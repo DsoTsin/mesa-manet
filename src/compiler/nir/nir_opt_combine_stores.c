@@ -368,6 +368,10 @@ combine_stores_block(struct combine_stores_state *state, nir_block *block)
          break;
       }
 
+      case nir_intrinsic_hit_object_trace_ray:
+      case nir_intrinsic_hit_object_execute_shader:
+      case nir_intrinsic_rt_hit_object_trace_ray:
+      case nir_intrinsic_rt_hit_object_execute_shader:
       case nir_intrinsic_trace_ray:
       case nir_intrinsic_execute_callable:
       case nir_intrinsic_rt_trace_ray:

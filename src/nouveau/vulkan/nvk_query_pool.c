@@ -42,6 +42,12 @@ vk_query_pool_report_count(const struct vk_query_pool *vk_pool)
    case VK_QUERY_TYPE_OCCLUSION:
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
    case VK_QUERY_TYPE_TIMESTAMP:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR:
+   case VK_QUERY_TYPE_MICROMAP_COMPACTED_SIZE_EXT:
+   case VK_QUERY_TYPE_MICROMAP_SERIALIZATION_SIZE_EXT:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
       return 1;
 
    case VK_QUERY_TYPE_PIPELINE_STATISTICS:
@@ -63,6 +69,12 @@ vk_query_pool_statistics_counter_mask(const struct vk_query_pool *vk_pool)
    switch (vk_pool->query_type) {
    case VK_QUERY_TYPE_OCCLUSION:
    case VK_QUERY_TYPE_TIMESTAMP:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR:
+   case VK_QUERY_TYPE_MICROMAP_COMPACTED_SIZE_EXT:
+   case VK_QUERY_TYPE_MICROMAP_SERIALIZATION_SIZE_EXT:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
       break;
 
    case VK_QUERY_TYPE_PIPELINE_STATISTICS: {
@@ -273,6 +285,42 @@ nvk_sync_queries_from_gpu(struct nvk_query_pool *pool,
                                count * pool->query_stride);
 }
 
+static uint8_t
+nvk_query_report_subchannel(struct nvk_cmd_buffer *cmd)
+{
+   const struct nvk_physical_device *pdev =
+      nvk_device_physical(nvk_cmd_buffer_device(cmd));
+   const enum nvkmd_engines engines = nvk_queue_engines_from_queue_flags(
+      pdev, nvk_cmd_buffer_queue_flags(cmd));
+
+   return (engines & NVKMD_ENGINE_COMPUTE) && !(engines & NVKMD_ENGINE_3D) ?
+          SUBC_NV90C0 : SUBC_NV9097;
+}
+
+static void
+nvk_cmd_write_query_available(struct nvk_cmd_buffer *cmd, uint8_t subc,
+                              uint64_t addr, uint32_t available)
+{
+   struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
+   __push_mthd(p, subc, NV90C0_SET_REPORT_SEMAPHORE_A);
+   P_NV90C0_SET_REPORT_SEMAPHORE_A(p, addr >> 32);
+   P_NV90C0_SET_REPORT_SEMAPHORE_B(p, addr);
+   P_NV90C0_SET_REPORT_SEMAPHORE_C(p, available);
+   if (subc == SUBC_NV90C0) {
+      P_NV90C0_SET_REPORT_SEMAPHORE_D(p, {
+         .operation = OPERATION_RELEASE,
+         .structure_size = STRUCTURE_SIZE_ONE_WORD,
+      });
+   } else {
+      P_NV9097_SET_REPORT_SEMAPHORE_D(p, {
+         .operation = OPERATION_RELEASE,
+         .release = RELEASE_AFTER_ALL_PRECEEDING_WRITES_COMPLETE,
+         .pipeline_location = PIPELINE_LOCATION_ALL,
+         .structure_size = STRUCTURE_SIZE_ONE_WORD,
+      });
+   }
+}
+
 /**
  * Goes through a series of consecutive query indices in the given pool,
  * setting all element values to 0 and emitting them as available.
@@ -281,25 +329,23 @@ static void
 emit_zero_queries(struct nvk_cmd_buffer *cmd, struct nvk_query_pool *pool,
                   uint32_t first_index, uint32_t num_queries)
 {
+   const uint8_t subc = nvk_query_report_subchannel(cmd);
+
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_OCCLUSION:
    case VK_QUERY_TYPE_TIMESTAMP:
    case VK_QUERY_TYPE_PIPELINE_STATISTICS:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR:
+   case VK_QUERY_TYPE_MICROMAP_COMPACTED_SIZE_EXT:
+   case VK_QUERY_TYPE_MICROMAP_SERIALIZATION_SIZE_EXT:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SIZE_KHR:
+   case VK_QUERY_TYPE_ACCELERATION_STRUCTURE_SERIALIZATION_BOTTOM_LEVEL_POINTERS_KHR:
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
       for (uint32_t i = 0; i < num_queries; i++) {
          uint64_t addr = nvk_query_available_addr(pool, first_index + i);
 
-         struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
-         P_MTHD(p, NV9097, SET_REPORT_SEMAPHORE_A);
-         P_NV9097_SET_REPORT_SEMAPHORE_A(p, addr >> 32);
-         P_NV9097_SET_REPORT_SEMAPHORE_B(p, addr);
-         P_NV9097_SET_REPORT_SEMAPHORE_C(p, 1);
-         P_NV9097_SET_REPORT_SEMAPHORE_D(p, {
-            .operation = OPERATION_RELEASE,
-            .release = RELEASE_AFTER_ALL_PRECEEDING_WRITES_COMPLETE,
-            .pipeline_location = PIPELINE_LOCATION_ALL,
-            .structure_size = STRUCTURE_SIZE_ONE_WORD,
-         });
+         nvk_cmd_write_query_available(cmd, subc, addr, 1);
       }
       break;
    }
@@ -347,8 +393,10 @@ nvk_CmdResetQueryPool(VkCommandBuffer commandBuffer,
 
    const struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+   const uint8_t subc = nvk_query_report_subchannel(cmd);
 
-   if (queryCount > 1 && pool->layout != NVK_QUERY_POOL_LAYOUT_ALIGNED_INTERLEAVED) {
+   if (subc == SUBC_NV9097 && queryCount > 1 &&
+       pool->layout != NVK_QUERY_POOL_LAYOUT_ALIGNED_INTERLEAVED) {
       uint64_t clear_size;
       if (pool->layout == NVK_QUERY_POOL_LAYOUT_SEPARATE)
          clear_size = queryCount * sizeof(uint32_t);
@@ -363,17 +411,7 @@ nvk_CmdResetQueryPool(VkCommandBuffer commandBuffer,
       for (uint32_t i = 0; i < queryCount; i++) {
          uint64_t addr = nvk_query_available_addr(pool, firstQuery + i);
 
-         struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
-         P_MTHD(p, NV9097, SET_REPORT_SEMAPHORE_A);
-         P_NV9097_SET_REPORT_SEMAPHORE_A(p, addr >> 32);
-         P_NV9097_SET_REPORT_SEMAPHORE_B(p, addr);
-         P_NV9097_SET_REPORT_SEMAPHORE_C(p, 0);
-         P_NV9097_SET_REPORT_SEMAPHORE_D(p, {
-            .operation = OPERATION_RELEASE,
-            .release = RELEASE_AFTER_ALL_PRECEEDING_WRITES_COMPLETE,
-            .pipeline_location = PIPELINE_LOCATION_ALL,
-            .structure_size = STRUCTURE_SIZE_ONE_WORD,
-         });
+         nvk_cmd_write_query_available(cmd, subc, addr, 0);
       }
    }
 
@@ -384,15 +422,15 @@ nvk_CmdResetQueryPool(VkCommandBuffer commandBuffer,
     */
    if (pdev->info.cls_eng3d >= HOPPER_A) {
       struct nv_push *p = nvk_cmd_buffer_push(cmd, 7);
-      P_IMMD(p, NVC86F, WFI, 0);
-      P_MTHD(p, NVC86F, MEM_OP_A);
+      __push_immd(p, subc, NVC86F_WFI, 0);
+      __push_mthd(p, subc, NVC86F_MEM_OP_A);
       P_NVC86F_MEM_OP_A(p, {});
       P_NVC86F_MEM_OP_B(p, 0);
       P_NVC86F_MEM_OP_C(p, { .membar_type = 0 });
       P_NVC86F_MEM_OP_D(p, { .operation = OPERATION_MEMBAR });
    } else {
       struct nv_push *p = nvk_cmd_buffer_push(cmd, 1);
-      __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
+      __push_immd(p, subc, NV906F_SET_REFERENCE, 0);
    }
 }
 
@@ -409,6 +447,8 @@ nvk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
 
    uint64_t report_addr = nvk_query_report_addr(pool, query);
    uint8_t subc = nvk_cmd_buffer_last_subchannel(cmd);
+   if (nvk_query_report_subchannel(cmd) == SUBC_NV90C0)
+      subc = SUBC_NV90C0;
    if (subc == SUBC_NV9097) {
       struct nv_push *p = nvk_cmd_buffer_push(cmd, 7);
       P_IMMD(p, NV9097, FLUSH_PENDING_WRITES, 0);
@@ -431,10 +471,7 @@ nvk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
        * Considering that if we are on the compute subchannel, we only really
        * need to wait on anything that runs on compute.
        */
-      if (vk_expand_src_stage_flags2(stage) &
-          (VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-           VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT |
-           VK_PIPELINE_STAGE_2_BLIT_BIT))
+      if (stage & ~VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT)
          P_IMMD(p, NV90C0, WAIT_FOR_IDLE, 0);
 
       P_MTHD(p, NV90C0, SET_REPORT_SEMAPHORE_A);
@@ -833,23 +870,17 @@ nvk_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer,
    }
 
 
+   const uint8_t subc = nvk_query_report_subchannel(cmd);
    struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
-   P_IMMD(p, NV9097, FLUSH_PENDING_WRITES, 0);
+   if (subc == SUBC_NV90C0)
+      P_IMMD(p, NV90C0, WAIT_FOR_IDLE, 0);
+   else
+      P_IMMD(p, NV9097, FLUSH_PENDING_WRITES, 0);
 
    nvk_cmd_set_statistics_counters(cmd, pool, false);
 
    uint64_t available_addr = nvk_query_available_addr(pool, query);
-   p = nvk_cmd_buffer_push(cmd, 5);
-   P_MTHD(p, NV9097, SET_REPORT_SEMAPHORE_A);
-   P_NV9097_SET_REPORT_SEMAPHORE_A(p, available_addr >> 32);
-   P_NV9097_SET_REPORT_SEMAPHORE_B(p, available_addr);
-   P_NV9097_SET_REPORT_SEMAPHORE_C(p, 1);
-   P_NV9097_SET_REPORT_SEMAPHORE_D(p, {
-      .operation = OPERATION_RELEASE,
-      .release = RELEASE_AFTER_ALL_PRECEEDING_WRITES_COMPLETE,
-      .pipeline_location = PIPELINE_LOCATION_ALL,
-      .structure_size = STRUCTURE_SIZE_ONE_WORD,
-   });
+   nvk_cmd_write_query_available(cmd, subc, available_addr, 1);
 
    /* From the Vulkan spec:
     *
@@ -1124,12 +1155,13 @@ nvk_CmdCopyQueryPoolResultsToMemoryKHR(VkCommandBuffer commandBuffer,
    if (unlikely(!queryCount))
       return;
 
+   const uint8_t subc = nvk_query_report_subchannel(cmd);
    if (flags & VK_QUERY_RESULT_WAIT_BIT) {
       for (uint32_t i = 0; i < queryCount; i++) {
          uint64_t avail_addr = nvk_query_available_addr(pool, firstQuery + i);
 
          struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
-         __push_mthd(p, SUBC_NV9097, NV906F_SEMAPHOREA);
+         __push_mthd(p, subc, NV906F_SEMAPHOREA);
          P_NV906F_SEMAPHOREA(p, avail_addr >> 32);
          P_NV906F_SEMAPHOREB(p, (avail_addr & UINT32_MAX) >> 2);
          P_NV906F_SEMAPHOREC(p, 1);

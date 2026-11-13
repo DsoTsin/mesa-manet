@@ -143,8 +143,14 @@ may_change_active_invocations(nir_instr *instr)
    case nir_intrinsic_demote_if:
       /* Disabling invocations is change. */
       return true;
+   case nir_intrinsic_hit_object_trace_ray:
+   case nir_intrinsic_hit_object_execute_shader:
+   case nir_intrinsic_rt_hit_object_trace_ray:
+   case nir_intrinsic_rt_hit_object_execute_shader:
    case nir_intrinsic_trace_ray:
    case nir_intrinsic_execute_callable:
+   case nir_intrinsic_reorder_thread:
+   case nir_intrinsic_rt_reorder_thread:
    case nir_intrinsic_report_ray_intersection:
       /* These are allowed to completely change the set of active invocations. */
       return true;

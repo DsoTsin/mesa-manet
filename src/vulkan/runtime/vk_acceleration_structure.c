@@ -333,6 +333,7 @@ vk_acceleration_structure_build_state_init(struct vk_acceleration_structure_buil
    /* Make sure encode scratch space does not overlap the BVH. */
    offset = MAX2(offset, encode_scratch_end);
 
+   offset = ALIGN_POT(offset, 8);
    state->scratch.ir_offset = offset;
    offset += ir_leaf_size * leaf_count;
 
@@ -639,11 +640,11 @@ vk_accel_struct_cmd_end_debug_marker(VkCommandBuffer commandBuffer,
 }
 
 static VkResult
-build_leaves(VkCommandBuffer commandBuffer, struct vk_device *device,
+build_leaves_impl(VkCommandBuffer commandBuffer, struct vk_device *device,
              struct vk_meta_device *meta,
              const struct vk_acceleration_structure_build_args *args,
              struct vk_acceleration_structure_build_state *states,
-             uint32_t build_count, uint32_t build_flags)
+             uint32_t build_count, uint32_t build_flags, bool update)
 {
    VkPipeline pipeline;
    VkPipelineLayout layout;
@@ -687,7 +688,7 @@ build_leaves(VkCommandBuffer commandBuffer, struct vk_device *device,
       commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
    for (uint32_t i = 0; i < build_count; ++i) {
-      if (states[i].config.internal_type == VK_INTERNAL_BUILD_TYPE_UPDATE)
+      if ((states[i].config.internal_type == VK_INTERNAL_BUILD_TYPE_UPDATE) != update)
          continue;
       if ((states[i].config.build_flags & VK_LEAF_BUILD_FLAGS) != build_flags)
          continue;
@@ -735,6 +736,46 @@ build_leaves(VkCommandBuffer commandBuffer, struct vk_device *device,
    }
 
    return VK_SUCCESS;
+}
+
+static VkResult
+build_leaves(VkCommandBuffer commandBuffer, struct vk_device *device,
+             struct vk_meta_device *meta,
+             const struct vk_acceleration_structure_build_args *args,
+             struct vk_acceleration_structure_build_state *states,
+             uint32_t build_count, uint32_t build_flags)
+{
+   return build_leaves_impl(commandBuffer, device, meta, args, states,
+                             build_count, build_flags, false);
+}
+
+static VkResult
+build_update_leaves(VkCommandBuffer commandBuffer, struct vk_device *device,
+                    struct vk_meta_device *meta,
+                    const struct vk_acceleration_structure_build_args *args,
+                    struct vk_acceleration_structure_build_state *states,
+                    uint32_t build_count, uint32_t build_flags)
+{
+   return build_leaves_impl(commandBuffer, device, meta, args, states,
+                             build_count, build_flags, true);
+}
+
+VkResult
+vk_build_update_leaf_nodes(VkCommandBuffer commandBuffer, struct vk_device *device,
+                          struct vk_meta_device *meta,
+                          const struct vk_acceleration_structure_build_args *args,
+                          struct vk_acceleration_structure_build_state *states,
+                          uint32_t build_count)
+{
+   for (uint32_t i = 0; i < build_count; i++) {
+      if (states[i].config.internal_type == VK_INTERNAL_BUILD_TYPE_UPDATE)
+         states[i].leaf_node_count = 0;
+   }
+   if (device->as_build_ops->build_leaves)
+      return device->as_build_ops->build_leaves(commandBuffer, device, states,
+                                                build_count, true);
+   return vk_build_stage(build_update_leaves, commandBuffer, device, meta, args,
+                          states, build_count, VK_LEAF_BUILD_FLAGS, true);
 }
 
 static VkResult
@@ -1349,49 +1390,41 @@ vk_cmd_build_acceleration_structures(VkCommandBuffer commandBuffer,
                                              }, 0, NULL, 0, NULL);
 
    if (batch_state.any_lbvh || batch_state.any_ploc || batch_state.any_hploc) {
-      VkResult result = vk_build_stage(build_leaves, commandBuffer, device, meta, args, states, infoCount,
-                                       VK_LEAF_BUILD_FLAGS, false);
+      VkResult result = ops->build_leaves ?
+         ops->build_leaves(commandBuffer, device, states, infoCount, false) :
+         vk_build_stage(build_leaves, commandBuffer, device, meta, args, states, infoCount,
+                         VK_LEAF_BUILD_FLAGS, false);
       if (result != VK_SUCCESS) {
          free(states);
          vk_command_buffer_set_error(cmd_buffer, result);
          return;
       }
 
-      for (uint32_t i = 0; i < infoCount; ++i) {
-         if (states[i].config.internal_type != VK_INTERNAL_BUILD_TYPE_UPDATE) {
-            device->cmd_fill_buffer_addr(commandBuffer, pInfos[i].scratchData.deviceAddress + states[i].scratch.sort_internal_offset,
-                                         sizeof(struct morton_ready_count) * states[i].morton_sort_passes, 0x0);
+      if (ops->build_internal) {
+         vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
+         result = ops->build_internal(commandBuffer, device, states, infoCount);
+         if (result != VK_SUCCESS) {
+            free(states);
+            vk_command_buffer_set_error(cmd_buffer, result);
+            return;
+         }
+      } else {
+         for (uint32_t i = 0; i < infoCount; ++i) {
+            if (states[i].config.internal_type != VK_INTERNAL_BUILD_TYPE_UPDATE) {
+               device->cmd_fill_buffer_addr(commandBuffer, pInfos[i].scratchData.deviceAddress + states[i].scratch.sort_internal_offset,
+                                            sizeof(struct morton_ready_count) * states[i].morton_sort_passes, 0x0);
+            }
+
+            if (states[i].config.internal_type == VK_INTERNAL_BUILD_TYPE_HPLOC) {
+               device->cmd_fill_buffer_addr(commandBuffer, pInfos[i].scratchData.deviceAddress + states[i].scratch.hploc_ranges_offset,
+                                            sizeof(uint32_t) * states[i].internal_node_count, 0xffffffff);
+            }
          }
 
-         if (states[i].config.internal_type == VK_INTERNAL_BUILD_TYPE_HPLOC) {
-            device->cmd_fill_buffer_addr(commandBuffer, pInfos[i].scratchData.deviceAddress + states[i].scratch.hploc_ranges_offset,
-                                         sizeof(uint32_t) * states[i].internal_node_count, 0xffffffff);
-         }
-      }
-
-      vk_bvh_build_barrier_transfer_to_compute(commandBuffer);
-      vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
-
-      result = vk_build_stage(morton_generate, commandBuffer, device, meta, args, states, infoCount, VK_MORTON_BUILD_FLAGS, false);
-      if (result != VK_SUCCESS) {
-         free(states);
-         vk_command_buffer_set_error(cmd_buffer, result);
-         return;
-      }
-
-      vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
-
-
-      if (batch_state.any_late_pair_compression) {
-         vk_build_stage(pair_triangles, commandBuffer, device, meta, args, states, infoCount, VK_PAIR_TRIANGLES_BUILD_FLAGS, false);
+         vk_bvh_build_barrier_transfer_to_compute(commandBuffer);
          vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
-         vk_build_stage(id_prefix_sum, commandBuffer, device, meta, args, states, infoCount, VK_ID_PREFIX_SUM_BUILD_FLAGS, false);
-         vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
-      }
 
-      if (batch_state.any_lbvh) {
-         result = vk_build_stage(lbvh_main, commandBuffer, device, meta, args, states, infoCount,
-                                 VK_LBVH_MAIN_BUILD_FLAGS, false);
+         result = vk_build_stage(morton_generate, commandBuffer, device, meta, args, states, infoCount, VK_MORTON_BUILD_FLAGS, false);
          if (result != VK_SUCCESS) {
             free(states);
             vk_command_buffer_set_error(cmd_buffer, result);
@@ -1400,30 +1433,50 @@ vk_cmd_build_acceleration_structures(VkCommandBuffer commandBuffer,
 
          vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
 
-         result = vk_build_stage(lbvh_generate_ir, commandBuffer, device, meta, args, states, infoCount,
-                                 VK_LBVH_GENERATE_IR_BUILD_FLAGS, false);
-         if (result != VK_SUCCESS) {
-            free(states);
-            vk_command_buffer_set_error(cmd_buffer, result);
-            return;
-         }
-      }
 
-      if (batch_state.any_ploc) {
-         result = vk_build_stage(ploc_build_internal, commandBuffer, device, meta, args, states, infoCount,
-                                 VK_PLOC_BUILD_FLAGS, false);
-         if (result != VK_SUCCESS) {
-            vk_command_buffer_set_error(cmd_buffer, result);
-            return;
+         if (batch_state.any_late_pair_compression) {
+            vk_build_stage(pair_triangles, commandBuffer, device, meta, args, states, infoCount, VK_PAIR_TRIANGLES_BUILD_FLAGS, false);
+            vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
+            vk_build_stage(id_prefix_sum, commandBuffer, device, meta, args, states, infoCount, VK_ID_PREFIX_SUM_BUILD_FLAGS, false);
+            vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
          }
-      }
 
-      if (batch_state.any_hploc) {
-         result = vk_build_stage(hploc_build_internal, commandBuffer, device, meta, args, states, infoCount,
-                                 VK_HPLOC_BUILD_FLAGS, false);
-         if (result != VK_SUCCESS) {
-            vk_command_buffer_set_error(cmd_buffer, result);
-            return;
+         if (batch_state.any_lbvh) {
+            result = vk_build_stage(lbvh_main, commandBuffer, device, meta, args, states, infoCount,
+                                    VK_LBVH_MAIN_BUILD_FLAGS, false);
+            if (result != VK_SUCCESS) {
+               free(states);
+               vk_command_buffer_set_error(cmd_buffer, result);
+               return;
+            }
+
+            vk_bvh_build_barrier_compute_to_compute(commandBuffer, false);
+
+            result = vk_build_stage(lbvh_generate_ir, commandBuffer, device, meta, args, states, infoCount,
+                                    VK_LBVH_GENERATE_IR_BUILD_FLAGS, false);
+            if (result != VK_SUCCESS) {
+               free(states);
+               vk_command_buffer_set_error(cmd_buffer, result);
+               return;
+            }
+         }
+
+         if (batch_state.any_ploc) {
+            result = vk_build_stage(ploc_build_internal, commandBuffer, device, meta, args, states, infoCount,
+                                    VK_PLOC_BUILD_FLAGS, false);
+            if (result != VK_SUCCESS) {
+               vk_command_buffer_set_error(cmd_buffer, result);
+               return;
+            }
+         }
+
+         if (batch_state.any_hploc) {
+            result = vk_build_stage(hploc_build_internal, commandBuffer, device, meta, args, states, infoCount,
+                                    VK_HPLOC_BUILD_FLAGS, false);
+            if (result != VK_SUCCESS) {
+               vk_command_buffer_set_error(cmd_buffer, result);
+               return;
+            }
          }
       }
 

@@ -104,8 +104,11 @@ nv_cubin_function_parse_base_nvinfo(struct nv_cubin_module *module,
       case NVINFO_EIATTR_MIN_STACK_SIZE: {
          assert(attr_header->format == NVINFO_EIFMT_SVAL);
          const struct nvinfo_attr_min_stack_size_t *attr = data;
-         if (attr->symbol_index == function->symbol_index)
-            function->slm_size = attr->size;
+         if (attr->symbol_index == function->symbol_index) {
+            function->stack_size_unknown = attr->size == UINT32_MAX;
+            if (!function->stack_size_unknown)
+               function->slm_size = MAX2(function->slm_size, attr->size);
+         }
          break;
       }
       case NVINFO_EIATTR_REGCOUNT: {
@@ -242,8 +245,46 @@ nv_cubin_function_init(struct nv_cubin_module *module,
    function->code_size = code_section_data->d_size;
    function->func_offset = offset_in_section;
 
+   char constant_section_name[2048];
+   snprintf(constant_section_name, sizeof(constant_section_name),
+            ".nv.constant2.%s", symbol_name);
+   Elf_Scn *constant_section =
+      nv_cubin_module_get_section(module, constant_section_name);
+   if (constant_section) {
+      Elf64_Shdr *constant_header = elf64_getshdr(constant_section);
+      if (!constant_header || constant_header->sh_type != SHT_PROGBITS)
+         return nv_cubin_error("Invalid function constant section");
+      Elf_Data *constant_data = elf_getdata(constant_section, NULL);
+      if (!constant_data || (constant_data->d_size && !constant_data->d_buf) ||
+          constant_data->d_size != constant_header->sh_size)
+         return nv_cubin_error("Couldn't get function constant data");
+      const size_t constant_index = elf_ndxscn(constant_section);
+      Elf_Scn *relocation_section = NULL;
+      while ((relocation_section = elf_nextscn(module->elf, relocation_section)) != NULL) {
+         Elf64_Shdr *relocation_header = elf64_getshdr(relocation_section);
+         if (relocation_header && relocation_header->sh_info == constant_index &&
+             (relocation_header->sh_type == SHT_RELA || relocation_header->sh_type == SHT_REL) &&
+             relocation_header->sh_size)
+            return nv_cubin_error("Function constant relocations are unsupported");
+      }
+      function->constant2_ptr = constant_data->d_buf;
+      function->constant2_size = constant_data->d_size;
+   }
+
    function->static_smem_size =
       nv_cubin_module_get_static_smem_size(module, symbol_name);
+
+   char local_section_name[2048];
+   snprintf(local_section_name, sizeof(local_section_name), ".nv.local.%s",
+            symbol_name);
+   Elf_Scn *local_section =
+      nv_cubin_module_get_section(module, local_section_name);
+   if (local_section) {
+      Elf64_Shdr *local_header = elf64_getshdr(local_section);
+      if (!local_header)
+         return nv_cubin_error("Couldn't get local memory section header");
+      function->static_lmem_size = local_header->sh_size;
+   }
 
    if (module->abi < NV_ELF_OSABI_41) {
       /* old version has SHF_BARRIERS in .sectionheader */

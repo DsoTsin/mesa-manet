@@ -180,6 +180,9 @@ lower_vtg_io_intrin(nir_builder *b,
 
    const nir_io_semantics sem = nir_intrinsic_io_semantics(intrin);
    unsigned component = nir_intrinsic_component(intrin);
+   const uint32_t offset_stride =
+      sem.location == VARYING_SLOT_TESS_LEVEL_OUTER ||
+      sem.location == VARYING_SLOT_TESS_LEVEL_INNER ? 4 : 16;
 
    uint32_t base_addr;
    if (b->shader->info.stage == MESA_SHADER_VERTEX && !is_output)
@@ -193,15 +196,14 @@ lower_vtg_io_intrin(nir_builder *b,
       unsigned const_offset = nir_src_as_uint(nir_src_for_ssa(offset));
 
       /* Tighten the range */
-      base_addr += const_offset * 16;
+      base_addr += const_offset * offset_stride;
       range = 4 * intrin->num_components;
 
       if (const_offset != 0)
          offset = nir_imm_int(b, 0);
    } else {
-      /* Offsets from NIR are in vec4's */
-      offset = nir_imul_imm(b, offset, 16);
-      range = (sem.num_slots - 1) * 16 + intrin->num_components * 4;
+      offset = nir_imul_imm(b, offset, offset_stride);
+      range = (sem.num_slots - 1) * offset_stride + intrin->num_components * 4;
    }
 
    const struct nak_nir_attr_io_flags flags = {
@@ -218,12 +220,7 @@ lower_vtg_io_intrin(nir_builder *b,
 
       unsigned c_addr = base_addr + 4 * c;
 
-      /* vec2 has to be vec2 aligned, vec3/4 have to be vec4 aligned.  We
-       * don't have actual alignment information on these intrinsics but we
-       * can assume that the indirect offset (if any) is a multiple of 16 so
-       * we don't need to worry about that and can just look at c_addr.
-       */
-      comps = MIN2(comps, 4);
+      comps = MIN2(comps, offset_is_const ? 4 : offset_stride / 4);
       if (c_addr & 0xf)
          comps = MIN2(comps, 2);
       if (c_addr & 0x7)

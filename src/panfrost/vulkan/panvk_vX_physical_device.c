@@ -309,7 +309,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .ARM_performance_counters_by_region = PAN_ARCH >= 15,
       .ARM_tensors = has_tensors(),
       .ARM_tensor_controls = has_tensors(),
-      .ARM_data_graph = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
+      .ARM_data_graph = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", true),
    };
 }
 
@@ -754,7 +754,7 @@ panvk_per_arch(get_physical_device_features)(
 
       /* VK_KHR_robustness2 */
       .robustBufferAccess2 = PAN_ARCH >= 11,
-      .robustImageAccess2 = false,
+      .robustImageAccess2 = PAN_ARCH >= 15,
       .nullDescriptor = PAN_ARCH >= 10,
 
       .tensorNonPacked = has_tensors(),
@@ -763,9 +763,9 @@ panvk_per_arch(get_physical_device_features)(
       .shaderStorageTensorArrayNonUniformIndexing = false,
       .descriptorBindingStorageTensorUpdateAfterBind = false,
       .tensors = has_tensors(),
-      .dataGraph = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
-      .dataGraphSpecializationConstants = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
-      .dataGraphShaderModule = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", false),
+      .dataGraph = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", true),
+      .dataGraphSpecializationConstants = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", true),
+      .dataGraphShaderModule = has_tensors() && debug_get_bool_option("PANVK_DATA_GRAPH", true),
 
       /* VK_EXT_shader_tile_image */
       .shaderTileImageColorReadAccess = PAN_ARCH >= 9,
@@ -1529,7 +1529,7 @@ panvk_per_arch(get_physical_device_properties)(
       .maxTransformFeedbackStreamDataSize = 2048,
       .maxTransformFeedbackBufferDataSize = 512,
       .maxTransformFeedbackBufferDataStride = 2048,
-      .transformFeedbackQueries = false,
+      .transformFeedbackQueries = PAN_ARCH >= 10,
       .transformFeedbackStreamsLinesTriangles = false,
       .transformFeedbackRasterizationStreamSelect = false,
       .transformFeedbackDraw = false,
@@ -1617,10 +1617,11 @@ panvk_per_arch(get_physical_device_properties)(
    STATIC_ASSERT(sizeof(instance->driver_build_sha) >= VK_UUID_SIZE);
    memcpy(properties->driverUUID, instance->driver_build_sha, VK_UUID_SIZE);
 
-   snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE, "%s - Manet",
-            properties->deviceName);
+   snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE,
+            "Manet - Mix Studio");
    snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
-            "Manet" MESA_GIT_SHA1 ", Mix Studio Tech (https://mixstudio.tech) "
+            "Manet, Mesa " PACKAGE_VERSION MESA_GIT_SHA1
+            ", Mix Studio Tech (https://mixstudio.tech) "
             "/ Pix Philosophy Limited.");
 
    /* VK_EXT_physical_device_drm */

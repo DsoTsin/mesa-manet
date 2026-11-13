@@ -83,6 +83,7 @@ pub enum SideEffect {
 
 pub fn side_effect_type(op: &Op) -> SideEffect {
     match op {
+        Op::TtuMacro(_) => SideEffect::Barrier,
         // Float ALU
         Op::F2FP(_)
         | Op::FAdd(_)
@@ -218,7 +219,9 @@ pub fn side_effect_type(op: &Op) -> SideEffect {
         | Op::Kill(_)
         | Op::S2R(_)
         | Op::Nanosleep(_) => SideEffect::Barrier,
-        Op::PixLd(_) | Op::Vote(_) | Op::Match(_) => SideEffect::None,
+        Op::PixLd(_) | Op::Vote(_) | Op::Elect(_) | Op::Match(_) => {
+            SideEffect::None
+        }
         Op::Nop(OpNop { label, .. }) => {
             if label.is_none() {
                 SideEffect::None
@@ -318,6 +321,7 @@ pub fn estimate_variable_latency(sm: &ShaderModelInfo, op: &Op) -> u32 {
         | Op::MemBar(_) => 32,
 
         // Control-flow ops
+        Op::TtuMacro(_) => 32,
         Op::WarpSync(_) => 16,
 
         // Barrier

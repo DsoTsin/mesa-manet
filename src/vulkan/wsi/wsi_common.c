@@ -3187,8 +3187,12 @@ wsi_create_buffer_blit_context(const struct wsi_swapchain *chain,
       __vk_append_struct(&buf_mem_info, &memory_export_info);
    }
 
-   result = wsi->AllocateMemory(chain->device, &buf_mem_info,
-                                &chain->alloc, &image->blit.memory);
+   if (info->allocate_blit_memory)
+      result = info->allocate_blit_memory(chain, info, image, &buf_mem_info,
+                                          &image->blit.memory);
+   else
+      result = wsi->AllocateMemory(chain->device, &buf_mem_info,
+                                   &chain->alloc, &image->blit.memory);
    if (result != VK_SUCCESS)
       return result;
 

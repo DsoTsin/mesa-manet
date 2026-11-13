@@ -28,7 +28,12 @@ struct nv_cubin_function {
    size_t code_size;
    size_t func_offset; /* offset of function in the code section */
 
+   const void *constant2_ptr;
+   size_t constant2_size;
+
    uint32_t static_smem_size;
+   uint64_t static_lmem_size;
+   bool stack_size_unknown;
 
    /* from .nv.info */
    uint32_t slm_size;

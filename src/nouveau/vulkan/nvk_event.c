@@ -154,7 +154,11 @@ vk_stage_flags_to_nv9097_pipeline_location(VkPipelineStageFlags2 flags)
                         VK_PIPELINE_STAGE_2_HOST_BIT |
                         VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT);
 
-   clear_bits64(&flags, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+   clear_bits64(&flags, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                        VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT |
+                        VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_COPY_BIT_KHR);
 
    assert(flags == 0);
 

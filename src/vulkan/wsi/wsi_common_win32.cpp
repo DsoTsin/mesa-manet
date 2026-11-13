@@ -71,6 +71,7 @@ struct wsi_win32_image {
    struct wsi_image base;
    enum wsi_win32_image_state state;
    struct wsi_win32_swapchain *chain;
+   void *native;
    struct {
       ID3D12Resource *swapchain_res;
    } dxgi;
@@ -108,6 +109,7 @@ struct wsi_win32_swapchain {
    VkResult                     status;
    VkExtent2D                 extent;
    HWND wnd;
+   void *native;
    HDC chain_dc;
    struct wsi_win32_image     images[0];
 };
@@ -368,6 +370,9 @@ wsi_win32_surface_get_formats(VkIcdSurfaceBase *icd_surface,
    get_sorted_vk_formats(wsi_device, sorted_formats);
 
    for (unsigned i = 0; i < ARRAY_SIZE(sorted_formats); i++) {
+      if (wsi_device->win32.create_native_swapchain &&
+          sorted_formats[i] != VK_FORMAT_R8G8B8A8_UNORM)
+         continue;
       vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
          f->format = sorted_formats[i];
          f->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -390,6 +395,9 @@ wsi_win32_surface_get_formats2(VkIcdSurfaceBase *icd_surface,
    get_sorted_vk_formats(wsi_device, sorted_formats);
 
    for (unsigned i = 0; i < ARRAY_SIZE(sorted_formats); i++) {
+      if (wsi_device->win32.create_native_swapchain &&
+          sorted_formats[i] != VK_FORMAT_R8G8B8A8_UNORM)
+         continue;
       vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, f) {
          assert(f->sType == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
          f->surfaceFormat.format = sorted_formats[i];
@@ -558,6 +566,41 @@ wsi_dxgi_configure_image(const struct wsi_swapchain *chain,
    return VK_SUCCESS;
 }
 
+static uint32_t
+wsi_win32_select_native_memory(const struct wsi_device *wsi, uint32_t bits)
+{
+   return wsi_select_memory_type(wsi, 0, 0, bits);
+}
+
+static VkResult
+wsi_win32_allocate_native_memory(const struct wsi_swapchain *base,
+                                 const struct wsi_image_info *info,
+                                 struct wsi_image *image,
+                                 const VkMemoryAllocateInfo *allocate,
+                                 VkDeviceMemory *out)
+{
+   auto *chain = (struct wsi_win32_swapchain *)base;
+   auto *win32_image = container_of(image, struct wsi_win32_image, base);
+   uint32_t pitch = 0;
+   VkResult result = base->wsi->win32.create_native_image_memory(
+      base->device, chain->native, info->create.format,
+      info->create.extent.width, info->create.extent.height,
+      allocate, &base->alloc, &win32_image->native, &pitch, out);
+   if (result != VK_SUCCESS)
+      return result;
+   if (pitch != info->linear_stride) {
+      fprintf(stderr, "Mesa WSI native image pitch mismatch actual=%u expected=%u format=%u blit_type=%u extent=%ux%u\n",
+              pitch, info->linear_stride, info->create.format, base->blit.type,
+              info->create.extent.width, info->create.extent.height);
+      base->wsi->FreeMemory(base->device, *out, &base->alloc);
+      *out = VK_NULL_HANDLE;
+      base->wsi->win32.destroy_native_image(win32_image->native);
+      win32_image->native = nullptr;
+      return VK_ERROR_FORMAT_NOT_SUPPORTED;
+   }
+   return VK_SUCCESS;
+}
+
 static VkResult
 wsi_win32_image_init(VkDevice device_h,
                      struct wsi_win32_swapchain *chain,
@@ -567,29 +610,45 @@ wsi_win32_image_init(VkDevice device_h,
 {
    VkResult result = wsi_create_image(&chain->base, &chain->base.image_info,
                                       &image->base);
-   if (result != VK_SUCCESS)
+   if (result != VK_SUCCESS) {
+      if (image->native)
+         chain->base.wsi->win32.destroy_native_image(image->native);
+      image->native = nullptr;
       return result;
+   }
 
    VkIcdSurfaceWin32 *win32_surface = (VkIcdSurfaceWin32 *)create_info->surface;
    chain->wnd = win32_surface->hwnd;
    image->chain = chain;
 
-   if (chain->dxgi)
+   if (chain->dxgi || chain->native)
       return VK_SUCCESS;
 
-   chain->chain_dc = GetDC(chain->wnd);
+   if (!chain->chain_dc)
+      chain->chain_dc = GetDC(chain->wnd);
    image->sw.dc = CreateCompatibleDC(chain->chain_dc);
    HBITMAP bmp = NULL;
 
-   BITMAPINFO info = { 0 };
-   info.bmiHeader.biSize = sizeof(BITMAPINFO);
-   info.bmiHeader.biWidth = create_info->imageExtent.width;
-   info.bmiHeader.biHeight = -create_info->imageExtent.height;
-   info.bmiHeader.biPlanes = 1;
-   info.bmiHeader.biBitCount = 32;
-   info.bmiHeader.biCompression = BI_RGB;
+   struct {
+      BITMAPINFOHEADER header;
+      DWORD masks[3];
+   } info = { 0 };
+   info.header.biSize = sizeof(BITMAPINFOHEADER);
+   info.header.biWidth = create_info->imageExtent.width;
+   info.header.biHeight = -create_info->imageExtent.height;
+   info.header.biPlanes = 1;
+   info.header.biBitCount = 32;
+   info.header.biCompression = BI_RGB;
+   if (create_info->imageFormat == VK_FORMAT_R8G8B8A8_UNORM ||
+       create_info->imageFormat == VK_FORMAT_R8G8B8A8_SRGB) {
+      info.header.biCompression = BI_BITFIELDS;
+      info.masks[0] = 0x000000ff;
+      info.masks[1] = 0x0000ff00;
+      info.masks[2] = 0x00ff0000;
+   }
 
-   bmp = CreateDIBSection(image->sw.dc, &info, DIB_RGB_COLORS, &image->sw.ppvBits, NULL, 0);
+   bmp = CreateDIBSection(image->sw.dc, (const BITMAPINFO *)&info,
+                          DIB_RGB_COLORS, &image->sw.ppvBits, NULL, 0);
    assert(bmp && image->sw.ppvBits);
 
    SelectObject(image->sw.dc, bmp);
@@ -616,6 +675,8 @@ wsi_win32_image_finish(struct wsi_win32_swapchain *chain,
    if(image->sw.bmp)
       DeleteObject(image->sw.bmp);
    wsi_destroy_image(&chain->base, &image->base);
+   if (image->native)
+      chain->base.wsi->win32.destroy_native_image(image->native);
 }
 
 static VkResult
@@ -628,13 +689,16 @@ wsi_win32_swapchain_destroy(struct wsi_swapchain *drv_chain,
    for (uint32_t i = 0; i < chain->base.image_count; i++)
       wsi_win32_image_finish(chain, allocator, &chain->images[i]);
 
-   DeleteDC(chain->chain_dc);
+   if (chain->chain_dc)
+      ReleaseDC(chain->wnd, chain->chain_dc);
 
    if (chain->surface->current_swapchain == chain)
       chain->surface->current_swapchain = NULL;
 
    if (chain->dxgi)
       chain->dxgi->Release();
+   if (chain->native)
+      chain->base.wsi->win32.destroy_native_swapchain(chain->native);
 
    wsi_swapchain_finish(&chain->base);
 
@@ -838,6 +902,14 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
    if (chain->dxgi)
       return wsi_win32_queue_present_dxgi(chain, image, damage);
 
+   if (chain->native) {
+      chain->status = chain->base.wsi->win32.present_native_image(chain->native,
+                                                                  image->native);
+      if (chain->status == VK_SUCCESS)
+         wsi_win32_set_image_idle(chain, image);
+      return chain->status;
+   }
+
    char *ptr = (char *)image->base.cpu_map;
    char *dptr = (char *)image->sw.ppvBits;
 
@@ -977,7 +1049,8 @@ wsi_win32_surface_create_swapchain(
       { WSI_IMAGE_TYPE_CPU },
    };
 
-   bool supports_dxgi = wsi->dxgi.factory &&
+   bool supports_native = wsi->wsi->win32.create_native_swapchain;
+   bool supports_dxgi = !supports_native && wsi->dxgi.factory &&
                         wsi->dxgi.dcomp &&
                         wsi->wsi->win32.get_d3d12_command_queue;
    struct wsi_base_image_params *image_params = supports_dxgi ?
@@ -1005,6 +1078,34 @@ wsi_win32_surface_create_swapchain(
    chain->status = VK_SUCCESS;
 
    chain->surface = surface;
+   chain->wnd = surface->base.hwnd;
+
+   if (supports_native) {
+      result = wsi->wsi->win32.create_native_swapchain(device,
+         (uintptr_t)chain->wnd, &chain->native);
+      if (result == VK_ERROR_FEATURE_NOT_PRESENT) {
+         supports_native = false;
+         fprintf(stderr, "Mesa WSI uses GDI CPU blit presentation for this display\n");
+      } else if (result != VK_SUCCESS) {
+         goto fail;
+      }
+   }
+   if (supports_native) {
+      if (create_info->imageFormat != VK_FORMAT_R8G8B8A8_UNORM ||
+          chain->base.blit.type != WSI_SWAPCHAIN_BUFFER_BLIT) {
+         fprintf(stderr, "Mesa WSI native swapchain rejects format=%u blit_type=%u extent=%ux%u\n",
+                 create_info->imageFormat, chain->base.blit.type,
+                 create_info->imageExtent.width, create_info->imageExtent.height);
+         result = VK_ERROR_FORMAT_NOT_SUPPORTED;
+         goto fail;
+      }
+      wsi_configure_buffer_image(&chain->base, create_info, 256, 65536,
+                                  &chain->base.image_info);
+      chain->base.image_info.allocate_blit_memory =
+         wsi_win32_allocate_native_memory;
+      chain->base.image_info.select_image_memory_type =
+         wsi_win32_select_native_memory;
+   }
 
    if (image_params->image_type == WSI_IMAGE_TYPE_DXGI) {
       result = wsi_win32_surface_create_swapchain_dxgi(surface, device, wsi, create_info, chain);
