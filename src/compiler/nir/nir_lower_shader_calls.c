@@ -67,7 +67,10 @@ instr_is_shader_call(nir_instr *instr)
       return false;
 
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-   return intrin->intrinsic == nir_intrinsic_trace_ray ||
+   return intrin->intrinsic == nir_intrinsic_reorder_thread ||
+          intrin->intrinsic == nir_intrinsic_hit_object_trace_ray ||
+          intrin->intrinsic == nir_intrinsic_hit_object_execute_shader ||
+          intrin->intrinsic == nir_intrinsic_trace_ray ||
           intrin->intrinsic == nir_intrinsic_report_ray_intersection ||
           intrin->intrinsic == nir_intrinsic_execute_callable;
 }
@@ -628,6 +631,23 @@ spill_ssa_defs_and_lower_shader_calls(nir_shader *shader, uint32_t num_calls,
 
          /* Lower to generic intrinsics with information about the stack & resume shader. */
          switch (call->intrinsic) {
+         case nir_intrinsic_reorder_thread:
+            nir_rt_reorder_thread(b, call->src[0].ssa, call->src[1].ssa,
+                                 call->src[2].ssa, .call_idx = call_idx,
+                                 .stack_size = offset);
+            break;
+         case nir_intrinsic_hit_object_trace_ray:
+         case nir_intrinsic_hit_object_execute_shader: {
+            nir_intrinsic_instr *next = nir_intrinsic_instr_create(shader,
+               call->intrinsic == nir_intrinsic_hit_object_trace_ray ?
+                  nir_intrinsic_rt_hit_object_trace_ray : nir_intrinsic_rt_hit_object_execute_shader);
+            for (unsigned i = 0; i < nir_intrinsic_infos[call->intrinsic].num_srcs; i++)
+               next->src[i] = nir_src_for_ssa(call->src[i].ssa);
+            nir_intrinsic_set_call_idx(next, call_idx);
+            nir_intrinsic_set_stack_size(next, offset);
+            nir_builder_instr_insert(b, &next->instr);
+            break;
+         }
          case nir_intrinsic_trace_ray: {
             nir_rt_trace_ray(b, call->src[0].ssa, call->src[1].ssa,
                              call->src[2].ssa, call->src[3].ssa,
@@ -1671,6 +1691,9 @@ nir_opt_sort_and_pack_stack(nir_shader *shader,
                break;
             }
 
+            case nir_intrinsic_rt_hit_object_trace_ray:
+            case nir_intrinsic_rt_reorder_thread:
+            case nir_intrinsic_rt_hit_object_execute_shader:
             case nir_intrinsic_rt_trace_ray:
             case nir_intrinsic_rt_execute_callable:
             case nir_intrinsic_rt_resume:

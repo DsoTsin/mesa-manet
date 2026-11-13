@@ -165,6 +165,18 @@ struct wsi_device {
       VkResult (*create_image_memory)(VkDevice device, void *resource,
                                       const VkAllocationCallbacks *alloc,
                                       VkDeviceMemory *out);
+      VkResult (*create_native_swapchain)(VkDevice device, uintptr_t window,
+                                          void **out);
+      void (*destroy_native_swapchain)(void *swapchain);
+      VkResult (*create_native_image_memory)(VkDevice device, void *swapchain,
+                                              VkFormat format, uint32_t width,
+                                              uint32_t height,
+                                              const VkMemoryAllocateInfo *info,
+                                              const VkAllocationCallbacks *alloc,
+                                              void **image, uint32_t *pitch,
+                                              VkDeviceMemory *out);
+      void (*destroy_native_image)(void *image);
+      VkResult (*present_native_image)(void *swapchain, void *image);
    } win32;
 
    struct {

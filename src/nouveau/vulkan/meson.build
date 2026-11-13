@@ -19,6 +19,11 @@ dep_paste = dependency(
 
 nvk_files = files(
   'nvk_acceleration_structure.c',
+  'nvk_acceleration_structure.h',
+  'nvk_bvh_cuda.c',
+  'nvk_bvh_cuda.h',
+  'nvk_micromap.c',
+  'nvk_micromap.h',
   'nvk_buffer.c',
   'nvk_buffer.h',
   'nvk_buffer_view.c',
@@ -28,13 +33,14 @@ nvk_files = files(
   'nvk_cmd_clear.c',
   'nvk_cmd_copy.c',
   'nvk_cmd_dispatch.c',
+  'nvk_cmd_dispatch.h',
   'nvk_cmd_draw.c',
   'nvk_cmd_indirect.c',
   'nvk_cmd_meta.c',
+  'nvk_cmd_ray_tracing.c',
   'nvk_cmd_pool.c',
   'nvk_cmd_pool.h',
   'nvk_cmd_video.c',
-  'nvk_cubin.c',
   'nvk_cubin.h',
   'nvk_debug.h',
   'nvk_descriptor_set.h',
@@ -73,6 +79,12 @@ nvk_files = files(
   'nvk_mme.h',
   'nvk_nir_lower_descriptors.c',
   'nvk_nir_lower_mesh_shader.c',
+  'nvk_nir_lower_ray_queries.c',
+  'nvk_nir_rt_pipeline.c',
+  'nvk_nir_ser.c',
+  'nvk_nir_ser.h',
+  'nvk_nir_ser_queue.c',
+  'nvk_nir_ser_queue.h',
   'nvk_physical_device.c',
   'nvk_physical_device.h',
   'nvk_private.h',
@@ -80,27 +92,86 @@ nvk_files = files(
   'nvk_query_pool.h',
   'nvk_queue.c',
   'nvk_queue.h',
+  'nvk_rt_pipeline.c',
   'nvk_sampler.c',
   'nvk_sampler.h',
+  'nvk_ser.c',
+  'nvk_ser.h',
   'nvk_shader.c',
   'nvk_shader.h',
   'nvk_upload_queue.c',
   'nvk_upload_queue.h',
+  'nvk_cubin.c',
   'nvk_video_session.c',
   'nvk_video_session.h',
   'nvk_wsi.c',
   'nvk_wsi.h',
   'layers/nvk_app_workarounds.c',
   'layers/nvk_app_workarounds.h',
-  'nvkmd/nouveau/nvkmd_nouveau.h',
-  'nvkmd/nouveau/nvkmd_nouveau_ctx.c',
-  'nvkmd/nouveau/nvkmd_nouveau_dev.c',
-  'nvkmd/nouveau/nvkmd_nouveau_mem.c',
-  'nvkmd/nouveau/nvkmd_nouveau_pdev.c',
-  'nvkmd/nouveau/nvkmd_nouveau_va.c',
   'nvkmd/nvkmd.c',
   'nvkmd/nvkmd.h',
 )
+
+nvk_bvh_cuda = []
+nvk_bvh_include_dir = dir_source_root + '/src/nouveau/vulkan/bvh'
+prog_nvcc = find_program('nvcc', required : get_option('nvk-cuda-bvh'), native : true)
+nvk_bvh_cuda_enabled = prog_nvcc.found()
+if nvk_bvh_cuda_enabled
+  nvk_bvh_blackwell_cubin = custom_target(
+    'nvk_bvh_blackwell.cubin',
+    input : 'bvh/nvk_bvh_blackwell.cu',
+    output : 'nvk_bvh_blackwell.cubin',
+    command : [prog_nvcc, '--cubin', '-arch=sm_120', '--std=c++17',
+               '-DNVK_BVH_TARGET_SM=120', '-DNVK_BVH_TARGET_ARCH=5',
+               '-O3', '--ftz=true', '--fmad=false', '--allow-unsupported-compiler',
+               '-I' + nvk_bvh_include_dir, '-I' + dir_source_root + '/include',
+               '-o', '@OUTPUT@', '@INPUT@'],
+    depend_files : files('bvh/nvk_bvh.h',
+                         'bvh/nvk_bvh_build_cuda.h', 'bvh/nvk_bvh_encode_wide.h',
+                         'bvh/nvk_bvh_pack.h', 'bvh/nvk_bvh_planner.h', 'bvh/nvk_bvh_leaf.h',
+                         'bvh/nvk_bvh_omm.h', 'bvh/nvk_bvh_omm.cu',
+                         'bvh/nvk_bvh_build.cu', 'bvh/nvk_bvh_encode.cu',
+                         'bvh/nvk_bvh_refit.cu', 'bvh/nvk_bvh_copy.cu',
+                         'bvh/nvk_bvh_pack.cu', 'bvh/nvk_bvh_planner.cu', 'bvh/nvk_bvh_leaf.cu'),
+  )
+  nvk_bvh_cuda += custom_target(
+    'nvk_bvh_blackwell.cubin.h',
+    input : nvk_bvh_blackwell_cubin,
+    output : 'nvk_bvh_blackwell.cubin.h',
+    command : [prog_python, files('nvk_bvh_bin2c.py.in'), '@INPUT@', '@OUTPUT@'],
+  )
+  nvk_ser_cubin = custom_target(
+    'nvk_ser_queue.cubin',
+    input : 'ser/nvk_ser_queue.cu',
+    output : 'nvk_ser_queue.cubin',
+    command : [prog_nvcc, '--cubin', '-arch=sm_120', '--std=c++17',
+               '--cudart=none', '-O3', '--ftz=true', '--fmad=false',
+               '--allow-unsupported-compiler', '-o', '@OUTPUT@', '@INPUT@'],
+    depend_files : files('nvk_ser.h'),
+  )
+  nvk_bvh_cuda += custom_target(
+    'nvk_ser_queue.cubin.h',
+    input : nvk_ser_cubin,
+    output : 'nvk_ser_queue.cubin.h',
+    command : [prog_python, files('nvk_bvh_bin2c.py.in'), '@INPUT@', '@OUTPUT@'],
+  )
+endif
+
+if with_platform_windows
+  subdir('nvkmd/wddm')
+  nvk_files += files(
+    'nvkmd/wddm/nvkmd_wddm_ops.c',
+    'nvkmd/wddm/nvk_wddm_physical_device.c',
+  )
+else
+  nvk_files += files(
+    'nvkmd/nouveau/nvkmd_nouveau_ctx.c',
+    'nvkmd/nouveau/nvkmd_nouveau_dev.c',
+    'nvkmd/nouveau/nvkmd_nouveau_mem.c',
+    'nvkmd/nouveau/nvkmd_nouveau_pdev.c',
+    'nvkmd/nouveau/nvkmd_nouveau_va.c',
+  )
+endif
 
 nvkcl_files = files(
   'cl/nvk_query.cl',
@@ -155,17 +226,15 @@ nvk_drirc = custom_target(
 )
 
 nvk_deps = [
-  dep_libdrm,
-  dep_elf,
   idep_nak,
   idep_nil,
   idep_nir,
   idep_nir_headers,
   idep_mesautil,
-  idep_nouveau_cubin,
   idep_nouveau_mme,
-  idep_nouveau_ws,
   idep_nvidia_headers,
+  idep_nouveau_cubin,
+  dep_elf,
   idep_vulkan_runtime,
   idep_vulkan_runtime_headers,
   idep_vulkan_util,
@@ -173,6 +242,12 @@ nvk_deps = [
   idep_vulkan_wsi,
   idep_vulkan_wsi_headers,
 ]
+
+if with_platform_windows
+  nvk_deps += nvkmd_wddm_deps
+else
+  nvk_deps += [dep_libdrm, idep_nouveau_ws]
+endif
 
 nvk_include_directories = [
   fs.relative_to(meson.project_build_root(), meson.current_source_dir()),
@@ -265,7 +340,7 @@ nvk_rust_h = custom_target(
   depfile : 'nvk_rust.h.d',
 )
 
-nvk_flags = []
+nvk_flags = nvk_bvh_cuda_enabled ? ['-DNVK_BVH_CUDA_ENABLED=1', '-DNVK_SER_CUDA_ENABLED=1'] : []
 
 nvk_build_id = get_option('nvk-build-id')
 if nvk_build_id != ''
@@ -283,6 +358,7 @@ libnvk = static_library(
     nvk_drirc,
     cl_generated,
     nvk_files,
+    nvk_bvh_cuda,
     nvk_rust_h,
     nvkcl,
     sha1_h,

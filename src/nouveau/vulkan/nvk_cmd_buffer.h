@@ -28,6 +28,7 @@ struct nvk_cmd_pool;
 struct nvk_image_view;
 struct nvk_push_descriptor_set;
 struct nvk_shader;
+struct nvk_rt_pipeline;
 struct vk_shader;
 
 /** Root descriptor table.  This gets pushed to the GPU directly */
@@ -77,6 +78,8 @@ struct nvk_root_descriptor_table {
 
    /* Client push constants */
    uint8_t push[NVK_MAX_PUSH_SIZE];
+   uint64_t rt_dispatch_addr;
+   uint8_t rt_padding[248];
 };
 
 /* helper macro for computing root descriptor byte offsets */
@@ -224,6 +227,13 @@ struct nvk_compute_state {
    bool active_compute_invocations_query;
 };
 
+struct nvk_ray_tracing_state {
+   struct nvk_descriptor_state descriptors;
+   struct nvk_rt_pipeline *pipeline;
+   VkDeviceSize stack_size;
+   uint8_t push[6][NVK_MAX_PUSH_SIZE];
+};
+
 struct nvk_video_state {
    struct nvk_video_session *vid;
    struct vk_video_session_parameters *params;
@@ -239,11 +249,13 @@ struct nvk_cmd_push {
 
 struct nvk_cmd_buffer {
    struct vk_command_buffer vk;
+   VkCommandBufferUsageFlags usage_flags;
 
    struct nvk_cmd_state {
       uint64_t descriptor_buffers[NVK_MAX_SETS];
       struct nvk_graphics_state gfx;
       struct nvk_compute_state cs;
+      struct nvk_ray_tracing_state rt;
       VkQueryPipelineStatisticFlags inherited_pipeline_statistics;
       struct nvk_video_state video;
    } state;
@@ -264,6 +276,7 @@ struct nvk_cmd_buffer {
    struct nvk_cmd_mem *cond_render_mem;
    /** Array of struct nvk_cmd_mem* */
    struct util_dynarray copy_memory_indirect_temps;
+   struct util_dynarray rt_stack_mems;
 
    struct nvk_cmd_mem *push_mem;
    uint32_t *push_mem_limit;
@@ -357,6 +370,8 @@ nvk_get_descriptors_state(struct nvk_cmd_buffer *cmd,
       return &cmd->state.gfx.descriptors;
    case VK_PIPELINE_BIND_POINT_COMPUTE:
       return &cmd->state.cs.descriptors;
+   case VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR:
+      return &cmd->state.rt.descriptors;
    default:
       UNREACHABLE("Unhandled bind point");
    }
@@ -372,6 +387,9 @@ nvk_get_descriptor_state_for_stages(struct nvk_cmd_buffer *cmd,
    } else if (stages & NVK_SHADER_STAGE_GRAPHICS_BITS) {
       assert(!(stages & ~NVK_SHADER_STAGE_GRAPHICS_BITS));
       return &cmd->state.gfx.descriptors;
+   } else if (stages & NVK_SHADER_STAGE_RT_BITS) {
+      assert(!(stages & ~NVK_SHADER_STAGE_RT_BITS));
+      return &cmd->state.rt.descriptors;
    } else {
       UNREACHABLE("Unknown shader stage");
    }
@@ -400,6 +418,9 @@ VkQueueFlags nvk_cmd_buffer_queue_flags(struct nvk_cmd_buffer *cmd);
 VkResult nvk_cmd_buffer_alloc_mem(struct nvk_cmd_buffer *cmd,
                                   bool force_gart,
                                   struct nvk_cmd_mem **mem_out);
+
+VkResult nvk_cmd_buffer_alloc_scratch(struct nvk_cmd_buffer *cmd,
+                                      uint64_t size, uint64_t *addr);
 
 VkResult nvk_cmd_buffer_upload_alloc(struct nvk_cmd_buffer *cmd,
                                      uint32_t size, uint32_t alignment,
@@ -464,6 +485,12 @@ void nvk_cmd_dispatch_with_root(struct nvk_cmd_buffer *cmd,
                                 uint32_t groupCountX,
                                 uint32_t groupCountY,
                                 uint32_t groupCountZ);
+
+void nvk_cmd_dispatch_cubin_with_root(struct nvk_cmd_buffer *cmd,
+                                      struct nvk_shader *shader,
+                                      const void *root, size_t root_size,
+                                      uint32_t x, uint32_t y, uint32_t z,
+                                      uint32_t local_size_high);
 
 void nvk_cmd_fill_memory_ce(struct nvk_cmd_buffer *cmd,
                             uint64_t dst_addr, uint64_t size,

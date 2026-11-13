@@ -32,6 +32,12 @@ vk_meta_destroy_object(struct vk_device *device, struct vk_object_base *obj)
    case VK_OBJECT_TYPE_PIPELINE:
       disp->DestroyPipeline(_device, (VkPipeline)(uintptr_t)obj, NULL);
       break;
+   case VK_OBJECT_TYPE_CU_MODULE_NVX:
+      disp->DestroyCuModuleNVX(_device, (VkCuModuleNVX)(uintptr_t)obj, NULL);
+      break;
+   case VK_OBJECT_TYPE_CU_FUNCTION_NVX:
+      disp->DestroyCuFunctionNVX(_device, (VkCuFunctionNVX)(uintptr_t)obj, NULL);
+      break;
    case VK_OBJECT_TYPE_SAMPLER:
       disp->DestroySampler(_device, (VkSampler)(uintptr_t)obj, NULL);
       break;

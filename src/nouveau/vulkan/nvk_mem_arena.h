@@ -201,7 +201,7 @@ void *nvk_mem_arena_map(const struct nvk_mem_arena *arena,
 static inline void
 nvk_mem_arena_set_map_dirty(struct nvk_mem_arena *arena)
 {
-   return p_atomic_set(&arena->map_dirty, 1);
+   p_atomic_set(&arena->map_dirty, 1);
 }
 
 void nvk_mem_arena_flush_map(struct nvk_device *dev,

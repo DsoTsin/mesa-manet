@@ -116,6 +116,11 @@ enum nvkmd_bind_op {
  */
 
 struct nvkmd_info {
+   bool has_prebound_engines;
+   bool has_sparse_binding;
+   bool has_va_replay;
+   bool has_gpu_timestamp;
+   bool has_compute_queue;
    bool has_dma_buf;
    bool has_get_vram_used;
    bool has_alloc_tiled;

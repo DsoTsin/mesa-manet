@@ -199,6 +199,14 @@ gather_vars_written(struct copy_prop_var_state *state,
             written->modes = nir_var_shader_out;
             break;
 
+         case nir_intrinsic_hit_object_trace_ray:
+         case nir_intrinsic_hit_object_execute_shader:
+         case nir_intrinsic_rt_hit_object_trace_ray:
+         case nir_intrinsic_rt_hit_object_execute_shader:
+            written->modes |= nir_var_shader_temp | nir_var_function_temp |
+                              nir_var_mem_ssbo | nir_var_mem_global | nir_var_shader_call_data;
+            break;
+
          case nir_intrinsic_trace_ray:
          case nir_intrinsic_execute_callable:
          case nir_intrinsic_rt_trace_ray:
@@ -1397,6 +1405,19 @@ copy_prop_vars_block(struct copy_prop_var_state *state,
          struct copy_entry *dst_entry =
             get_entry_and_kill_aliases(state, copies, &dst, full_mask);
          value_set_from_value(&dst_entry->src, &value, 0, full_mask);
+         break;
+      }
+
+      case nir_intrinsic_hit_object_trace_ray:
+      case nir_intrinsic_hit_object_execute_shader:
+      case nir_intrinsic_rt_hit_object_trace_ray:
+      case nir_intrinsic_rt_hit_object_execute_shader: {
+         nir_deref_and_path object = { nir_src_as_deref(intrin->src[0]), NULL };
+         kill_aliases(state, copies, &object, ~0u);
+         nir_deref_and_path payload = {
+            nir_src_as_deref(*nir_get_shader_call_payload_src(intrin)), NULL
+         };
+         kill_aliases(state, copies, &payload, ~0u);
          break;
       }
 

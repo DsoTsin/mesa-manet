@@ -19,16 +19,15 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::cmp::max;
 use std::ops::Index;
 
-use compiler::bindings::shader_info__bindgen_ty_1__bindgen_ty_5 as shader_info_tess;
-
 fn init_info_from_nir(
     nak: &nak_compiler,
     nir: &nir_shader,
+    nir_info: &nak_nir_shader_info,
     has_task_shader: bool,
 ) -> ShaderInfo {
     let tess_common =
-        |info_tess: &shader_info_tess| TesselationCommonShaderInfo {
-            spacing: match info_tess.spacing() {
+        |info_tess: &nak_nir_tess_info| TesselationCommonShaderInfo {
+            spacing: match info_tess.spacing as gl_tess_spacing {
                 TESS_SPACING_UNSPECIFIED => None,
                 TESS_SPACING_EQUAL => Some(TessellationSpacing::Integer),
                 TESS_SPACING_FRACTIONAL_ODD => {
@@ -39,8 +38,8 @@ fn init_info_from_nir(
                 }
                 _ => panic!("Invalid gl_tess_spacing"),
             },
-            point_mode: info_tess.point_mode(),
-            ccw: info_tess.ccw(),
+            point_mode: info_tess.point_mode != 0,
+            ccw: info_tess.ccw != 0,
         };
     ShaderInfo {
         max_warps_per_sm: 0,
@@ -58,33 +57,35 @@ fn init_info_from_nir(
         writes_global_mem: false,
         // TODO: handle this.
         uses_fp64: false,
-        stage: match nir.info.stage() {
+        stage: match nir_info.stage as mesa_shader_stage {
             MESA_SHADER_COMPUTE => {
                 ShaderStageInfo::Compute(ComputeShaderInfo {
                     local_size: [
-                        nir.info.workgroup_size[0],
-                        nir.info.workgroup_size[1],
-                        nir.info.workgroup_size[2],
+                        nir_info.workgroup_size[0],
+                        nir_info.workgroup_size[1],
+                        nir_info.workgroup_size[2],
                     ],
-                    smem_size: nir.info.shared_size.try_into().unwrap(),
+                    smem_size: nir_info.shared_size.try_into().unwrap(),
                 })
             }
             MESA_SHADER_VERTEX => ShaderStageInfo::Vertex(VertexShaderInfo {
                 isbe_space_sharing_enable: false,
             }),
             MESA_SHADER_FRAGMENT => {
-                let info_fs = unsafe { &nir.info.__bindgen_anon_1.fs };
+                let info_fs = &nir_info.fs;
                 ShaderStageInfo::Fragment(FragmentShaderInfo {
                     uses_kill: false,
                     does_interlock: false,
-                    post_depth_coverage: info_fs.post_depth_coverage(),
-                    early_fragment_tests: info_fs.early_fragment_tests(),
-                    uses_sample_shading: info_fs.uses_sample_shading(),
+                    post_depth_coverage: info_fs.post_depth_coverage != 0,
+                    early_fragment_tests: info_fs.early_fragment_tests != 0,
+                    uses_sample_shading: info_fs.uses_sample_shading != 0,
                 })
             }
             MESA_SHADER_GEOMETRY => {
-                let info_gs = unsafe { &nir.info.__bindgen_anon_1.gs };
-                let output_topology = match info_gs.output_primitive {
+                let info_gs = &nir_info.gs;
+                let output_topology = match info_gs.output_primitive
+                    as mesa_prim
+                {
                     MESA_PRIM_POINTS => OutputTopology::PointList,
                     MESA_PRIM_LINE_STRIP => OutputTopology::LineStrip,
                     MESA_PRIM_TRIANGLE_STRIP => OutputTopology::TriangleStrip,
@@ -97,14 +98,14 @@ fn init_info_from_nir(
                 ShaderStageInfo::Geometry(GeometryShaderInfo {
                     // TODO: Should be set if VK_NV_geometry_shader_passthrough is in use.
                     passthrough_enable: false,
-                    stream_out_mask: info_gs.active_stream_mask(),
+                    stream_out_mask: info_gs.active_stream_mask,
                     threads_per_input_primitive: info_gs.invocations,
                     output_topology: output_topology,
                     max_output_vertex_count: info_gs.vertices_out,
                 })
             }
             MESA_SHADER_TESS_CTRL => {
-                let info_tess = unsafe { &nir.info.__bindgen_anon_1.tess };
+                let info_tess = &nir_info.tess;
                 ShaderStageInfo::TessellationInit(TessellationInitShaderInfo {
                     per_patch_attribute_count: 6,
                     threads_per_patch: info_tess.tcs_vertices_out,
@@ -112,9 +113,11 @@ fn init_info_from_nir(
                 })
             }
             MESA_SHADER_TESS_EVAL => {
-                let info_tess = unsafe { &nir.info.__bindgen_anon_1.tess };
+                let info_tess = &nir_info.tess;
                 ShaderStageInfo::Tessellation(TessellationShaderInfo {
-                    domain: match info_tess._primitive_mode {
+                    domain: match info_tess.primitive_mode
+                        as tess_primitive_mode
+                    {
                         TESS_PRIMITIVE_TRIANGLES => {
                             TessellationDomain::Triangle
                         }
@@ -126,18 +129,17 @@ fn init_info_from_nir(
                 })
             }
             MESA_SHADER_TASK => ShaderStageInfo::Task(TaskShaderInfo {
-                local_size: nir.info.workgroup_size[0]
-                    * nir.info.workgroup_size[1]
-                    * nir.info.workgroup_size[2],
-                payload_smem_size: nir
-                    .info
+                local_size: nir_info.workgroup_size[0]
+                    * nir_info.workgroup_size[1]
+                    * nir_info.workgroup_size[2],
+                payload_smem_size: nir_info
                     .task_payload_size
                     .try_into()
                     .unwrap(),
-                smem_size: nir.info.shared_size.try_into().unwrap(),
+                smem_size: nir_info.shared_size.try_into().unwrap(),
             }),
             MESA_SHADER_MESH => {
-                let info_mesh = unsafe { &nir.info.__bindgen_anon_1.mesh };
+                let info_mesh = &nir_info.mesh;
 
                 ShaderStageInfo::Mesh(MeshShaderInfo {
                     has_task_shader,
@@ -157,11 +159,12 @@ fn init_info_from_nir(
                     },
                     max_vertices: info_mesh.max_vertices_out,
                     max_primitives: info_mesh.max_primitives_out,
-                    local_size: nir.info.workgroup_size[0]
-                        * nir.info.workgroup_size[1]
-                        * nir.info.workgroup_size[2],
-                    smem_size: nir.info.shared_size.try_into().unwrap(),
-                    output_topology: match info_mesh.primitive_type {
+                    local_size: nir_info.workgroup_size[0]
+                        * nir_info.workgroup_size[1]
+                        * nir_info.workgroup_size[2],
+                    smem_size: nir_info.shared_size.try_into().unwrap(),
+                    output_topology: match info_mesh.primitive_type as mesa_prim
+                    {
                         MESA_PRIM_POINTS => NAK_MESH_TOPOLOGY_POINTS,
                         MESA_PRIM_LINES => NAK_MESH_TOPOLOGY_LINES,
                         MESA_PRIM_TRIANGLES => NAK_MESH_TOPOLOGY_TRIANGLES,
@@ -174,7 +177,7 @@ fn init_info_from_nir(
             }
             _ => panic!("Unknown shader stage"),
         },
-        io: match nir.info.stage() {
+        io: match nir_info.stage as mesa_shader_stage {
             MESA_SHADER_COMPUTE => ShaderIoInfo::None,
             MESA_SHADER_FRAGMENT => ShaderIoInfo::Fragment(FragmentIoInfo {
                 sysvals_in: SysValInfo {
@@ -196,8 +199,8 @@ fn init_info_from_nir(
             | MESA_SHADER_TESS_EVAL
             | MESA_SHADER_TASK
             | MESA_SHADER_MESH => {
-                let num_clip = nir.info.clip_distance_array_size();
-                let num_cull = nir.info.cull_distance_array_size();
+                let num_clip = nir_info.clip_distance_array_size;
+                let num_cull = nir_info.cull_distance_array_size;
                 let clip_enable = (1_u32 << num_clip) - 1;
                 let cull_enable = ((1_u32 << num_cull) - 1) << num_clip;
 
@@ -296,8 +299,8 @@ impl Default for ShaderFloatControls {
 }
 
 impl ShaderFloatControls {
-    fn from_nir(nir: &nir_shader) -> ShaderFloatControls {
-        let nir_fc = nir.info.float_controls_execution_mode;
+    fn from_nir(nir_info: &nak_nir_shader_info) -> ShaderFloatControls {
+        let nir_fc = nir_info.float_controls_execution_mode;
         let mut fc: ShaderFloatControls = Default::default();
 
         if (nir_fc & FLOAT_CONTROLS_DENORM_PRESERVE_FP16) != 0 {
@@ -370,6 +373,7 @@ enum SyncType {
 
 struct ShaderFromNir<'a> {
     nir: &'a nir_shader,
+    nir_info: nak_nir_shader_info,
     sm: &'a ShaderModelInfo,
     info: ShaderInfo,
     float_ctl: ShaderFloatControls,
@@ -384,6 +388,9 @@ struct ShaderFromNir<'a> {
     ssa_map: FxHashMap<u32, Vec<SSAValue>>,
     saturated: FxHashSet<*const nir_def>,
     nir_instr_printer: NirInstrPrinter,
+    ttu_pending: Option<OpTtuMacro>,
+    ttu_started: bool,
+    ttu_results: FxHashSet<u32>,
 }
 
 impl<'a> ShaderFromNir<'a> {
@@ -393,11 +400,14 @@ impl<'a> ShaderFromNir<'a> {
         sm: &'a ShaderModelInfo,
         has_task_shader: bool,
     ) -> Self {
+        let mut nir_info = nak_nir_shader_info::default();
+        unsafe { nak_nir_get_shader_info(nir, &mut nir_info) };
         Self {
             nir: nir,
             sm: sm,
-            info: init_info_from_nir(nak, nir, has_task_shader),
-            float_ctl: ShaderFloatControls::from_nir(nir),
+            info: init_info_from_nir(nak, nir, &nir_info, has_task_shader),
+            float_ctl: ShaderFloatControls::from_nir(&nir_info),
+            nir_info,
             cfg: CFGBuilder::new(),
             label_alloc: LabelAllocator::new(),
             block_label: Default::default(),
@@ -409,6 +419,9 @@ impl<'a> ShaderFromNir<'a> {
             ssa_map: Default::default(),
             saturated: Default::default(),
             nir_instr_printer: NirInstrPrinter::new().unwrap(),
+            ttu_pending: None,
+            ttu_started: false,
+            ttu_results: Default::default(),
         }
     }
 
@@ -468,6 +481,7 @@ impl<'a> ShaderFromNir<'a> {
     }
 
     fn get_ssa(&mut self, ssa: &nir_def) -> &[SSAValue] {
+        assert!(!self.ttu_results.contains(&ssa.index), "TTU result used before transaction close");
         self.ssa_map.get(&ssa.index).unwrap()
     }
 
@@ -2249,7 +2263,76 @@ impl<'a> ShaderFromNir<'a> {
         intrin: &nir_intrinsic_instr,
     ) {
         let srcs = intrin.srcs_as_slice();
+        let ttu = matches!(
+            intrin.intrinsic,
+            nir_intrinsic_ttu_open_nv
+                | nir_intrinsic_ttu_store_nv
+                | nir_intrinsic_ttu_go_nv
+                | nir_intrinsic_ttu_load_nv
+        );
+        assert!(
+            self.ttu_pending.is_none() || ttu,
+            "Non-TTU side effect inside TTU transaction"
+        );
+        if ttu {
+            assert_eq!(
+                self.sm.sm(),
+                120,
+                "TTU NIR intrinsics currently require SM120"
+            );
+        }
         match intrin.intrinsic {
+            nir_intrinsic_ttu_open_nv => {
+                assert!(self.ttu_pending.is_none(), "Nested TTU transaction");
+                assert!(intrin.flags() <= 1);
+                self.ttu_pending = Some(OpTtuMacro {
+                    dual: intrin.flags() != 0,
+                    store_addresses: Vec::new(),
+                    load_addresses: Vec::new(),
+                    srcs: Vec::new(),
+                    dsts: Vec::new(),
+                });
+                self.ttu_started = false;
+            }
+            nir_intrinsic_ttu_store_nv => {
+                assert!(!self.ttu_started, "TTU store after GO");
+                let pred = self.get_src(&srcs[0]);
+                assert_eq!(srcs[0].as_def().bit_size, 1);
+                let value = self.get_ssa(srcs[1].as_def());
+                assert_eq!(value.len(), 4);
+                let a = SSARef::try_from(&value[..2]).unwrap();
+                let b = SSARef::try_from(&value[2..]).unwrap();
+                let pending =
+                    self.ttu_pending.as_mut().expect("TTU store without OPEN");
+                pending
+                    .store_addresses
+                    .push(u16::try_from(intrin.base()).unwrap());
+                pending.srcs.extend([pred, a.into(), b.into()]);
+            }
+            nir_intrinsic_ttu_go_nv => {
+                assert!(self.ttu_pending.is_some(), "TTU GO without OPEN");
+                assert!(!self.ttu_started, "Duplicate TTU GO");
+                self.ttu_started = true;
+            }
+            nir_intrinsic_ttu_load_nv => {
+                assert!(self.ttu_started, "TTU load before GO");
+                assert!(intrin.flags() <= 1);
+                let a = b.alloc_ssa_vec(RegFile::GPR, 2);
+                let c = b.alloc_ssa_vec(RegFile::GPR, 2);
+                self.set_ssa(&intrin.def, vec![a[0], a[1], c[0], c[1]]);
+                self.ttu_results.insert(intrin.def.index);
+                let pending =
+                    self.ttu_pending.as_mut().expect("TTU load without OPEN");
+                pending
+                    .load_addresses
+                    .push(u16::try_from(intrin.base()).unwrap());
+                pending.dsts.extend([a.into(), c.into()]);
+                if intrin.flags() != 0 {
+                    b.push_op(self.ttu_pending.take().unwrap());
+                    self.ttu_results.clear();
+                    self.ttu_started = false;
+                }
+            }
             nir_intrinsic_al2p_nv => {
                 let offset = self.get_src(&srcs[0]);
                 let addr = u16::try_from(intrin.base()).unwrap();
@@ -2859,7 +2942,8 @@ impl<'a> ShaderFromNir<'a> {
                 });
                 self.set_dst(&intrin.def, dst);
             }
-            nir_intrinsic_bindless_image_load => {
+            nir_intrinsic_bindless_image_load
+            | nir_intrinsic_bindless_image_load_raw_nv => {
                 let handle = self.get_src(&srcs[0]);
                 let dim = self.get_image_dim(intrin);
                 let coord = self.get_image_coord(intrin, dim);
@@ -2874,8 +2958,18 @@ impl<'a> ShaderFromNir<'a> {
                 let comps = intrin.num_components;
                 assert!(intrin.def.bit_size() == 32);
                 assert!(comps == 1 || comps == 2 || comps == 4);
-                let image_access =
-                    ImageAccess::Formatted(ChannelMask::for_comps(comps));
+                let image_access = if intrin.intrinsic
+                    == nir_intrinsic_bindless_image_load_raw_nv
+                {
+                    let mem_type = self.get_image_mem_type(intrin);
+                    assert_eq!(
+                        usize::from(comps),
+                        mem_type.bits().div_ceil(32)
+                    );
+                    ImageAccess::Binary(mem_type)
+                } else {
+                    ImageAccess::Formatted(ChannelMask::for_comps(comps))
+                };
 
                 let dst = b.alloc_ssa_vec(RegFile::GPR, comps);
 
@@ -2968,7 +3062,8 @@ impl<'a> ShaderFromNir<'a> {
                     cache_op,
                 });
             }
-            nir_intrinsic_bindless_image_store => {
+            nir_intrinsic_bindless_image_store
+            | nir_intrinsic_bindless_image_store_raw_nv => {
                 let handle = self.get_src(&srcs[0]);
                 let dim = self.get_image_dim(intrin);
                 let coord = self.get_image_coord(intrin, dim);
@@ -2978,8 +3073,18 @@ impl<'a> ShaderFromNir<'a> {
                 let comps = intrin.num_components;
                 assert!(srcs[3].bit_size() == 32);
                 assert!(comps == 1 || comps == 2 || comps == 4);
-                let image_access =
-                    ImageAccess::Formatted(ChannelMask::for_comps(comps));
+                let image_access = if intrin.intrinsic
+                    == nir_intrinsic_bindless_image_store_raw_nv
+                {
+                    let mem_type = self.get_image_mem_type(intrin);
+                    assert_eq!(
+                        usize::from(comps),
+                        mem_type.bits().div_ceil(32)
+                    );
+                    ImageAccess::Binary(mem_type)
+                } else {
+                    ImageAccess::Formatted(ChannelMask::for_comps(comps))
+                };
 
                 b.push_op(OpSuSt {
                     image_access,
@@ -3508,10 +3613,19 @@ impl<'a> ShaderFromNir<'a> {
                 );
                 let comps = intrin.def.bit_size / 32;
                 let dst = b.alloc_ssa_vec(RegFile::GPR, comps);
-                if self.sm.sm() >= 50
-                    && (idx == NAK_SV_CLOCK || idx == NAK_SV_CLOCK + 1)
-                {
-                    debug_assert!(idx + comps <= NAK_SV_CLOCK + 2);
+                let clock = matches!(
+                    idx,
+                    NAK_SV_CLOCK_LO
+                        | NAK_SV_CLOCK_HI
+                        | NAK_SV_GLOBAL_TIMER_LO
+                        | NAK_SV_GLOBAL_TIMER_HI
+                );
+                if self.sm.sm() >= 50 && clock {
+                    debug_assert!(
+                        comps == 1
+                            || idx == NAK_SV_CLOCK_LO
+                            || idx == NAK_SV_GLOBAL_TIMER_LO
+                    );
                     b.push_op(OpCS2R {
                         dst: dst.clone().into(),
                         idx: idx,
@@ -3530,7 +3644,11 @@ impl<'a> ShaderFromNir<'a> {
                     (intrin.def.bit_size() / 8) * intrin.def.num_components();
                 let idx = &srcs[0];
 
-                let off = self.get_src(&srcs[1]);
+                let off = if srcs[1].is_zero() {
+                    Src::ZERO
+                } else {
+                    self.get_src(&srcs[1])
+                };
                 let off_imm = intrin.base() as u16;
 
                 let dst = b.alloc_ssa_vec(RegFile::GPR, size_B.div_ceil(4));
@@ -3541,7 +3659,10 @@ impl<'a> ShaderFromNir<'a> {
                         buf: CBuf::Binding(idx_imm),
                         offset: off_imm,
                     };
-                    if srcs[1].is_zero() && size_B >= 4 {
+                    if srcs[1].is_zero()
+                        && size_B >= 4
+                        && (self.sm.sm() < 100 || size_B == 4)
+                    {
                         for (i, comp) in dst.iter().enumerate() {
                             let i = u16::try_from(i).unwrap();
                             b.copy_to(
@@ -3588,7 +3709,11 @@ impl<'a> ShaderFromNir<'a> {
                     (intrin.def.bit_size() / 8) * intrin.def.num_components();
 
                 let handle = self.get_ssa_ref(&srcs[0]);
-                let off = self.get_src(&srcs[1]);
+                let off = if srcs[1].is_zero() {
+                    Src::ZERO
+                } else {
+                    self.get_src(&srcs[1])
+                };
 
                 let cb = CBufRef {
                     buf: CBuf::BindlessSSA(handle[..].try_into().unwrap()),
@@ -3596,7 +3721,10 @@ impl<'a> ShaderFromNir<'a> {
                 };
 
                 let dst = b.alloc_ssa_vec(RegFile::GPR, size_B.div_ceil(4));
-                if srcs[1].is_zero() && size_B >= 4 {
+                if srcs[1].is_zero()
+                    && size_B >= 4
+                    && (self.sm.sm() < 100 || size_B == 4)
+                {
                     for (i, comp) in dst.iter().enumerate() {
                         let i = u16::try_from(i).unwrap();
                         b.copy_to(
@@ -3650,8 +3778,10 @@ impl<'a> ShaderFromNir<'a> {
                     SCOPE_NONE => (),
                     SCOPE_WORKGROUP => {
                         assert!(
-                            self.nir.info.stage() == MESA_SHADER_COMPUTE
-                                || self.nir.info.stage() == MESA_SHADER_KERNEL
+                            (self.nir_info.stage as mesa_shader_stage)
+                                == MESA_SHADER_COMPUTE
+                                || (self.nir_info.stage as mesa_shader_stage)
+                                    == MESA_SHADER_KERNEL
                         );
                         self.info.num_control_barriers = 1;
                         b.push_op(OpBar {});
@@ -3777,8 +3907,10 @@ impl<'a> ShaderFromNir<'a> {
             }
             nir_intrinsic_shared_atomic_nv => {
                 assert!(
-                    self.nir.info.stage() == MESA_SHADER_COMPUTE
-                        || self.nir.info.stage() == MESA_SHADER_KERNEL
+                    (self.nir_info.stage as mesa_shader_stage)
+                        == MESA_SHADER_COMPUTE
+                        || (self.nir_info.stage as mesa_shader_stage)
+                            == MESA_SHADER_KERNEL
                 );
 
                 let addr = self.get_src(&srcs[0]);
@@ -3809,8 +3941,10 @@ impl<'a> ShaderFromNir<'a> {
             }
             nir_intrinsic_shared_atomic_swap_nv => {
                 assert!(
-                    self.nir.info.stage() == MESA_SHADER_COMPUTE
-                        || self.nir.info.stage() == MESA_SHADER_KERNEL
+                    (self.nir_info.stage as mesa_shader_stage)
+                        == MESA_SHADER_COMPUTE
+                        || (self.nir_info.stage as mesa_shader_stage)
+                            == MESA_SHADER_KERNEL
                 );
 
                 assert!(intrin.atomic_op() == nir_atomic_op_cmpxchg);
@@ -3973,6 +4107,17 @@ impl<'a> ShaderFromNir<'a> {
                 } else {
                     b.push_op(OpRegOut { srcs: vec![handle] });
                 }
+            }
+            nir_intrinsic_elect => {
+                assert!(self.sm.sm() >= 90);
+                assert_eq!(intrin.def.bit_size(), 1);
+                let dst = b.alloc_ssa(RegFile::Pred);
+                b.push_op(OpElect {
+                    lane: Dst::None,
+                    elected: dst.into(),
+                    pred: true.into(),
+                });
+                self.set_dst(&intrin.def, dst.into());
             }
             nir_intrinsic_vote_all
             | nir_intrinsic_vote_any
@@ -4290,7 +4435,7 @@ impl<'a> ShaderFromNir<'a> {
         let sm = self.sm;
         let mut b = SSAInstrBuilder::new(sm, ssa_alloc);
 
-        if self.sm.sm() >= 70 && nb.index == 0 && self.nir.info.shared_size > 0
+        if self.sm.sm() >= 70 && nb.index == 0 && self.nir_info.shared_size > 0
         {
             // The blob seems to always do a BSYNC before accessing shared
             // memory.  Perhaps this is to ensure that our allocation is
@@ -4421,6 +4566,11 @@ impl<'a> ShaderFromNir<'a> {
                 _ => panic!("Unsupported instruction type"),
             }
         }
+
+        assert!(
+            self.ttu_pending.is_none(),
+            "TTU transaction crosses a basic block or has no CLOSE"
+        );
 
         if self.sm.sm() < 70 {
             if let Some(ni) = nb.following_if() {

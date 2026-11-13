@@ -149,6 +149,8 @@ static const struct spirv_capabilities implemented_capabilities = {
    .RayQueryKHR = true,
    .RayQueryPositionFetchKHR = true,
    .RayTracingKHR = true,
+   .ShaderInvocationReorderEXT = true,
+   .ShaderInvocationReorderNV = true,
    .RayTracingOpacityMicromapKHR = true,
    .RayTracingPositionFetchKHR = true,
    .RayTraversalPrimitiveCullingKHR = true,
@@ -461,6 +463,7 @@ vtn_base_type_to_string(enum vtn_base_type t)
    CASE(sampled_image);
    CASE(accel_struct);
    CASE(ray_query);
+   CASE(hit_object);
    CASE(function);
    CASE(event);
    CASE(cooperative_matrix);
@@ -1356,6 +1359,7 @@ vtn_types_compatible(struct vtn_builder *b,
       return true;
    case vtn_base_type_accel_struct:
    case vtn_base_type_ray_query:
+   case vtn_base_type_hit_object:
       return true;
 
    case vtn_base_type_tensor:
@@ -1402,6 +1406,7 @@ vtn_type_copy(struct vtn_builder *b, struct vtn_type *src)
    case vtn_base_type_event:
    case vtn_base_type_accel_struct:
    case vtn_base_type_ray_query:
+   case vtn_base_type_hit_object:
    case vtn_base_type_cooperative_matrix:
    case vtn_base_type_buffer:
    case vtn_base_type_tensor:
@@ -1940,6 +1945,11 @@ type_decoration_cb(struct vtn_builder *b,
 
    case SpvDecorationCPacked:
       /* Handled when parsing a struct type, nothing to do here. */
+      break;
+
+   case SpvDecorationHitObjectShaderRecordBufferNV:
+   case SpvDecorationHitObjectShaderRecordBufferEXT:
+      vtn_assert(type->base_type == vtn_base_type_struct);
       break;
 
    case SpvDecorationSaturatedConversion:
@@ -2523,6 +2533,12 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
       val->type->type = glsl_struct_type(NULL, 0, name, false);
       break;
    }
+
+   case SpvOpTypeHitObjectNV:
+   case SpvOpTypeHitObjectEXT:
+      val->type->base_type = vtn_base_type_hit_object;
+      val->type->type = glsl_array_type(glsl_uint_type(), 128, 4);
+      break;
 
    case SpvOpTypeRayQueryKHR: {
       val->type->base_type = vtn_base_type_ray_query;
@@ -6486,6 +6502,8 @@ vtn_handle_variable_or_type_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpTypePipe:
    case SpvOpTypeAccelerationStructureKHR:
    case SpvOpTypeRayQueryKHR:
+   case SpvOpTypeHitObjectNV:
+   case SpvOpTypeHitObjectEXT:
    case SpvOpTypeCooperativeMatrixKHR:
    case SpvOpTypeUntypedPointerKHR:
    case SpvOpTypeBufferEXT:
@@ -6914,6 +6932,172 @@ ray_query_load_intrinsic_create(struct vtn_builder *b, SpvOp opcode,
                                    src0,
                                    .ray_query_value = value.nir_value,
                                    .committed = committed));
+   }
+}
+
+static nir_hit_object_value
+vtn_hit_object_value(SpvOp opcode)
+{
+   switch (opcode) {
+   case SpvOpHitObjectGetRayTMinEXT:
+   case SpvOpHitObjectGetRayTMinNV:
+      return nir_hit_object_value_tmin;
+   case SpvOpHitObjectGetRayTMaxEXT:
+   case SpvOpHitObjectGetRayTMaxNV:
+      return nir_hit_object_value_tmax;
+   case SpvOpHitObjectGetRayFlagsEXT:
+      return nir_hit_object_value_flags;
+   case SpvOpHitObjectGetWorldRayOriginEXT:
+   case SpvOpHitObjectGetWorldRayOriginNV:
+      return nir_hit_object_value_world_origin;
+   case SpvOpHitObjectGetWorldRayDirectionEXT:
+   case SpvOpHitObjectGetWorldRayDirectionNV:
+      return nir_hit_object_value_world_direction;
+   case SpvOpHitObjectGetObjectRayOriginEXT:
+   case SpvOpHitObjectGetObjectRayOriginNV:
+      return nir_hit_object_value_object_origin;
+   case SpvOpHitObjectGetObjectRayDirectionEXT:
+   case SpvOpHitObjectGetObjectRayDirectionNV:
+      return nir_hit_object_value_object_direction;
+   case SpvOpHitObjectGetObjectToWorldEXT:
+   case SpvOpHitObjectGetObjectToWorldNV:
+      return nir_hit_object_value_object_to_world;
+   case SpvOpHitObjectGetWorldToObjectEXT:
+   case SpvOpHitObjectGetWorldToObjectNV:
+      return nir_hit_object_value_world_to_object;
+   case SpvOpHitObjectGetInstanceIdEXT:
+   case SpvOpHitObjectGetInstanceIdNV:
+      return nir_hit_object_value_instance_id;
+   case SpvOpHitObjectGetInstanceCustomIndexEXT:
+   case SpvOpHitObjectGetInstanceCustomIndexNV:
+      return nir_hit_object_value_instance_custom_index;
+   case SpvOpHitObjectGetGeometryIndexEXT:
+   case SpvOpHitObjectGetGeometryIndexNV:
+      return nir_hit_object_value_geometry_index;
+   case SpvOpHitObjectGetPrimitiveIndexEXT:
+   case SpvOpHitObjectGetPrimitiveIndexNV:
+      return nir_hit_object_value_primitive_index;
+   case SpvOpHitObjectGetHitKindEXT:
+   case SpvOpHitObjectGetHitKindNV:
+      return nir_hit_object_value_hit_kind;
+   case SpvOpHitObjectGetCurrentTimeEXT:
+   case SpvOpHitObjectGetCurrentTimeNV:
+      return nir_hit_object_value_current_time;
+   case SpvOpHitObjectGetShaderBindingTableRecordIndexEXT:
+   case SpvOpHitObjectGetShaderBindingTableRecordIndexNV:
+      return nir_hit_object_value_sbt_index;
+   case SpvOpHitObjectGetShaderRecordBufferHandleEXT:
+   case SpvOpHitObjectGetShaderRecordBufferHandleNV:
+      return nir_hit_object_value_shader_record;
+   case SpvOpHitObjectGetIntersectionTriangleVertexPositionsEXT:
+      return nir_hit_object_value_triangle_positions;
+   case SpvOpHitObjectIsEmptyEXT:
+   case SpvOpHitObjectIsEmptyNV:
+      return nir_hit_object_value_is_empty;
+   case SpvOpHitObjectIsHitEXT:
+   case SpvOpHitObjectIsHitNV:
+      return nir_hit_object_value_is_hit;
+   case SpvOpHitObjectIsMissEXT:
+   case SpvOpHitObjectIsMissNV:
+      return nir_hit_object_value_is_miss;
+   default: UNREACHABLE("Invalid hit object getter");
+   }
+}
+
+static void
+vtn_handle_hit_object_intrinsic(struct vtn_builder *b, SpvOp opcode,
+                                const uint32_t *w, unsigned count)
+{
+   switch (opcode) {
+   case SpvOpHitObjectTraceRayEXT:
+   case SpvOpHitObjectTraceRayNV:
+   case SpvOpHitObjectTraceReorderExecuteEXT:
+   {
+      nir_intrinsic_instr *intrin = nir_intrinsic_instr_create(b->shader, nir_intrinsic_hit_object_trace_ray);
+      intrin->src[0] = nir_src_for_ssa(&vtn_nir_deref(b, w[1])->def);
+      intrin->src[1] = nir_src_for_ssa(vtn_ssa_value(b, w[2])->def);
+      intrin->src[2] = nir_src_for_ssa(nir_vec2(&b->nb,
+         vtn_ssa_value(b, w[3])->def, vtn_ssa_value(b, w[4])->def));
+      for (unsigned i = 3; i < 10; i++)
+         intrin->src[i] = nir_src_for_ssa(vtn_ssa_value(b, w[i + 2])->def);
+      intrin->src[10] = nir_src_for_ssa(&vtn_nir_deref(b, w[12])->def);
+      nir_builder_instr_insert(&b->nb, &intrin->instr);
+      if (opcode == SpvOpHitObjectTraceReorderExecuteEXT) {
+         nir_reorder_thread(&b->nb, intrin->src[0].ssa,
+            count > 13 ? vtn_ssa_value(b, w[13])->def : nir_imm_int(&b->nb, 0),
+            count > 13 ? vtn_ssa_value(b, w[14])->def : nir_imm_int(&b->nb, 0));
+         nir_hit_object_execute_shader(&b->nb, intrin->src[0].ssa, intrin->src[10].ssa);
+      }
+      return;
+   }
+   case SpvOpHitObjectExecuteShaderEXT:
+   case SpvOpHitObjectExecuteShaderNV:
+   case SpvOpHitObjectReorderExecuteShaderEXT:
+      if (opcode == SpvOpHitObjectReorderExecuteShaderEXT)
+         nir_reorder_thread(&b->nb, &vtn_nir_deref(b, w[1])->def,
+            count > 3 ? vtn_ssa_value(b, w[3])->def : nir_imm_int(&b->nb, 0),
+            count > 3 ? vtn_ssa_value(b, w[4])->def : nir_imm_int(&b->nb, 0));
+      nir_hit_object_execute_shader(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                    &vtn_nir_deref(b, w[2])->def);
+      return;
+   case SpvOpHitObjectRecordEmptyEXT:
+   case SpvOpHitObjectRecordEmptyNV:
+      nir_hit_object_record_empty(&b->nb, &vtn_nir_deref(b, w[1])->def);
+      return;
+   case SpvOpHitObjectRecordMissEXT:
+      nir_hit_object_record_miss(&b->nb, &vtn_nir_deref(b, w[1])->def,
+         vtn_ssa_value(b, w[2])->def, vtn_ssa_value(b, w[3])->def,
+         vtn_ssa_value(b, w[4])->def, vtn_ssa_value(b, w[5])->def,
+         vtn_ssa_value(b, w[6])->def, vtn_ssa_value(b, w[7])->def);
+      return;
+   case SpvOpHitObjectRecordMissNV:
+      nir_hit_object_record_miss(&b->nb, &vtn_nir_deref(b, w[1])->def, nir_imm_int(&b->nb, 0),
+         vtn_ssa_value(b, w[2])->def, vtn_ssa_value(b, w[3])->def,
+         vtn_ssa_value(b, w[4])->def, vtn_ssa_value(b, w[5])->def,
+         vtn_ssa_value(b, w[6])->def);
+      return;
+   case SpvOpHitObjectRecordFromQueryEXT:
+      nir_hit_object_record_from_query(&b->nb, &vtn_nir_deref(b, w[1])->def,
+         &vtn_nir_deref(b, w[2])->def, vtn_ssa_value(b, w[3])->def,
+         &vtn_nir_deref(b, w[4])->def,
+         count > 5 ? vtn_ssa_value(b, w[5])->def : nir_imm_int(&b->nb, 0));
+      return;
+   case SpvOpHitObjectGetAttributesEXT:
+   case SpvOpHitObjectGetAttributesNV:
+      nir_hit_object_load_attributes(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                     &vtn_nir_deref(b, w[2])->def);
+      return;
+   case SpvOpHitObjectSetShaderBindingTableRecordIndexEXT:
+      nir_hit_object_set_sbt_index(&b->nb, &vtn_nir_deref(b, w[1])->def,
+                                  vtn_ssa_value(b, w[2])->def);
+      return;
+   case SpvOpReorderThreadWithHintEXT:
+   case SpvOpReorderThreadWithHintNV:
+      nir_reorder_thread(&b->nb, nir_imm_int64(&b->nb, 0),
+         vtn_ssa_value(b, w[1])->def, vtn_ssa_value(b, w[2])->def);
+      return;
+   case SpvOpReorderThreadWithHitObjectEXT:
+   case SpvOpReorderThreadWithHitObjectNV:
+      nir_reorder_thread(&b->nb, &vtn_nir_deref(b, w[1])->def,
+         count > 2 ? vtn_ssa_value(b, w[2])->def : nir_imm_int(&b->nb, 0),
+         count > 2 ? vtn_ssa_value(b, w[3])->def : nir_imm_int(&b->nb, 0));
+      return;
+   default: break;
+   }
+   const struct glsl_type *type = vtn_get_type(b, w[1])->type;
+   const nir_hit_object_value value = vtn_hit_object_value(opcode);
+   nir_def *object = &vtn_nir_deref(b, w[3])->def;
+   if (glsl_type_is_array_or_matrix(type)) {
+      const struct glsl_type *element = glsl_get_array_element(type);
+      struct vtn_ssa_value *ssa = vtn_create_ssa_value(b, type);
+      for (unsigned i = 0; i < glsl_get_length(type); i++)
+         ssa->elems[i]->def = nir_hit_object_load(&b->nb,
+            glsl_get_vector_elements(element), glsl_get_bit_size(element), object,
+            .base = value, .column = i);
+      vtn_push_ssa_value(b, w[2], ssa);
+   } else {
+      vtn_push_nir_ssa(b, w[2], nir_hit_object_load(&b->nb,
+         glsl_get_vector_elements(type), glsl_get_bit_size(type), object, .base = value));
    }
 }
 
@@ -7508,6 +7692,67 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpExecuteCallableNV:
    case SpvOpExecuteCallableKHR:
       vtn_handle_ray_intrinsic(b, opcode, w, count);
+      break;
+
+   case SpvOpHitObjectGetRayTMinEXT:
+   case SpvOpHitObjectGetRayTMinNV:
+   case SpvOpHitObjectGetRayTMaxEXT:
+   case SpvOpHitObjectGetRayTMaxNV:
+   case SpvOpHitObjectGetRayFlagsEXT:
+   case SpvOpHitObjectGetWorldRayOriginEXT:
+   case SpvOpHitObjectGetWorldRayOriginNV:
+   case SpvOpHitObjectGetWorldRayDirectionEXT:
+   case SpvOpHitObjectGetWorldRayDirectionNV:
+   case SpvOpHitObjectGetObjectRayOriginEXT:
+   case SpvOpHitObjectGetObjectRayOriginNV:
+   case SpvOpHitObjectGetObjectRayDirectionEXT:
+   case SpvOpHitObjectGetObjectRayDirectionNV:
+   case SpvOpHitObjectGetObjectToWorldEXT:
+   case SpvOpHitObjectGetObjectToWorldNV:
+   case SpvOpHitObjectGetWorldToObjectEXT:
+   case SpvOpHitObjectGetWorldToObjectNV:
+   case SpvOpHitObjectGetInstanceIdEXT:
+   case SpvOpHitObjectGetInstanceIdNV:
+   case SpvOpHitObjectGetInstanceCustomIndexEXT:
+   case SpvOpHitObjectGetInstanceCustomIndexNV:
+   case SpvOpHitObjectGetGeometryIndexEXT:
+   case SpvOpHitObjectGetGeometryIndexNV:
+   case SpvOpHitObjectGetPrimitiveIndexEXT:
+   case SpvOpHitObjectGetPrimitiveIndexNV:
+   case SpvOpHitObjectGetHitKindEXT:
+   case SpvOpHitObjectGetHitKindNV:
+   case SpvOpHitObjectGetCurrentTimeEXT:
+   case SpvOpHitObjectGetCurrentTimeNV:
+   case SpvOpHitObjectGetShaderBindingTableRecordIndexEXT:
+   case SpvOpHitObjectGetShaderBindingTableRecordIndexNV:
+   case SpvOpHitObjectGetShaderRecordBufferHandleEXT:
+   case SpvOpHitObjectGetShaderRecordBufferHandleNV:
+   case SpvOpHitObjectGetIntersectionTriangleVertexPositionsEXT:
+   case SpvOpHitObjectIsEmptyEXT:
+   case SpvOpHitObjectIsEmptyNV:
+   case SpvOpHitObjectIsHitEXT:
+   case SpvOpHitObjectIsHitNV:
+   case SpvOpHitObjectIsMissEXT:
+   case SpvOpHitObjectIsMissNV:
+   case SpvOpHitObjectTraceRayEXT:
+   case SpvOpHitObjectTraceRayNV:
+   case SpvOpHitObjectTraceReorderExecuteEXT:
+   case SpvOpHitObjectExecuteShaderEXT:
+   case SpvOpHitObjectExecuteShaderNV:
+   case SpvOpHitObjectReorderExecuteShaderEXT:
+   case SpvOpHitObjectRecordEmptyEXT:
+   case SpvOpHitObjectRecordEmptyNV:
+   case SpvOpHitObjectRecordMissEXT:
+   case SpvOpHitObjectRecordMissNV:
+   case SpvOpHitObjectRecordFromQueryEXT:
+   case SpvOpHitObjectGetAttributesEXT:
+   case SpvOpHitObjectGetAttributesNV:
+   case SpvOpHitObjectSetShaderBindingTableRecordIndexEXT:
+   case SpvOpReorderThreadWithHintEXT:
+   case SpvOpReorderThreadWithHintNV:
+   case SpvOpReorderThreadWithHitObjectEXT:
+   case SpvOpReorderThreadWithHitObjectNV:
+      vtn_handle_hit_object_intrinsic(b, opcode, w, count);
       break;
 
    case SpvOpRayQueryInitializeKHR:

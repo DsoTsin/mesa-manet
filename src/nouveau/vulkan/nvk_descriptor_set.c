@@ -16,6 +16,8 @@
 #include "nvk_sampler.h"
 #include "nvkmd/nvkmd.h"
 
+#include "vk_acceleration_structure.h"
+
 #include "util/format/u_format.h"
 
 #include "clb097.h"
@@ -369,6 +371,16 @@ write_inline_uniform_data(struct nvk_descriptor_writer *w,
    write_desc(w, binding, offset, info->pData, info->dataSize);
 }
 
+static void
+write_acceleration_structure_desc(struct nvk_descriptor_writer *w,
+                                  VkAccelerationStructureKHR handle,
+                                  uint32_t binding, uint32_t elem)
+{
+   VK_FROM_HANDLE(vk_acceleration_structure, as, handle);
+   uint64_t address = as ? vk_acceleration_structure_get_va(as) : 0;
+   write_desc(w, binding, elem, &address, sizeof(address));
+}
+
 VKAPI_ATTR void VKAPI_CALL
 nvk_UpdateDescriptorSets(VkDevice device,
                          uint32_t descriptorWriteCount,
@@ -389,6 +401,18 @@ nvk_UpdateDescriptorSets(VkDevice device,
       nvk_descriptor_writer_next_set(&w, set);
 
       switch (write->descriptorType) {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+         const VkWriteDescriptorSetAccelerationStructureKHR *as_write =
+            vk_find_struct_const(write->pNext,
+                                 WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+         for (uint32_t j = 0; j < write->descriptorCount; j++) {
+            write_acceleration_structure_desc(
+               &w, as_write->pAccelerationStructures[j], write->dstBinding,
+               write->dstArrayElement + j);
+         }
+         break;
+      }
+
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -528,6 +552,18 @@ nvk_push_descriptor_set_update(struct nvk_device *dev,
       assert(write->dstSet == VK_NULL_HANDLE);
 
       switch (write->descriptorType) {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+         const VkWriteDescriptorSetAccelerationStructureKHR *as_write =
+            vk_find_struct_const(write->pNext,
+                                 WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+         for (uint32_t j = 0; j < write->descriptorCount; j++) {
+            write_acceleration_structure_desc(
+               &w, as_write->pAccelerationStructures[j], write->dstBinding,
+               write->dstArrayElement + j);
+         }
+         break;
+      }
+
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -933,6 +969,15 @@ write_from_template(struct nvk_descriptor_writer *w,
          &template->entries[i];
 
       switch (entry->type) {
+      case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+         for (uint32_t j = 0; j < entry->array_count; j++) {
+            const VkAccelerationStructureKHR *as =
+               data + entry->offset + j * entry->stride;
+            write_acceleration_structure_desc(
+               w, *as, entry->binding, entry->array_element + j);
+         }
+         break;
+
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
@@ -1073,6 +1118,13 @@ nvk_GetDescriptorEXT(VkDevice _device,
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
 
    switch (pDescriptorInfo->type) {
+   case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+      uint64_t address = pDescriptorInfo->data.accelerationStructure;
+      assert(sizeof(address) <= dataSize);
+      memcpy(pDescriptor, &address, sizeof(address));
+      break;
+   }
+
    case VK_DESCRIPTOR_TYPE_SAMPLER: {
       const VkDescriptorImageInfo info = {
          .sampler = *pDescriptorInfo->data.pSampler,

@@ -147,11 +147,17 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
 
    /* 3D state */
-   P_MTHD(p, NV9097, SET_OBJECT);
-   P_NV9097_SET_OBJECT(p, {
-      .class_id = pdev->info.cls_eng3d,
-      .engine_id = 0,
-   });
+   if (!pdev->nvkmd->kmd_info.has_prebound_engines) {
+      P_MTHD(p, NV9097, SET_OBJECT);
+      P_NV9097_SET_OBJECT(p, {
+         .class_id = pdev->info.cls_eng3d,
+         .engine_id = 0,
+      });
+   }
+
+   if (pdev->nvkmd->kmd_info.has_prebound_engines &&
+       pdev->info.cls_eng3d >= TURING_A)
+      P_IMMD(p, NVC597, SET_MME_VERSION, 1);
 
    for (uint32_t mme = 0, mme_pos = 0; mme < NVK_MME_COUNT; mme++) {
       size_t size;

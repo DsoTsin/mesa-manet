@@ -24,6 +24,7 @@ struct vk_graphics_pipeline_state;
 struct vk_pipeline_cache;
 struct vk_pipeline_layout;
 struct vk_pipeline_robustness_state;
+struct vk_pipeline_robustness_state;
 struct vk_shader_module;
 
 #define GF100_SHADER_HEADER_SIZE (20 * 4)
@@ -166,6 +167,13 @@ VkResult
 nvk_compile_nir_shader(struct nvk_device *dev, nir_shader *nir,
                        const VkAllocationCallbacks *alloc,
                        struct nvk_shader **shader_out);
+
+VkResult
+nvk_compile_nir_shader_with_layout(
+   struct nvk_device *dev, nir_shader *nir, VkShaderCreateFlagsEXT flags,
+   const struct vk_pipeline_robustness_state *robustness,
+   struct vk_pipeline_layout *layout, const VkAllocationCallbacks *alloc,
+   struct nvk_shader **shader_out);
 
 uint32_t mesa_to_nv9097_shader_type(mesa_shader_stage stage, bool has_task_shader);
 uint32_t nvk_pipeline_bind_group(mesa_shader_stage stage, bool has_task_shader);

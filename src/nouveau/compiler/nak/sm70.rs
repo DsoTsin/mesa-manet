@@ -146,7 +146,19 @@ impl ShaderModel for ShaderModel70 {
             | Op::Unpin(_)
             | Op::Ldcg(_) => true,
             Op::F2FP(_) => self.sm() >= 86,
-            Op::Ldc(op) => op.offset.is_zero(),
+            Op::Ldc(op) => {
+                op.offset.is_zero()
+                    || (op.mode == LdcMode::Indexed
+                        && (self.sm >= 120
+                            || (self.sm >= 100
+                                && matches!(
+                                    &op.cb.src_ref,
+                                    SrcRef::CBuf(CBufRef {
+                                        buf: CBuf::Binding(_),
+                                        ..
+                                    })
+                                ))))
+            }
             Op::FAdd(_)
             | Op::FFma(_)
             | Op::FMnMx(_)
@@ -182,6 +194,7 @@ impl ShaderModel for ShaderModel70 {
 
     fn exec_latency(&self, op: &Op) -> u32 {
         match op {
+            Op::TtuMacro(_) => 2,
             Op::Bar(_) | Op::MemBar(_) => {
                 if self.sm >= 80 {
                     6
@@ -302,6 +315,9 @@ impl ShaderModel for ShaderModel70 {
     }
 
     fn legalize_op(&self, b: &mut LegalizeBuilder, op: &mut Op) {
+        if matches!(op, Op::TtuMacro(_)) {
+            assert_eq!(self.sm, 120, "TTU macros currently require SM120");
+        }
         legalize_sm70_op(self, b, op);
     }
 

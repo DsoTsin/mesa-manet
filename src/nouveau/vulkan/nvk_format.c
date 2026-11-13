@@ -11,6 +11,7 @@
 
 #include "vk_enum_defines.h"
 #include "vk_format.h"
+#include "vk_acceleration_structure.h"
 
 #include "nvtypes.h"
 #include "cl902d.h"
@@ -223,6 +224,9 @@ nvk_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
    optimal2 = nvk_get_image_format_features(pdevice, format,
                                             VK_IMAGE_TILING_OPTIMAL, 0);
    buffer2 = nvk_get_buffer_format_features(pdevice, format);
+   if (pdevice->vk.supported_features.accelerationStructure &&
+       vk_acceleration_struct_vtx_format_supported(format))
+      buffer2 |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
 
    pFormatProperties->formatProperties = (VkFormatProperties) {
       .linearTilingFeatures = vk_format_features2_to_features(linear2),

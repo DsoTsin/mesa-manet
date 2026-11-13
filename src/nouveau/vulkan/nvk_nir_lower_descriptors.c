@@ -373,7 +373,9 @@ record_cbuf_uses_instr(UNUSED nir_builder *b, nir_instr *instr, void *_ctx)
       }
 
       case nir_intrinsic_image_deref_load:
+      case nir_intrinsic_image_deref_load_raw_nv:
       case nir_intrinsic_image_deref_store:
+      case nir_intrinsic_image_deref_store_raw_nv:
       case nir_intrinsic_image_deref_atomic:
       case nir_intrinsic_image_deref_atomic_swap:
       case nir_intrinsic_image_deref_size:
@@ -797,7 +799,9 @@ load_descriptor_for_idx_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    index = nir_iadd(b, index, intrin->src[0].ssa);
 
    const nir_descriptor_type desc_type = nir_intrinsic_desc_type(intrin);
-   if (descriptor_type_is_ubo(desc_type) && ctx->use_bindless_cbuf) {
+   if (desc_type == nir_descriptor_type_acceleration_structure) {
+      return load_descriptor(b, 1, 64, set, binding, index, 0, ctx);
+   } else if (descriptor_type_is_ubo(desc_type) && ctx->use_bindless_cbuf) {
       nir_def *desc = load_descriptor(b, 1, 64, set, binding, index, 0, ctx);
 
       /* The descriptor is just the handle.  NIR also needs an offset. */
@@ -1050,6 +1054,8 @@ lower_image_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
    nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
 
    if (is_edb_buffer_view(deref, ctx)) {
+      assert(intrin->intrinsic != nir_intrinsic_image_deref_load_raw_nv &&
+             intrin->intrinsic != nir_intrinsic_image_deref_store_raw_nv);
       lower_edb_buffer_image_intrin(b, intrin, ctx);
       return true;
    }
@@ -1173,8 +1179,10 @@ try_lower_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       return lower_load_input_attachment_coord(b, intrin, ctx);
 
    case nir_intrinsic_image_deref_load:
+   case nir_intrinsic_image_deref_load_raw_nv:
    case nir_intrinsic_image_deref_sparse_load:
    case nir_intrinsic_image_deref_store:
+   case nir_intrinsic_image_deref_store_raw_nv:
    case nir_intrinsic_image_deref_atomic:
    case nir_intrinsic_image_deref_atomic_swap:
    case nir_intrinsic_image_deref_size:

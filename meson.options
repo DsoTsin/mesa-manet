@@ -791,6 +791,13 @@ option(
 )
 
 option(
+  'nvk-cuda-bvh',
+  type : 'feature',
+  value : 'auto',
+  description : 'CUDA kernels for SM120 BVH operations',
+)
+
+option(
   'nvk-build-id',
   type : 'string',
   value : '',

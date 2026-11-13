@@ -1,0 +1,24 @@
+[package]
+name = "nvkmd-wddm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", default-features = false, features = ["Wdk_Graphics_Direct3D", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_Security", "Win32_UI_WindowsAndMessaging"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "allow"
+missing_safety_doc = "allow"
+
+[profile.release]
+panic = "abort"
+

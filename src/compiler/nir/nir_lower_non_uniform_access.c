@@ -418,29 +418,37 @@ nir_lower_non_uniform_access_impl(nir_function_impl *impl,
                break;
 
             case nir_intrinsic_image_load:
+            case nir_intrinsic_image_load_raw_nv:
             case nir_intrinsic_image_sparse_load:
             case nir_intrinsic_image_store:
+            case nir_intrinsic_image_store_raw_nv:
             case nir_intrinsic_image_atomic:
             case nir_intrinsic_image_atomic_swap:
             case nir_intrinsic_image_samples_identical:
             case nir_intrinsic_image_fragment_mask_load_amd:
             case nir_intrinsic_bindless_image_load:
+            case nir_intrinsic_bindless_image_load_raw_nv:
             case nir_intrinsic_bindless_image_sparse_load:
             case nir_intrinsic_bindless_image_store:
+            case nir_intrinsic_bindless_image_store_raw_nv:
             case nir_intrinsic_bindless_image_atomic:
             case nir_intrinsic_bindless_image_atomic_swap:
             case nir_intrinsic_bindless_image_samples_identical:
             case nir_intrinsic_bindless_image_fragment_mask_load_amd:
             case nir_intrinsic_image_deref_load:
+            case nir_intrinsic_image_deref_load_raw_nv:
             case nir_intrinsic_image_deref_sparse_load:
             case nir_intrinsic_image_deref_store:
+            case nir_intrinsic_image_deref_store_raw_nv:
             case nir_intrinsic_image_deref_atomic:
             case nir_intrinsic_image_deref_atomic_swap:
             case nir_intrinsic_image_deref_samples_identical:
             case nir_intrinsic_image_deref_fragment_mask_load_amd:
             case nir_intrinsic_image_heap_load:
+            case nir_intrinsic_image_heap_load_raw_nv:
             case nir_intrinsic_image_heap_sparse_load:
             case nir_intrinsic_image_heap_store:
+            case nir_intrinsic_image_heap_store_raw_nv:
             case nir_intrinsic_image_heap_atomic:
             case nir_intrinsic_image_heap_atomic_swap:
             case nir_intrinsic_image_heap_samples_identical:

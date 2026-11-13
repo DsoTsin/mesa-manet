@@ -9,6 +9,7 @@
 #include "nvk_queue.h"
 
 #include "util/macros.h"
+#include "util/u_atomic.h"
 
 #include "nv_push.h"
 #include "nv_push_cl90b5.h"
@@ -26,6 +27,7 @@ nvk_heap_init(struct nvk_device *dev, struct nvk_heap *heap,
 
    assert(overalloc < NVK_MEM_ARENA_MIN_SIZE);
    heap->overalloc = overalloc;
+   heap->upload_seq = 0;
    util_vma_heap_init(&heap->heap, 0, 0);
 
    return VK_SUCCESS;
@@ -151,6 +153,7 @@ nvk_heap_upload(struct nvk_device *dev, struct nvk_heap *heap,
       }
    }
 
+   p_atomic_inc(&heap->upload_seq);
    return VK_SUCCESS;
 }
 

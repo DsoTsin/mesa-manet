@@ -4,13 +4,17 @@
  */
 
 #include "nvkmd.h"
+#ifndef _WIN32
 #include "nouveau/nvkmd_nouveau.h"
+#endif
 #include "nv_push.h"
 #include "util/cache_ops.h"
 #include "util/u_math.h"
 
 #include <inttypes.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 static void
 nvkmd_dev_add_mem(struct nvkmd_dev *dev,
@@ -88,8 +92,12 @@ nvkmd_try_create_pdev_for_drm(struct _drmDevice *drm_device,
                               enum nvk_debug debug_flags,
                               struct nvkmd_pdev **pdev_out)
 {
+#ifdef _WIN32
+   return VK_ERROR_INCOMPATIBLE_DRIVER;
+#else
    return nvkmd_nouveau_try_create_pdev(drm_device, log_obj,
                                         debug_flags, pdev_out);
+#endif
 }
 
 VkResult MUST_CHECK

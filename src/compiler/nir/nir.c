@@ -2885,11 +2885,13 @@ nir_rewrite_image_intrinsic(nir_intrinsic_instr *intrin, nir_def *src,
       }                                                         \
       break;
       CASE(load)
+      CASE(load_raw_nv)
       CASE(input_attachment_load)
       CASE(depth_input_attachment_load)
       CASE(stencil_input_attachment_load)
       CASE(sparse_load)
       CASE(store)
+      CASE(store_raw_nv)
       CASE(atomic)
       CASE(atomic_swap)
       CASE(size)
@@ -3024,6 +3026,12 @@ nir_src *
 nir_get_shader_call_payload_src(nir_intrinsic_instr *call)
 {
    switch (call->intrinsic) {
+   case nir_intrinsic_hit_object_trace_ray:
+   case nir_intrinsic_rt_hit_object_trace_ray:
+      return &call->src[10];
+   case nir_intrinsic_hit_object_execute_shader:
+   case nir_intrinsic_rt_hit_object_execute_shader:
+      return &call->src[1];
    case nir_intrinsic_trace_ray:
    case nir_intrinsic_rt_trace_ray:
       return &call->src[10];

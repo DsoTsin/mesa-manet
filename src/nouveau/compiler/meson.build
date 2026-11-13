@@ -18,6 +18,7 @@ dep_rustc_hash = dependency('rustc-hash',
 libnak_c_files = files(
   'nak.h',
   'nak_nir.c',
+  'nak_nir_info.c',
   'nak_nir_lower_cf.c',
   'nak_nir_lower_cmat.c',
   'nak_nir_lower_fs_inputs.c',

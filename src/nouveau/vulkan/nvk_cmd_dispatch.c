@@ -4,6 +4,7 @@
  */
 #include "nvk_buffer.h"
 #include "nvk_cmd_buffer.h"
+#include "nvk_cmd_dispatch.h"
 #include "nvk_device.h"
 #include "nvk_entrypoints.h"
 #include "nvk_mme.h"
@@ -17,6 +18,8 @@
 #include "clc5c0.h"
 #include "clcbc0.h"
 #include "clcdc0.h"
+#include "clcdc0qmd.h"
+#include "drf.h"
 #include "nv_push_cl90c0.h"
 #include "nv_push_cl9097.h"
 #include "nv_push_cla0c0.h"
@@ -34,11 +37,13 @@ nvk_push_dispatch_state_init(struct nvk_queue *queue, struct nv_push *p)
    struct nvk_device *dev = nvk_queue_device(queue);
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
 
-   P_MTHD(p, NV90C0, SET_OBJECT);
-   P_NV90C0_SET_OBJECT(p, {
-      .class_id = pdev->info.cls_compute,
-      .engine_id = 0,
-   });
+   if (!pdev->nvkmd->kmd_info.has_prebound_engines) {
+      P_MTHD(p, NV90C0, SET_OBJECT);
+      P_NV90C0_SET_OBJECT(p, {
+         .class_id = pdev->info.cls_compute,
+         .engine_id = 0,
+      });
+   }
 
    if (pdev->info.cls_compute == MAXWELL_COMPUTE_A)
       P_IMMD(p, NVB0C0, SET_SELECT_MAXWELL_TEXTURE_HEADERS, V_TRUE);
@@ -64,10 +69,15 @@ nvk_push_dispatch_state_init(struct nvk_queue *queue, struct nv_push *p)
       uint64_t temp;
 
       /* shared memory window needs 4GB alignment on hopper+ */
-      if (pdev->info.cls_compute >= HOPPER_COMPUTE_A)
+      if (pdev->info.cls_compute >= HOPPER_COMPUTE_A) {
+#ifdef _WIN32
+         temp = UINT64_C(0xfa0000000000);
+#else
          temp = 1ULL << 32;
-      else
+#endif
+      } else {
          temp = 0xfeULL << 24;
+      }
 
       P_MTHD(p, NVC3C0, SET_SHADER_SHARED_MEMORY_WINDOW_A);
       P_NVC3C0_SET_SHADER_SHARED_MEMORY_WINDOW_A(p, temp >> 32);
@@ -101,7 +111,7 @@ nvk_cmd_buffer_begin_compute(struct nvk_cmd_buffer *cmd,
                              const VkCommandBufferBeginInfo *pBeginInfo)
 {
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY) {
-      struct nv_push *p = nvk_cmd_buffer_push(cmd, 6);
+      struct nv_push *p = nvk_cmd_buffer_push(cmd, 7);
       if (nvk_cmd_buffer_compute_cls(cmd) >= MAXWELL_COMPUTE_B) {
          P_IMMD(p, NVB1C0, INVALIDATE_SKED_CACHES, 0);
       }
@@ -110,6 +120,9 @@ nvk_cmd_buffer_begin_compute(struct nvk_cmd_buffer *cmd,
       });
       P_IMMD(p, NVA0C0, INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, {
          .lines = LINES_ALL,
+      });
+      P_IMMD(p, NVA0C0, INVALIDATE_SHADER_CACHES_NO_WFI, {
+         .constant = CONSTANT_TRUE,
       });
    }
 }
@@ -161,15 +174,22 @@ nvk_cmd_upload_qmd(struct nvk_cmd_buffer *cmd,
                    const struct nvk_descriptor_state *desc,
                    const void *root,
                    size_t root_size,
-                   uint32_t global_size[3],
+                   const uint32_t global_size[3],
                    uint64_t *qmd_addr_out,
-                   uint64_t *root_desc_addr_out)
+                   uint64_t *root_desc_addr_out,
+                   uint32_t local_size_high,
+                   void **qmd_map_out)
 {
    struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
    const struct nvk_physical_device *pdev = nvk_device_physical(dev);
    const uint32_t min_cbuf_alignment = nvk_min_cbuf_alignment(&pdev->info);
    const uint32_t qmd_size_B = nak_qmd_size_B(&pdev->info);
    VkResult result;
+
+   if (local_size_high &&
+       (pdev->info.cls_compute < BLACKWELL_COMPUTE_A ||
+        local_size_high > 0x80000 || (local_size_high & 15)))
+      return vk_error(dev, VK_ERROR_FEATURE_NOT_PRESENT);
 
    /* pre Pascal the constant buffer sizes need to be 0x100 aligned. As we
     * simply allocated a buffer and upload data to it, make sure its size is
@@ -232,6 +252,10 @@ nvk_cmd_upload_qmd(struct nvk_cmd_buffer *cmd,
       uint32_t qmd[NAK_MAX_QMD_DWORDS];
       assert(qmd_size_B <= sizeof(qmd));
       nak_fill_qmd(&pdev->info, &shader->info, &qmd_info, qmd, qmd_size_B);
+      if (local_size_high)
+         NVVAL_MW_SET(qmd, NVCDC0, QMDV05_00,
+                      SHADER_LOCAL_MEMORY_HIGH_SIZE_SHIFTED4,
+                      local_size_high >> 4);
 
       void *qmd_map;
       result = nvk_cmd_buffer_alloc_qmd(cmd, qmd_size_B, 0x100,
@@ -240,6 +264,8 @@ nvk_cmd_upload_qmd(struct nvk_cmd_buffer *cmd,
          return result;
 
       memcpy(qmd_map, qmd, qmd_size_B);
+      if (qmd_map_out != NULL)
+         *qmd_map_out = qmd_map;
    }
 
    *qmd_addr_out = qmd_addr;
@@ -262,7 +288,64 @@ nvk_cmd_flush_cs_qmd(struct nvk_cmd_buffer *cmd,
    return nvk_cmd_upload_qmd(cmd, state->cs.shader, desc,
                              desc->root, sizeof(desc->root),
                              global_size,
-                             qmd_addr_out, root_desc_addr_out);
+                             qmd_addr_out, root_desc_addr_out, 0, NULL);
+}
+
+VkResult
+nvk_cmd_prepare_dispatch_with_root(
+   struct nvk_cmd_buffer *cmd, struct nvk_shader *shader,
+   const struct nvk_descriptor_state *desc, const void *root, size_t root_size,
+   const uint32_t group_count[3], uint32_t local_size_high,
+   struct nvk_prepared_dispatch *out)
+{
+   *out = (struct nvk_prepared_dispatch) {0};
+   if (!shader)
+      return VK_ERROR_INITIALIZATION_FAILED;
+   struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
+   VkResult result = nvk_device_ensure_slm(dev,
+      shader->info.slm_size + local_size_high, shader->info.crs_size);
+   if (result != VK_SUCCESS)
+      return result;
+   return nvk_cmd_upload_qmd(cmd, shader, desc, root, root_size, group_count,
+                             &out->qmd_addr, NULL, local_size_high,
+                             &out->qmd_map);
+}
+
+VkResult
+nvk_cmd_prepare_cs_dispatch(struct nvk_cmd_buffer *cmd,
+                            const uint32_t group_count[3],
+                            struct nvk_prepared_dispatch *out)
+{
+   uint32_t base_group[3] = {0};
+   uint32_t mutable_group_count[3];
+   memcpy(mutable_group_count, group_count, sizeof(mutable_group_count));
+   nvk_flush_compute_state(cmd, base_group, mutable_group_count);
+   const struct nvk_descriptor_state *desc = &cmd->state.cs.descriptors;
+   return nvk_cmd_prepare_dispatch_with_root(cmd, cmd->state.cs.shader, desc,
+      desc->root, sizeof(desc->root), group_count, 0, out);
+}
+
+void
+nvk_cmd_launch_prepared_dispatch(struct nvk_cmd_buffer *cmd,
+                                 const struct nvk_prepared_dispatch *dispatch,
+                                 bool unconditional)
+{
+   struct nv_push *p = nvk_cmd_buffer_push(cmd, unconditional ? 8 : 4);
+   if (unconditional)
+      P_IMMD(p, NVA0C0, SET_RENDER_ENABLE_OVERRIDE, MODE_ALWAYS_RENDER);
+   P_MTHD(p, NVA0C0, SEND_PCAS_A);
+   P_NVA0C0_SEND_PCAS_A(p, dispatch->qmd_addr >> 8);
+   if (nvk_cmd_buffer_compute_cls(cmd) <= TURING_COMPUTE_A) {
+      P_IMMD(p, NVA0C0, SEND_SIGNALING_PCAS_B, {
+         .invalidate = INVALIDATE_TRUE,
+         .schedule = SCHEDULE_TRUE,
+      });
+   } else {
+      P_IMMD(p, NVC6C0, SEND_SIGNALING_PCAS2_B,
+             PCAS_ACTION_INVALIDATE_COPY_SCHEDULE);
+   }
+   if (unconditional)
+      P_IMMD(p, NVA0C0, SET_RENDER_ENABLE_OVERRIDE, MODE_USE_RENDER_ENABLE);
 }
 
 void
@@ -352,14 +435,15 @@ nvk_CmdDispatchBase(VkCommandBuffer commandBuffer,
    }
 }
 
-void
-nvk_cmd_dispatch_with_root(struct nvk_cmd_buffer *cmd,
-                           struct nvk_shader *shader,
-                           const void *root,
-                           size_t root_size,
-                           uint32_t groupCountX,
-                           uint32_t groupCountY,
-                           uint32_t groupCountZ)
+static void
+nvk_cmd_dispatch_with_root_internal(struct nvk_cmd_buffer *cmd,
+                                    struct nvk_shader *shader,
+                                    const void *root,
+                                    size_t root_size,
+                                    uint32_t groupCountX,
+                                    uint32_t groupCountY,
+                                    uint32_t groupCountZ,
+                                    uint32_t local_size_high)
 {
    struct nvk_device *dev = nvk_cmd_buffer_device(cmd);
 
@@ -369,15 +453,20 @@ nvk_cmd_dispatch_with_root(struct nvk_cmd_buffer *cmd,
    VkResult result = nvk_cmd_upload_qmd(cmd, shader, NULL,
                                         root, root_size,
                                         group_count,
-                                        &qmd_addr, NULL);
+                                        &qmd_addr, NULL, local_size_high, NULL);
    if (result != VK_SUCCESS) {
       vk_command_buffer_set_error(&cmd->vk, result);
       return;
    }
 
    if (shader != NULL) {
-      nvk_device_ensure_slm(dev, shader->info.slm_size,
-                                 shader->info.crs_size);
+      result = nvk_device_ensure_slm(dev,
+                                     shader->info.slm_size + local_size_high,
+                                     shader->info.crs_size);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return;
+      }
    }
 
    struct nv_push *p = nvk_cmd_buffer_push(cmd, 8);
@@ -399,6 +488,26 @@ nvk_cmd_dispatch_with_root(struct nvk_cmd_buffer *cmd,
    }
 
    P_IMMD(p, NVA0C0, SET_RENDER_ENABLE_OVERRIDE, MODE_USE_RENDER_ENABLE);
+}
+
+void
+nvk_cmd_dispatch_with_root(struct nvk_cmd_buffer *cmd,
+                           struct nvk_shader *shader,
+                           const void *root, size_t root_size,
+                           uint32_t x, uint32_t y, uint32_t z)
+{
+   nvk_cmd_dispatch_with_root_internal(cmd, shader, root, root_size, x, y, z, 0);
+}
+
+void
+nvk_cmd_dispatch_cubin_with_root(struct nvk_cmd_buffer *cmd,
+                                 struct nvk_shader *shader,
+                                 const void *root, size_t root_size,
+                                 uint32_t x, uint32_t y, uint32_t z,
+                                 uint32_t local_size_high)
+{
+   nvk_cmd_dispatch_with_root_internal(cmd, shader, root, root_size,
+                                       x, y, z, local_size_high);
 }
 
 void

@@ -129,6 +129,11 @@ struct wsi_image_info {
    VkResult (*create_mem)(const struct wsi_swapchain *chain,
                           const struct wsi_image_info *info,
                           struct wsi_image *image);
+   VkResult (*allocate_blit_memory)(const struct wsi_swapchain *chain,
+                                     const struct wsi_image_info *info,
+                                     struct wsi_image *image,
+                                     const VkMemoryAllocateInfo *allocate,
+                                     VkDeviceMemory *out);
 
    VkResult (*finish_create)(const struct wsi_swapchain *chain,
                              const struct wsi_image_info *info,

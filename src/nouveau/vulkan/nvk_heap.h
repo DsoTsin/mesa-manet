@@ -14,6 +14,7 @@ struct nvk_device;
 struct nvk_heap {
    struct nvk_mem_arena arena;
    uint32_t overalloc;
+   uint32_t upload_seq;
    struct util_vma_heap heap;
 };
 

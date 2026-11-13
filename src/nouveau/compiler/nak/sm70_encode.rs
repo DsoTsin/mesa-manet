@@ -3506,9 +3506,35 @@ impl SM70Op for OpLdc {
     fn legalize(&mut self, b: &mut LegalizeBuilder) {
         let gpr = op_gpr(self);
         b.copy_alu_src_if_not_reg(&mut self.offset, gpr, SrcType::GPR);
+        if self.mem_type == MemType::B128 && gpr == RegFile::GPR {
+            assert!(matches!(
+                self.mode,
+                LdcMode::Indexed | LdcMode::IndexedSegmented
+            ));
+            let dst = self.dst.as_ssa().unwrap().clone();
+            assert_eq!(dst.comps(), 4);
+            self.dst = [dst[0], dst[1]].into();
+            self.mem_type = MemType::B64;
+            let mut upper = self.clone();
+            upper.dst = [dst[2], dst[3]].into();
+            let SrcRef::CBuf(cb) = &mut upper.cb.src_ref else {
+                panic!("LDC must take a cbuf source");
+            };
+            if let Some(offset) = cb.offset.checked_add(8) {
+                cb.offset = offset;
+                b.push_op(upper);
+            } else if self.mode == LdcMode::IndexedSegmented {
+                b.copy_to(dst[2].into(), Src::ZERO);
+                b.copy_to(dst[3].into(), Src::ZERO);
+            } else {
+                upper.offset = b.iadd(upper.offset, 8.into(), Src::ZERO).into();
+                b.push_op(upper);
+            }
+        }
     }
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
+        assert!(self.mem_type != MemType::B128 || self.is_uniform());
         let SrcRef::CBuf(cb) = &self.cb.src_ref else {
             panic!("LDC must take a cbuf source");
         };
@@ -4462,6 +4488,20 @@ impl SM70Op for OpOutFinal {
     }
 }
 
+impl SM70Op for OpElect {
+    fn legalize(&mut self, b: &mut LegalizeBuilder) {
+        b.copy_src_if_upred(&mut self.pred);
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        assert!(e.sm >= 90);
+        e.set_opcode(0x82f);
+        e.set_udst(&self.lane);
+        e.set_pred_dst(81..84, &self.elected);
+        e.set_pred_src(87..90, 90, &self.pred);
+    }
+}
+
 impl SM70Op for OpVote {
     fn legalize(&mut self, b: &mut LegalizeBuilder) {
         b.copy_src_if_upred(&mut self.pred);
@@ -4691,6 +4731,104 @@ impl SM70Op for OpNanosleep {
     }
 }
 
+impl SM70Op for OpTtuMacro {
+    fn legalize(&mut self, b: &mut LegalizeBuilder) {
+        self.validate();
+        for src in &mut self.srcs {
+            b.copy_src_if_uniform(src);
+        }
+        for src in self.srcs.chunks_mut(3) {
+            b.copy_src_if_upred(&mut src[0]);
+            for value in &src[1..] {
+                assert!(value.is_unmodified());
+                match &value.src_ref {
+                    SrcRef::Zero => (),
+                    SrcRef::SSA(ssa) => assert_eq!(ssa.comps(), 2),
+                    _ => panic!("TTU store requires a 64-bit register pair"),
+                }
+            }
+        }
+    }
+
+    fn encode(&self, _e: &mut SM70Encoder<'_>) {
+        panic!("TTU macro must be expanded atomically");
+    }
+}
+
+fn encode_ttu_macro(sm: u8, op: &OpTtuMacro, deps: &InstrDeps) -> Vec<u32> {
+    assert_eq!(sm, 120, "TTU macros currently require SM120");
+    op.validate();
+    let labels = FxHashMap::default();
+    let mut words = Vec::with_capacity(op.encoded_size());
+    let mut emit = |opcode: u16,
+                    dependency: InstrDeps,
+                    encode: &dyn Fn(&mut SM70Encoder<'_>)| {
+        let mut e = SM70Encoder {
+            sm,
+            ip: 0,
+            labels: &labels,
+            inst: [0; 4],
+        };
+        e.set_opcode(opcode);
+        e.set_pred(&true.into());
+        encode(&mut e);
+        e.set_instr_deps(&dependency);
+        words.extend_from_slice(&e.inst);
+    };
+    let mut open = InstrDeps::new();
+    open.delay = 6;
+    emit(0x3d0, open, &|e| e.set_bit(72, op.dual));
+    let mut fuse = InstrDeps::new();
+    fuse.delay = 4;
+    fuse.wt_bar_mask = deps.wt_bar_mask;
+    emit(0x9d4, fuse, &|e| {
+        e.set_field(
+            40..45,
+            (op.store_addresses.len() + op.load_addresses.len() + 1) as u8,
+        )
+    });
+    for (address, src) in op.store_addresses.iter().zip(op.srcs.chunks(3)) {
+        let mut store = InstrDeps::new();
+        store.delay = 1;
+        if let Some(bar) = deps.rd_bar() {
+            store.set_rd_bar(bar);
+        }
+        emit(0x3d1, store, &|e| {
+            e.set_pred_src(12..15, 15, &src[0]);
+            e.set_field(40..56, *address);
+            e.set_reg_src(64..72, &src[1]);
+            e.set_reg_src(32..40, &src[2]);
+        });
+    }
+    let mut go = InstrDeps::new();
+    go.delay = 1;
+    emit(0x3d3, go, &|_| {});
+    for (index, (address, dst)) in
+        op.load_addresses.iter().zip(op.dsts.chunks(2)).enumerate()
+    {
+        let close = index + 1 == op.load_addresses.len();
+        let mut load = InstrDeps::new();
+        load.delay = if close { deps.delay.max(2) } else { 1 };
+        if let Some(bar) = deps.wr_bar() {
+            load.set_wr_bar(bar);
+        }
+        emit(0x3d2, load, &|e| {
+            e.set_field(40..56, *address);
+            e.set_dst(&dst[0]);
+            let reg = match dst[1] {
+                Dst::None => e.zero_reg(RegFile::GPR),
+                Dst::Reg(reg) => reg,
+                _ => panic!("TTU destination is not allocated"),
+            };
+            e.set_reg(64..72, reg);
+            e.set_field(81..84, 7u8);
+            e.set_bit(74, close);
+        });
+    }
+    assert_eq!(words.len(), op.encoded_size());
+    words
+}
+
 macro_rules! sm70_op_match {
     ($op: expr, |$x: ident| $y: expr) => {
         match $op {
@@ -4742,6 +4880,7 @@ macro_rules! sm70_op_match {
             Op::PLop3($x) => $y,
             Op::R2UR($x) => $y,
             Op::Redux($x) => $y,
+            Op::TtuMacro($x) => $y,
             Op::Tex($x) => $y,
             Op::Tld($x) => $y,
             Op::Tld4($x) => $y,
@@ -4782,6 +4921,7 @@ macro_rules! sm70_op_match {
             Op::Out($x) => $y,
             Op::OutFinal($x) => $y,
             Op::Vote($x) => $y,
+            Op::Elect($x) => $y,
             Op::Match($x) => $y,
             Op::Hmma($x) => $y,
             Op::Imma($x) => $y,
@@ -4823,13 +4963,21 @@ pub fn encode_sm70_shader(sm: &ShaderModel70, s: &Shader<'_>) -> Vec<u32> {
                     labels.insert(label, ip);
                 }
             }
-            ip += 4;
+            ip += match &instr.op {
+                Op::TtuMacro(op) => op.encoded_size(),
+                _ => 4,
+            };
         }
     }
 
     let mut encoded = Vec::new();
     for b in &func.blocks {
         for instr in &b.instrs {
+            if let Op::TtuMacro(op) = &instr.op {
+                assert!(instr.pred.is_true());
+                encoded.extend(encode_ttu_macro(sm.sm(), op, &instr.deps));
+                continue;
+            }
             let mut e = SM70Encoder {
                 sm: sm.sm(),
                 ip: encoded.len(),

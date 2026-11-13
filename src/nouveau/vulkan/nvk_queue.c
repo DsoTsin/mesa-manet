@@ -8,6 +8,7 @@
 #include "nvk_cmd_buffer.h"
 #include "nvk_device.h"
 #include "nvk_image.h"
+#include "nvk_mme.h"
 #include "nvk_physical_device.h"
 #include "nvk_rust.h"
 #include "nv_push.h"
@@ -16,12 +17,44 @@
 #include "nv_push_cl9097.h"
 #include "nv_push_cl90b5.h"
 #include "nv_push_cla0c0.h"
+#include "nv_push_clb097.h"
+#include "nv_push_clb0c0.h"
 #include "cla1c0.h"
 #include "nv_push_clc3c0.h"
 #include "nv_push_clc397.h"
+#include "nv_push_clc7c0.h"
 
 static VkResult
 nvk_queue_push(struct nvk_queue *queue, const struct nv_push *push);
+
+enum nvkmd_engines
+nvk_queue_engines_from_queue_flags(const struct nvk_physical_device *pdev,
+                                  VkQueueFlags queue_flags)
+{
+   enum nvkmd_engines engines = 0;
+   if (queue_flags & VK_QUEUE_GRAPHICS_BIT) {
+      engines |= NVKMD_ENGINE_3D;
+      /* We rely on compute shaders for queries */
+      engines |= NVKMD_ENGINE_COMPUTE;
+   }
+   if (queue_flags & VK_QUEUE_COMPUTE_BIT) {
+      engines |= NVKMD_ENGINE_COMPUTE;
+      /* We currently rely on 3D engine MMEs for indirect dispatch */
+      engines |= NVKMD_ENGINE_3D;
+   }
+   if (queue_flags & VK_QUEUE_TRANSFER_BIT)
+      engines |= NVKMD_ENGINE_COPY;
+   if (queue_flags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
+      engines |= NVKMD_ENGINE_VDEC;
+
+   if (pdev->nvkmd->kmd_info.has_compute_queue &&
+       pdev->info.cls_compute >= AMPERE_COMPUTE_B &&
+       (queue_flags & VK_QUEUE_COMPUTE_BIT) &&
+       !(queue_flags & VK_QUEUE_GRAPHICS_BIT))
+      engines &= ~NVKMD_ENGINE_3D;
+
+   return engines;
+}
 
 static void
 nvk_queue_state_init(struct nvk_queue_state *qs)
@@ -214,6 +247,8 @@ nvk_queue_submit_exec(struct nvk_queue *queue,
    VkResult result;
 
    if (submit->command_buffer_count > 0) {
+      const uint32_t shader_upload_seq =
+         p_atomic_read(&dev->shader_heap.upload_seq);
       nvk_descriptor_table_flush_map(dev, &dev->images);
       nvk_descriptor_table_flush_map(dev, &dev->samplers);
       nvk_heap_flush_maps(dev, &dev->shader_heap);
@@ -237,6 +272,31 @@ nvk_queue_submit_exec(struct nvk_queue *queue,
          result = nvkmd_ctx_wait(queue->exec_ctx, &queue->vk.base, 1, &wait);
          if (result != VK_SUCCESS)
             return result;
+      }
+
+      const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+      if (pdev->nvkmd->kmd_info.has_compute_queue &&
+          (queue->engines & (NVKMD_ENGINE_3D | NVKMD_ENGINE_COMPUTE))) {
+         if (queue->state.shader_upload_seq != shader_upload_seq) {
+            uint32_t push_data[2];
+            struct nv_push push;
+            nv_push_init(&push, push_data, ARRAY_SIZE(push_data),
+                         nvk_queue_subchannels_from_engines(queue->engines));
+            struct nv_push *p = &push;
+            if (queue->engines & NVKMD_ENGINE_3D) {
+               P_IMMD(p, NVB097, INVALIDATE_SHADER_CACHES_NO_WFI, {
+                  .instruction = INSTRUCTION_TRUE,
+               });
+            } else {
+               P_IMMD(p, NVB0C0, INVALIDATE_SHADER_CACHES_NO_WFI, {
+                  .instruction = INSTRUCTION_TRUE,
+               });
+            }
+            result = nvk_queue_push(queue, &push);
+            if (result != VK_SUCCESS)
+               return result;
+            queue->state.shader_upload_seq = shader_upload_seq;
+         }
       }
    }
 
@@ -325,6 +385,45 @@ nvk_queue_push(struct nvk_queue *queue, const struct nv_push *push)
 }
 
 static VkResult
+nvk_queue_init_compute_mme(struct nvk_queue *queue, struct nv_push *p)
+{
+   struct nvk_device *dev = nvk_queue_device(queue);
+   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+   const enum nvk_mme macros[] = {
+      NVK_MME_ADD_CS_INVOCATIONS,
+      NVK_MME_WRITE_CS_INVOCATIONS,
+   };
+
+   for (uint32_t i = 0, mme_pos = 0; i < ARRAY_SIZE(macros); i++) {
+      size_t size;
+      uint32_t *dw = nvk_build_mme(&pdev->info, macros[i], &size);
+      if (dw == NULL)
+         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+      assert(size % sizeof(uint32_t) == 0);
+      const uint32_t num_dw = size / sizeof(uint32_t);
+
+      P_MTHD(p, NVC7C0, LOAD_MME_START_ADDRESS_RAM_POINTER);
+      P_NVC7C0_LOAD_MME_START_ADDRESS_RAM_POINTER(p, macros[i]);
+      P_NVC7C0_LOAD_MME_START_ADDRESS_RAM(p, mme_pos);
+
+      P_1INC(p, NVC7C0, LOAD_MME_INSTRUCTION_RAM_POINTER);
+      P_NVC7C0_LOAD_MME_INSTRUCTION_RAM_POINTER(p, mme_pos);
+      P_INLINE_ARRAY(p, dw, num_dw);
+
+      mme_pos += num_dw;
+      free(dw);
+   }
+
+   P_IMMD_WORD(p, NVC7C0,
+               SET_MME_SHADOW_SCRATCH(NVK_MME_SCRATCH_CS_INVOCATIONS_HI), 0);
+   P_IMMD_WORD(p, NVC7C0,
+               SET_MME_SHADOW_SCRATCH(NVK_MME_SCRATCH_CS_INVOCATIONS_LO), 0);
+
+   return VK_SUCCESS;
+}
+
+static VkResult
 nvk_queue_init_context_state(struct nvk_queue *queue)
 {
    struct nvk_device *dev = nvk_queue_device(queue);
@@ -338,7 +437,9 @@ nvk_queue_init_context_state(struct nvk_queue *queue)
    struct nv_push *p = &push;
 
    /* M2MF state */
-   if (pdev->info.cls_m2mf <= FERMI_MEMORY_TO_MEMORY_FORMAT_A) {
+   if (!pdev->nvkmd->kmd_info.has_prebound_engines &&
+       pdev->info.cls_m2mf != 0 &&
+       pdev->info.cls_m2mf <= FERMI_MEMORY_TO_MEMORY_FORMAT_A) {
       /* we absolutely do not support Fermi, but if somebody wants to toy
        * around with it, this is a must
        */
@@ -359,6 +460,13 @@ nvk_queue_init_context_state(struct nvk_queue *queue)
       result = nvk_push_dispatch_state_init(queue, p);
       if (result != VK_SUCCESS)
          return result;
+
+      if (!(queue->engines & NVKMD_ENGINE_3D) &&
+          pdev->info.cls_compute >= AMPERE_COMPUTE_B) {
+         result = nvk_queue_init_compute_mme(queue, p);
+         if (result != VK_SUCCESS)
+            return result;
+      }
    }
 
    if (queue->engines & NVKMD_ENGINE_VDEC) {
@@ -424,7 +532,7 @@ nvk_queue_create(struct nvk_device *dev,
    nvk_queue_state_init(&queue->state);
 
    queue->engines =
-      nvk_queue_engines_from_queue_flags(queue_family->queue_flags);
+      nvk_queue_engines_from_queue_flags(pdev, queue_family->queue_flags);
 
    if (queue_family->queue_flags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
       queue->engines |= NVKMD_ENGINE_VDEC;

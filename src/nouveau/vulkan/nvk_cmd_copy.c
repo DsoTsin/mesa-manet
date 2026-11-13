@@ -12,6 +12,7 @@
 #include "nvk_image.h"
 #include "nvk_image_view.h"
 #include "nvk_physical_device.h"
+#include "nvk_queue.h"
 
 #include "vk_format.h"
 
@@ -958,6 +959,14 @@ nvk_CmdUpdateMemoryKHR(VkCommandBuffer commandBuffer,
 
    uint64_t dst_addr = pDstRange->address;
    uint8_t subc = nvk_cmd_buffer_last_subchannel(cmd);
+   const struct nvk_physical_device *pdev =
+      nvk_device_physical(nvk_cmd_buffer_device(cmd));
+   const enum nvkmd_engines engines = nvk_queue_engines_from_queue_flags(
+      pdev, nvk_cmd_buffer_queue_flags(cmd));
+   const bool compute_only = (engines & NVKMD_ENGINE_COMPUTE) &&
+                             !(engines & NVKMD_ENGINE_3D);
+   if (compute_only)
+      subc = SUBC_NV90C0;
 
    /* From the Vulkan 1.4.354 spec:
     *
@@ -966,29 +975,36 @@ nvk_CmdUpdateMemoryKHR(VkCommandBuffer commandBuffer,
     */
    const uint32_t dw_count = dataSize / 4;
 
-   /* Do not use I2M if the copy is too big (2012 bytes is our limit) */
    const uint32_t i2m_push_dw_count = dw_count + 9;
-   if (i2m_push_dw_count > NVK_CMD_BUFFER_MAX_PUSH)
+   if (i2m_push_dw_count > NVK_CMD_BUFFER_MAX_PUSH && !compute_only)
       subc = SUBC_NV90B5;
 
    /* I2M transfers are affected by conditional rendering but CmdUpdateBuffer shouldn't */
    if (subc == SUBC_NV9097 || subc == SUBC_NV90C0) {
-      struct nv_push *p = nvk_cmd_buffer_push(cmd, i2m_push_dw_count);
-      __push_immd(p, subc, NVA040_SET_RENDER_ENABLE_OVERRIDE,
-                  NVA040_SET_RENDER_ENABLE_OVERRIDE_MODE_ALWAYS_RENDER);
-      __push_mthd(p, subc, NVA040_LINE_LENGTH_IN);
-      P_NVA040_LINE_LENGTH_IN(p, dataSize);
-      P_NVA040_LINE_COUNT(p, 1);
-      P_NVA040_OFFSET_OUT_UPPER(p, dst_addr >> 32);
-      P_NVA040_OFFSET_OUT(p, dst_addr);
-      __push_1inc(p, subc, NVA040_LAUNCH_DMA);
-      P_NVA040_LAUNCH_DMA(p, {
-         .dst_memory_layout = DST_MEMORY_LAYOUT_PITCH,
-         .completion_type = COMPLETION_TYPE_FLUSH_ONLY,
-      });
-      P_INLINE_ARRAY(p, pData, dw_count);
-      __push_immd(p, subc, NVA040_SET_RENDER_ENABLE_OVERRIDE,
-                  NVA040_SET_RENDER_ENABLE_OVERRIDE_MODE_USE_RENDER_ENABLE);
+      const uint8_t *data = pData;
+      while (dataSize > 0) {
+         const uint32_t bytes = MIN2(dataSize, (NVK_CMD_BUFFER_MAX_PUSH - 9) * 4);
+         const uint32_t chunk_dw_count = bytes / 4;
+         struct nv_push *p = nvk_cmd_buffer_push(cmd, chunk_dw_count + 9);
+         __push_immd(p, subc, NVA040_SET_RENDER_ENABLE_OVERRIDE,
+                     NVA040_SET_RENDER_ENABLE_OVERRIDE_MODE_ALWAYS_RENDER);
+         __push_mthd(p, subc, NVA040_LINE_LENGTH_IN);
+         P_NVA040_LINE_LENGTH_IN(p, bytes);
+         P_NVA040_LINE_COUNT(p, 1);
+         P_NVA040_OFFSET_OUT_UPPER(p, dst_addr >> 32);
+         P_NVA040_OFFSET_OUT(p, dst_addr);
+         __push_1inc(p, subc, NVA040_LAUNCH_DMA);
+         P_NVA040_LAUNCH_DMA(p, {
+            .dst_memory_layout = DST_MEMORY_LAYOUT_PITCH,
+            .completion_type = COMPLETION_TYPE_FLUSH_ONLY,
+         });
+         P_INLINE_ARRAY(p, data, chunk_dw_count);
+         __push_immd(p, subc, NVA040_SET_RENDER_ENABLE_OVERRIDE,
+                     NVA040_SET_RENDER_ENABLE_OVERRIDE_MODE_USE_RENDER_ENABLE);
+         dst_addr += bytes;
+         data += bytes;
+         dataSize -= bytes;
+      }
    } else {
       uint64_t data_addr;
       nvk_cmd_buffer_upload_data(cmd, pData, dataSize, 64, &data_addr);
